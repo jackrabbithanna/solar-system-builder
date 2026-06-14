@@ -1,9 +1,19 @@
 {
-  "schema_version": 2,
+  "schema_version": 5,
   "id": "builtin-solar-system",
   "name": "Solar System",
   "epoch": "2026-06-14 00:00:00 TDB, JPL Horizons, solar-system barycentric",
   "description": "Built-in Solar System preset using SI units and JPL Horizons solar-system barycentric state vectors; local physical metadata preserved.",
+  "groups": [
+    {
+      "id": "solar-system-group",
+      "name": "Solar System",
+      "kind": "planetary_system",
+      "body_ids": [
+        "sun"
+      ]
+    }
+  ],
   "bodies": [
     {
       "id": "sun",

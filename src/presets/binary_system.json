@@ -1,5 +1,5 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "id": "builtin-binary-system",
   "name": "Alpha Centauri",
   "epoch": "Approximate Alpha Centauri seed",
@@ -12,6 +12,33 @@
     "simulation_scope": "auto",
     "trail_sample_interval_s": 2592000.0
   },
+  "groups": [
+    {
+      "id": "alpha-centauri-system",
+      "name": "Alpha Centauri",
+      "kind": "triple_system",
+      "body_ids": []
+    },
+    {
+      "id": "alpha-centauri-ab-system",
+      "name": "Alpha Centauri AB",
+      "kind": "binary_system",
+      "parent_group_id": "alpha-centauri-system",
+      "body_ids": [
+        "alpha-centauri-a",
+        "alpha-centauri-b"
+      ]
+    },
+    {
+      "id": "proxima-centauri-system",
+      "name": "Proxima Centauri System",
+      "kind": "planetary_system",
+      "parent_group_id": "alpha-centauri-system",
+      "body_ids": [
+        "proxima-centauri"
+      ]
+    }
+  ],
   "bodies": [
     {
       "id": "alpha-centauri-a",

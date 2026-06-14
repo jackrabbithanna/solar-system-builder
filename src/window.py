@@ -11,6 +11,7 @@ import traceback
 from concurrent.futures import Future, ThreadPoolExecutor
 
 import gi
+import numpy as np
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
@@ -18,7 +19,7 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, Gtk
 
 from .constants import AU, DAY
-from .models import Body, SolarSystem
+from .models import Body, SolarSystem, SystemGroup
 from .physics import SimulationState, advance_with_samples
 from .presets import load_builtin_solar_system, load_builtin_solar_systems
 from .scales import (
@@ -27,14 +28,17 @@ from .scales import (
     TIME_UNITS,
     VIEW_MODE_LABELS,
     SIMULATION_SCOPE_LABELS,
+    OverviewEntity,
     active_body_indices,
     collapsed_child_counts,
     derived_max_step_s,
+    derived_overview_max_step_s,
     distance_between_bodies_m,
     effective_simulation_scope,
     format_distance,
     format_elapsed_time,
     recommended_trail_sample_interval_s,
+    system_overview_entities,
     time_unit_for_seconds,
     unit_factor,
     unit_index,
@@ -89,7 +93,10 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.loaded_system_snapshot = self._clone_system(self.system)
         self.state = SimulationState.from_bodies(self.system.bodies)
         self.selected_index = 0
+        self.focus_group_id: str | None = None
+        self.selected_group_id: str | None = None
         self.body_list_indices: list[int] = []
+        self.body_list_rows: list[tuple[str, str | int]] = []
         self.body_relationship_labels: dict[int, Gtk.Label] = {}
         self.playing = False
         self.editing = False
@@ -99,6 +106,9 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.simulation_future: Future | None = None
         self.simulation_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="simulation")
         self.trails: list[list[tuple[float, float]]] = [[] for _ in self.system.bodies]
+        self.overview_trails: dict[str, list[tuple[float, float]]] = {}
+        self.overview_state: SimulationState | None = None
+        self.overview_entity_ids: list[str] = []
         self.last_trail_sample_elapsed_s = self.state.elapsed_s
         self.zoom_factor = 1.0
         self.timer_id = GLib.timeout_add(33, self._tick)
@@ -200,7 +210,12 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.state = SimulationState.from_bodies(self.system.bodies)
         self.simulation_generation += 1
         self.selected_index = self._body_index_for_id(selected_body_id)
+        self.focus_group_id = self._group_id_for_body_index(self.selected_index)
+        self.selected_group_id = None
         self.trails = [[] for _ in self.system.bodies]
+        self.overview_trails = {}
+        self.overview_state = None
+        self.overview_entity_ids = []
         self.last_trail_sample_elapsed_s = self.state.elapsed_s
         self._populate_body_list()
         self._select_body(self.selected_index)
@@ -222,29 +237,129 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         while child := self.body_list.get_first_child():
             self.body_list.remove(child)
         self.body_relationship_labels = {}
-        self.body_list_indices = self._body_list_order()
-        for body_index in self.body_list_indices:
+        self.body_list_rows = self._body_list_rows()
+        self.body_list_indices = [
+            int(row_id)
+            for row_type, row_id in self.body_list_rows
+            if row_type == "body"
+        ]
+        for row_type, row_id in self.body_list_rows:
+            if row_type == "group":
+                self._append_group_row(str(row_id))
+                continue
+            body_index = int(row_id)
             body = self.system.bodies[body_index]
-            row = Gtk.ListBoxRow()
-            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            box.set_margin_top(8)
-            box.set_margin_bottom(8)
-            box.set_margin_start(10 + self._body_depth(body) * 18)
-            box.set_margin_end(10)
-            swatch = Gtk.DrawingArea()
-            swatch.set_content_width(14)
-            swatch.set_content_height(14)
-            swatch.set_draw_func(self._draw_swatch, body.color)
-            name = Gtk.Label(label=body.name, xalign=0)
-            name.set_hexpand(True)
-            kind = Gtk.Label(label=self._body_relationship_label(body))
-            kind.add_css_class("dim-label")
-            self.body_relationship_labels[body_index] = kind
-            box.append(swatch)
-            box.append(name)
-            box.append(kind)
-            row.set_child(box)
-            self.body_list.append(row)
+            self._append_body_row(body_index, self._body_row_depth(body_index))
+
+    def _append_group_row(self, group_id: str) -> None:
+        group = self._group_by_id(group_id)
+        if group is None:
+            return
+        row = Gtk.ListBoxRow()
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        box.set_margin_top(8)
+        box.set_margin_bottom(8)
+        box.set_margin_start(10 + self._group_depth(group) * 18)
+        box.set_margin_end(10)
+        name = Gtk.Label(label=group.name, xalign=0)
+        name.set_hexpand(True)
+        name.add_css_class("heading")
+        kind = Gtk.Label(label=self._group_label(group))
+        kind.add_css_class("dim-label")
+        box.append(name)
+        box.append(kind)
+        row.set_child(box)
+        self.body_list.append(row)
+
+    def _append_body_row(self, body_index: int, depth: int) -> None:
+        body = self.system.bodies[body_index]
+        row = Gtk.ListBoxRow()
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        box.set_margin_top(8)
+        box.set_margin_bottom(8)
+        box.set_margin_start(10 + depth * 18)
+        box.set_margin_end(10)
+        swatch = Gtk.DrawingArea()
+        swatch.set_content_width(14)
+        swatch.set_content_height(14)
+        swatch.set_draw_func(self._draw_swatch, body.color)
+        name = Gtk.Label(label=body.name, xalign=0)
+        name.set_hexpand(True)
+        kind = Gtk.Label(label=self._body_relationship_label(body))
+        kind.add_css_class("dim-label")
+        self.body_relationship_labels[body_index] = kind
+        box.append(swatch)
+        box.append(name)
+        box.append(kind)
+        row.set_child(box)
+        self.body_list.append(row)
+
+    def _body_list_rows(self) -> list[tuple[str, str | int]]:
+        if not self.system.groups:
+            return [("body", index) for index in self._body_list_order()]
+
+        rows: list[tuple[str, str | int]] = []
+        group_children: dict[str | None, list[SystemGroup]] = {}
+        for group in self.system.groups:
+            group_children.setdefault(group.parent_group_id, []).append(group)
+        body_indices_by_id = {
+            body.id: index
+            for index, body in enumerate(self.system.bodies)
+        }
+        rendered_body_indices: set[int] = set()
+
+        def append_group(group: SystemGroup) -> None:
+            rows.append(("group", group.id))
+            for body_id in group.body_ids:
+                body_index = body_indices_by_id.get(body_id)
+                if body_index is None:
+                    continue
+                for child_index in self._body_subtree_order(body_index):
+                    if child_index not in rendered_body_indices:
+                        rows.append(("body", child_index))
+                        rendered_body_indices.add(child_index)
+            for child_group in sorted(
+                group_children.get(group.id, []),
+                key=lambda item: item.name.casefold(),
+            ):
+                append_group(child_group)
+
+        for group in sorted(
+            group_children.get(None, []),
+            key=lambda item: item.name.casefold(),
+        ):
+            append_group(group)
+
+        for body_index in self._body_list_order():
+            if body_index not in rendered_body_indices:
+                rows.append(("body", body_index))
+        return rows
+
+    def _body_subtree_order(self, body_index: int) -> list[int]:
+        children_by_parent_id: dict[str | None, list[int]] = {}
+        for index, body in enumerate(self.system.bodies):
+            children_by_parent_id.setdefault(body.parent_id, []).append(index)
+
+        ordered: list[int] = []
+
+        def append_body(index: int) -> None:
+            ordered.append(index)
+            body = self.system.bodies[index]
+            for child_index in sorted(
+                children_by_parent_id.get(body.id, []),
+                key=lambda item: self._body_sort_key(index, item),
+            ):
+                append_body(child_index)
+
+        append_body(body_index)
+        return ordered
+
+    def _body_sort_key(self, parent_index: int | None, child_index: int) -> tuple[int, float, str]:
+        body = self.system.bodies[child_index]
+        parent = self.system.bodies[parent_index] if parent_index is not None else None
+        distance_m = math.dist(body.position_m, parent.position_m) if parent is not None else 0.0
+        root_rank = 0 if body.kind == "star" else 1
+        return (root_rank, distance_m, body.name.casefold())
 
     def _body_list_order(self) -> list[int]:
         if not self.system.bodies:
@@ -257,26 +372,25 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         for index, body in enumerate(self.system.bodies):
             children_by_parent_id.setdefault(body.parent_id, []).append(index)
 
-        def sort_key(parent_index: int | None, child_index: int) -> tuple[int, float, str]:
-            body = self.system.bodies[child_index]
-            parent = self.system.bodies[parent_index] if parent_index is not None else None
-            distance_m = math.dist(body.position_m, parent.position_m) if parent is not None else 0.0
-            root_rank = 0 if body.kind == "star" else 1
-            return (root_rank, distance_m, body.name.casefold())
-
         ordered: list[int] = []
 
         def append_children(parent_id: str | None) -> None:
             parent_index = body_index_by_id.get(parent_id) if parent_id is not None else None
             for child_index in sorted(
                 children_by_parent_id.get(parent_id, []),
-                key=lambda index: sort_key(parent_index, index),
+                key=lambda index: self._body_sort_key(parent_index, index),
             ):
                 ordered.append(child_index)
                 append_children(self.system.bodies[child_index].id)
 
         append_children(None)
         return ordered
+
+    def _body_row_depth(self, body_index: int) -> int:
+        body = self.system.bodies[body_index]
+        group = self._group_for_body_id(body.id)
+        group_depth = self._group_depth(group) + 1 if group is not None else 0
+        return group_depth + self._body_depth(body)
 
     def _body_depth(self, body: Body) -> int:
         bodies_by_id = {item.id: item for item in self.system.bodies}
@@ -303,6 +417,84 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         distance = distance_between_bodies_m(body, parent)
         return f"orbits {parent.name} - {format_distance(distance)}"
 
+    def _group_label(self, group: SystemGroup) -> str:
+        count = len(self._body_indices_for_group(group.id))
+        label = group.kind.replace("_", " ")
+        return f"{label} - {count} bodies"
+
+    def _group_by_id(self, group_id: str | None) -> SystemGroup | None:
+        if group_id is None:
+            return None
+        return next((group for group in self.system.groups if group.id == group_id), None)
+
+    def _group_depth(self, group: SystemGroup | None) -> int:
+        if group is None:
+            return 0
+        groups_by_id = {item.id: item for item in self.system.groups}
+        depth = 0
+        parent_group_id = group.parent_group_id
+        while parent_group_id is not None:
+            depth += 1
+            parent = groups_by_id.get(parent_group_id)
+            if parent is None:
+                break
+            parent_group_id = parent.parent_group_id
+        return depth
+
+    def _group_for_body_id(self, body_id: str) -> SystemGroup | None:
+        group = next((item for item in self.system.groups if body_id in item.body_ids), None)
+        if group is not None:
+            return group
+        body = next((item for item in self.system.bodies if item.id == body_id), None)
+        parent_id = body.parent_id if body is not None else None
+        while parent_id is not None:
+            group = next((item for item in self.system.groups if parent_id in item.body_ids), None)
+            if group is not None:
+                return group
+            parent = next((item for item in self.system.bodies if item.id == parent_id), None)
+            parent_id = parent.parent_id if parent is not None else None
+        return None
+
+    def _group_id_for_body_index(self, body_index: int) -> str | None:
+        if body_index < 0 or body_index >= len(self.system.bodies):
+            return None
+        group = self._group_for_body_id(self.system.bodies[body_index].id)
+        return group.id if group is not None else None
+
+    def _body_indices_for_group(self, group_id: str) -> list[int]:
+        group_ids = self._descendant_group_ids(group_id)
+        if not group_ids:
+            return []
+        body_ids: set[str] = set()
+        for group in self.system.groups:
+            if group.id in group_ids:
+                body_ids.update(group.body_ids)
+        changed = True
+        while changed:
+            changed = False
+            for body in self.system.bodies:
+                if body.parent_id in body_ids and body.id not in body_ids:
+                    body_ids.add(body.id)
+                    changed = True
+        return [
+            index
+            for index, body in enumerate(self.system.bodies)
+            if body.id in body_ids
+        ]
+
+    def _descendant_group_ids(self, group_id: str) -> set[str]:
+        if self._group_by_id(group_id) is None:
+            return set()
+        group_ids = {group_id}
+        changed = True
+        while changed:
+            changed = False
+            for group in self.system.groups:
+                if group.parent_group_id in group_ids and group.id not in group_ids:
+                    group_ids.add(group.id)
+                    changed = True
+        return group_ids
+
     def _nearest_other_star(self, body: Body) -> Body | None:
         if body.kind != "star":
             return None
@@ -324,11 +516,13 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         if not self.system.bodies:
             return
         self.selected_index = max(0, min(index, len(self.system.bodies) - 1))
+        self.focus_group_id = self._group_id_for_body_index(self.selected_index)
+        self.selected_group_id = None
         row_index = next(
             (
                 list_index
-                for list_index, body_index in enumerate(self.body_list_indices)
-                if body_index == self.selected_index
+                for list_index, (row_type, row_id) in enumerate(self.body_list_rows)
+                if row_type == "body" and int(row_id) == self.selected_index
             ),
             self.selected_index,
         )
@@ -340,6 +534,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _load_body_editor(self, body: Body) -> None:
         self.editing = True
         distance_factor = self._distance_factor()
+        self._set_body_editor_sensitive(True)
+        self.selected_group_id = None
         self.selected_name_label.set_label(body.name)
         self._populate_selected_distance_list(body)
         self.mass_entry.set_text(f"{body.mass_kg:.12g}")
@@ -349,6 +545,28 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.vx_spin.set_value(body.velocity_mps[0])
         self.vy_spin.set_value(body.velocity_mps[1])
         self.editing = False
+
+    def _load_group_focus(self, group_id: str) -> None:
+        group = self._group_by_id(group_id)
+        if group is None:
+            return
+        self.focus_group_id = group.id
+        self.editing = True
+        self._set_body_editor_sensitive(False)
+        self.selected_name_label.set_label(group.name)
+        while child := self.selected_distance_list.get_first_child():
+            self.selected_distance_list.remove(child)
+        self.selected_distance_list.set_visible(False)
+        self.mass_entry.set_text("")
+        self.x_spin.set_value(0.0)
+        self.y_spin.set_value(0.0)
+        self.vx_spin.set_value(0.0)
+        self.vy_spin.set_value(0.0)
+        self.editing = False
+
+    def _set_body_editor_sensitive(self, sensitive: bool) -> None:
+        for widget in (self.mass_entry, self.x_spin, self.y_spin, self.vx_spin, self.vy_spin):
+            widget.set_sensitive(sensitive)
 
     def _populate_selected_distance_list(self, body: Body) -> None:
         while child := self.selected_distance_list.get_first_child():
@@ -457,6 +675,9 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.state = SimulationState.from_bodies(self.system.bodies)
         self.simulation_generation += 1
         self.trails = [[] for _ in self.system.bodies]
+        self.overview_trails = {}
+        self.overview_state = None
+        self.overview_entity_ids = []
         self.last_trail_sample_elapsed_s = self.state.elapsed_s
         self._populate_body_list()
         self._select_body(self._body_index_for_id(selected_body_id))
@@ -517,6 +738,11 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         selected = dropdown.get_selected()
         if selected < len(VIEW_MODE_LABELS):
             self.system.settings.view_mode = VIEW_MODE_LABELS[selected][1]
+            self.trails = [[] for _ in self.system.bodies]
+            self.overview_trails = {}
+            self.overview_state = None
+            self.overview_entity_ids = []
+            self.last_trail_sample_elapsed_s = self.state.elapsed_s
             self._update_title()
             self.canvas.queue_draw()
 
@@ -527,6 +753,9 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         if selected < len(SIMULATION_SCOPE_LABELS):
             self.system.settings.simulation_scope = SIMULATION_SCOPE_LABELS[selected][1]
             self.trails = [[] for _ in self.system.bodies]
+            self.overview_trails = {}
+            self.overview_state = None
+            self.overview_entity_ids = []
             self.last_trail_sample_elapsed_s = self.state.elapsed_s
             self._update_title()
             self.canvas.queue_draw()
@@ -576,11 +805,23 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         if row is None:
             return
         row_index = row.get_index()
-        if row_index < 0 or row_index >= len(self.body_list_indices):
+        if row_index < 0 or row_index >= len(self.body_list_rows):
             return
-        body_index = self.body_list_indices[row_index]
-        if body_index != self.selected_index:
+        row_type, row_id = self.body_list_rows[row_index]
+        if row_type == "group":
+            group_id = str(row_id)
+            if group_id != self.selected_group_id:
+                self.selected_group_id = group_id
+                self._load_group_focus(group_id)
+                self._update_title()
+                self.canvas.queue_draw()
+            return
+
+        body_index = int(row_id)
+        if body_index != self.selected_index or self.selected_group_id is not None:
+            self.selected_group_id = None
             self.selected_index = body_index
+            self.focus_group_id = self._group_id_for_body_index(body_index)
             self._load_body_editor(self.system.bodies[body_index])
             self._update_title()
             self.canvas.queue_draw()
@@ -686,6 +927,16 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         return True
 
     def _advance(self, dt_s: float) -> None:
+        if self._using_system_overview():
+            state, position_samples = advance_with_samples(
+                self._overview_simulation_state(),
+                dt_s,
+                "post_newtonian",
+                self._max_step_seconds(),
+            )
+            self._apply_overview_simulation_state(state, position_samples, self.state.elapsed_s)
+            return
+
         active_indices = self._active_body_indices()
         active_state = self._simulation_state_for_indices(active_indices)
         state, position_samples = advance_with_samples(
@@ -700,8 +951,9 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         if self.closed or self.simulation_future is not None:
             return
 
-        active_indices = self._active_body_indices()
-        state = self._simulation_state_for_indices(active_indices)
+        overview_mode = self._using_system_overview()
+        active_indices = [] if overview_mode else self._active_body_indices()
+        state = self._overview_simulation_state() if overview_mode else self._simulation_state_for_indices(active_indices)
         dt_s = self._step_seconds()
         generation = self.simulation_generation
         max_step_s = self._max_step_seconds()
@@ -717,6 +969,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
                 self._finish_simulation_job,
                 future,
                 generation,
+                overview_mode,
                 active_indices,
                 state.elapsed_s,
             )
@@ -726,6 +979,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self,
         future: Future,
         generation: int,
+        overview_mode: bool,
         active_indices: list[int],
         start_elapsed_s: float,
     ) -> bool:
@@ -743,7 +997,9 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.play_button.set_icon_name("media-playback-start-symbolic")
             return False
 
-        if generation == self.simulation_generation:
+        if generation == self.simulation_generation and overview_mode:
+            self._apply_overview_simulation_state(state, position_samples, start_elapsed_s)
+        elif generation == self.simulation_generation:
             self._apply_simulation_state(state, position_samples, active_indices, start_elapsed_s)
 
         if self.playing:
@@ -759,10 +1015,27 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         start_elapsed_s: float,
     ) -> None:
         self._merge_active_state(state, active_indices)
+        self.overview_trails = {}
+        self.overview_state = None
+        self.overview_entity_ids = []
         self.state.apply_to_bodies(self.system.bodies)
         self._append_trails(position_samples, active_indices, start_elapsed_s, state.elapsed_s)
         self._refresh_body_relationship_labels()
-        self._load_body_editor(self.system.bodies[self.selected_index])
+        if self.selected_group_id is not None:
+            self._load_group_focus(self.selected_group_id)
+        else:
+            self._load_body_editor(self.system.bodies[self.selected_index])
+        self._update_time_label()
+        self.canvas.queue_draw()
+
+    def _apply_overview_simulation_state(self, state: SimulationState, position_samples, start_elapsed_s: float) -> None:
+        self.overview_state = state
+        self.state.elapsed_s = state.elapsed_s
+        self._append_overview_trails(position_samples, start_elapsed_s, state.elapsed_s)
+        if self.selected_group_id is not None:
+            self._load_group_focus(self.selected_group_id)
+        else:
+            self._load_body_editor(self.system.bodies[self.selected_index])
         self._update_time_label()
         self.canvas.queue_draw()
 
@@ -772,6 +1045,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         return self.speed_spin.get_value() * unit_factor(TIME_UNITS, unit)
 
     def _max_step_seconds(self) -> float:
+        if self._using_system_overview():
+            return derived_overview_max_step_s(self._overview_entities(), self.system.settings.accuracy_profile)
         active_bodies = [self.system.bodies[index] for index in self._active_body_indices()]
         return derived_max_step_s(active_bodies, self.system.settings.accuracy_profile)
 
@@ -813,6 +1088,34 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             if len(trail) > TRAIL_POINT_LIMIT:
                 del trail[: len(trail) - TRAIL_POINT_LIMIT]
 
+    def _append_overview_trails(self, position_samples, start_elapsed_s: float, end_elapsed_s: float) -> None:
+        if not position_samples:
+            return
+        entities = self._overview_entities()
+        sample_count = len(position_samples)
+        elapsed_delta = end_elapsed_s - start_elapsed_s
+        direction = 1.0 if elapsed_delta >= 0.0 else -1.0
+        interval_s = self.system.settings.trail_sample_interval_s
+        next_sample_elapsed_s = self.last_trail_sample_elapsed_s + direction * interval_s
+
+        selected_samples = []
+        for sample_index, positions_m in enumerate(position_samples, start=1):
+            sample_elapsed_s = start_elapsed_s + elapsed_delta * sample_index / sample_count
+            if direction > 0.0 and sample_elapsed_s + 1.0e-6 < next_sample_elapsed_s:
+                continue
+            if direction < 0.0 and sample_elapsed_s - 1.0e-6 > next_sample_elapsed_s:
+                continue
+            selected_samples.append(positions_m)
+            self.last_trail_sample_elapsed_s = sample_elapsed_s
+            next_sample_elapsed_s = self.last_trail_sample_elapsed_s + direction * interval_s
+
+        for entity_index, entity in enumerate(entities):
+            trail = self.overview_trails.setdefault(entity.id, [])
+            for positions_m in selected_samples:
+                trail.append((float(positions_m[entity_index][0]), float(positions_m[entity_index][1])))
+            if len(trail) > TRAIL_POINT_LIMIT:
+                del trail[: len(trail) - TRAIL_POINT_LIMIT]
+
     def _update_title(self) -> None:
         self.window_title.set_title(self.system.name)
         max_step_days = self._max_step_seconds() / DAY
@@ -826,6 +1129,9 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         cr.set_source_rgb(0.02, 0.025, 0.032)
         cr.paint()
         if not self.system.bodies:
+            return
+        if self._using_system_overview():
+            self._draw_system_overview(cr, width, height)
             return
 
         center_x_m, center_y_m = self._view_center()
@@ -867,6 +1173,64 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
                 cr.stroke()
             self._draw_collapsed_child_indicator(cr, index, x, y, radius, active_indices)
 
+    def _draw_system_overview(self, cr, width: int, height: int) -> None:
+        entities = self._overview_entities()
+        positions = self._overview_positions()
+        if not entities or len(positions) == 0:
+            return
+        center_x_m, center_y_m = self._overview_view_center(entities, positions)
+        scale = self._overview_canvas_scale(width, height, positions, center_x_m, center_y_m)
+        origin_x = width / 2.0
+        origin_y = height / 2.0
+
+        cr.set_line_width(1.25)
+        for entity in entities:
+            trail = self.overview_trails.get(entity.id, [])
+            if len(trail) < 2:
+                continue
+            rgba = self._rgba(entity.color)
+            cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.45)
+            first_x, first_y = self._project(trail[0][0], trail[0][1], origin_x, origin_y, scale, center_x_m, center_y_m)
+            cr.move_to(first_x, first_y)
+            for point_x, point_y in trail[1:]:
+                x, y = self._project(point_x, point_y, origin_x, origin_y, scale, center_x_m, center_y_m)
+                cr.line_to(x, y)
+            cr.stroke()
+
+        for index, entity in enumerate(entities):
+            position = positions[index]
+            x, y = self._project(float(position[0]), float(position[1]), origin_x, origin_y, scale, center_x_m, center_y_m)
+            rgba = self._rgba(entity.color)
+            cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.95)
+            cr.arc(x, y, 7.0, 0.0, math.tau)
+            cr.fill()
+            if entity.id == self.selected_group_id:
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.85)
+                cr.set_line_width(2.0)
+                cr.arc(x, y, 12.0, 0.0, math.tau)
+                cr.stroke()
+
+    def _overview_positions(self):
+        if self.overview_state is not None and self.overview_entity_ids == [entity.id for entity in self._overview_entities()]:
+            return self.overview_state.positions_m
+        return [entity.position_m for entity in self._overview_entities()]
+
+    def _overview_view_center(self, entities: list[OverviewEntity], positions) -> tuple[float, float]:
+        total_mass = sum(entity.mass_kg for entity in entities)
+        if total_mass <= 0.0:
+            return (0.0, 0.0)
+        return (
+            sum(entities[index].mass_kg * float(positions[index][0]) for index in range(len(entities))) / total_mass,
+            sum(entities[index].mass_kg * float(positions[index][1]) for index in range(len(entities))) / total_mass,
+        )
+
+    def _overview_canvas_scale(self, width: int, height: int, positions, center_x_m: float, center_y_m: float) -> float:
+        max_distance = max(
+            self._view_distance(float(position[0]), float(position[1]), center_x_m, center_y_m)
+            for position in positions
+        )
+        return min(width, height) * 0.45 / max(max_distance, AU) * self.zoom_factor
+
     def _canvas_scale(self, width: int, height: int, center_x_m: float, center_y_m: float) -> float:
         active_indices = self._active_body_indices()
         max_distance = max(
@@ -877,7 +1241,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         return min(width, height) * 0.45 / max(max_distance, AU) * self.zoom_factor
 
     def _body_index_at_canvas_point(self, pointer_x: float, pointer_y: float) -> int | None:
-        if not self.system.bodies:
+        if not self.system.bodies or self._using_system_overview():
             return None
 
         width = self.canvas.get_width()
@@ -946,6 +1310,10 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         if not self.system.bodies:
             return (0.0, 0.0)
         if self.system.settings.view_mode == "follow_selected":
+            if self.selected_group_id is not None:
+                group_center = self._group_center(self.selected_group_id)
+                if group_center is not None:
+                    return group_center
             selected = self.system.bodies[self.selected_index]
             if selected.parent_id is not None:
                 parent = next((body for body in self.system.bodies if body.id == selected.parent_id), None)
@@ -966,6 +1334,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.system.settings.simulation_scope,
             self.system.settings.view_mode,
             self.selected_index,
+            self.system.groups,
+            self.focus_group_id,
         )
 
     def _effective_simulation_scope(self) -> str:
@@ -974,6 +1344,38 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.system.settings.simulation_scope,
             self.system.settings.view_mode,
             self.selected_index,
+            self.system.groups,
+        )
+
+    def _using_system_overview(self) -> bool:
+        return self._effective_simulation_scope() == "system_overview" and len(self._overview_entities()) > 1
+
+    def _overview_entities(self) -> list[OverviewEntity]:
+        return system_overview_entities(self.system.bodies, self.system.groups)
+
+    def _overview_simulation_state(self) -> SimulationState:
+        entities = self._overview_entities()
+        entity_ids = [entity.id for entity in entities]
+        if self.overview_state is None or self.overview_entity_ids != entity_ids:
+            self.overview_entity_ids = entity_ids
+            self.overview_state = SimulationState(
+                masses_kg=np.array([entity.mass_kg for entity in entities], dtype=float),
+                positions_m=np.array([entity.position_m for entity in entities], dtype=float),
+                velocities_mps=np.array([entity.velocity_mps for entity in entities], dtype=float),
+                elapsed_s=self.state.elapsed_s,
+            )
+        return self.overview_state.copy()
+
+    def _group_center(self, group_id: str) -> tuple[float, float] | None:
+        indices = self._body_indices_for_group(group_id)
+        if not indices:
+            return None
+        total_mass = sum(self.system.bodies[index].mass_kg for index in indices)
+        if total_mass <= 0.0:
+            return None
+        return (
+            sum(self.system.bodies[index].mass_kg * self.system.bodies[index].position_m[0] for index in indices) / total_mass,
+            sum(self.system.bodies[index].mass_kg * self.system.bodies[index].position_m[1] for index in indices) / total_mass,
         )
 
     def _simulation_state_for_indices(self, active_indices: list[int]) -> SimulationState:

@@ -10,11 +10,13 @@ from src.scales import (
     LIGHT_YEAR,
     active_body_indices,
     derived_max_step_s,
+    derived_overview_max_step_s,
     distance_between_bodies_m,
     effective_simulation_scope,
     format_distance,
     format_elapsed_time,
     recommended_trail_sample_interval_s,
+    system_overview_entities,
 )
 
 
@@ -167,7 +169,7 @@ class PhysicsTests(unittest.TestCase):
             movement = np.linalg.norm(state.positions_m[index] - start.positions_m[index])
             self.assertGreater(movement, 1.0e8)
 
-    def test_alpha_centauri_auto_scope_uses_stellar_overview(self):
+    def test_alpha_centauri_auto_scope_uses_system_overview(self):
         alpha_centauri = next(
             system
             for system in load_builtin_solar_systems()
@@ -179,16 +181,31 @@ class PhysicsTests(unittest.TestCase):
             alpha_centauri.settings.simulation_scope,
             alpha_centauri.settings.view_mode,
             0,
+            alpha_centauri.groups,
         )
+        entities = system_overview_entities(alpha_centauri.bodies, alpha_centauri.groups)
+
+        self.assertEqual(scope, "system_overview")
+        self.assertEqual(
+            {entity.id for entity in entities},
+            {"alpha-centauri-ab-system", "proxima-centauri-system"},
+        )
+
+    def test_alpha_centauri_explicit_stellar_overview_uses_individual_stars(self):
+        alpha_centauri = next(
+            system
+            for system in load_builtin_solar_systems()
+            if system.id == "builtin-binary-system"
+        )
+
         active_indices = active_body_indices(
             alpha_centauri.bodies,
-            alpha_centauri.settings.simulation_scope,
+            "stellar_overview",
             alpha_centauri.settings.view_mode,
             0,
         )
         active_ids = {alpha_centauri.bodies[index].id for index in active_indices}
 
-        self.assertEqual(scope, "stellar_overview")
         self.assertEqual(
             active_ids,
             {"alpha-centauri-a", "alpha-centauri-b", "proxima-centauri"},
@@ -211,6 +228,61 @@ class PhysicsTests(unittest.TestCase):
             "focused_subsystem",
             alpha_centauri.settings.view_mode,
             proxima_index,
+            alpha_centauri.groups,
+            None,
+        )
+        active_ids = {alpha_centauri.bodies[index].id for index in active_indices}
+
+        self.assertEqual(
+            active_ids,
+            {
+                "proxima-centauri",
+                "proxima-centauri-b",
+                "proxima-centauri-d",
+                "proxima-centauri-c-candidate",
+            },
+        )
+
+    def test_alpha_centauri_focused_ab_group_selects_binary_and_children(self):
+        alpha_centauri = next(
+            system
+            for system in load_builtin_solar_systems()
+            if system.id == "builtin-binary-system"
+        )
+
+        active_indices = active_body_indices(
+            alpha_centauri.bodies,
+            "focused_subsystem",
+            alpha_centauri.settings.view_mode,
+            0,
+            alpha_centauri.groups,
+            "alpha-centauri-ab-system",
+        )
+        active_ids = {alpha_centauri.bodies[index].id for index in active_indices}
+
+        self.assertEqual(
+            active_ids,
+            {
+                "alpha-centauri-a",
+                "alpha-centauri-b",
+                "alpha-centauri-a-candidate",
+            },
+        )
+
+    def test_alpha_centauri_focused_proxima_group_selects_proxima_children(self):
+        alpha_centauri = next(
+            system
+            for system in load_builtin_solar_systems()
+            if system.id == "builtin-binary-system"
+        )
+
+        active_indices = active_body_indices(
+            alpha_centauri.bodies,
+            "focused_subsystem",
+            alpha_centauri.settings.view_mode,
+            0,
+            alpha_centauri.groups,
+            "proxima-centauri-system",
         )
         active_ids = {alpha_centauri.bodies[index].id for index in active_indices}
 
@@ -245,6 +317,48 @@ class PhysicsTests(unittest.TestCase):
         self.assertEqual(full_step, 0.5 * DAY)
         self.assertGreaterEqual(overview_step, 30.0 * DAY)
         self.assertGreater(overview_step, full_step)
+
+    def test_alpha_centauri_system_overview_entities_are_group_barycenters(self):
+        alpha_centauri = next(
+            system
+            for system in load_builtin_solar_systems()
+            if system.id == "builtin-binary-system"
+        )
+        entities = system_overview_entities(alpha_centauri.bodies, alpha_centauri.groups)
+        entities_by_id = {entity.id: entity for entity in entities}
+
+        self.assertEqual(set(entities_by_id), {"alpha-centauri-ab-system", "proxima-centauri-system"})
+        ab = entities_by_id["alpha-centauri-ab-system"]
+        proxima = entities_by_id["proxima-centauri-system"]
+        body_by_id = {body.id: body for body in alpha_centauri.bodies}
+        expected_ab_mass = (
+            body_by_id["alpha-centauri-a"].mass_kg
+            + body_by_id["alpha-centauri-b"].mass_kg
+            + body_by_id["alpha-centauri-a-candidate"].mass_kg
+        )
+        expected_proxima_mass = (
+            body_by_id["proxima-centauri"].mass_kg
+            + body_by_id["proxima-centauri-b"].mass_kg
+            + body_by_id["proxima-centauri-d"].mass_kg
+            + body_by_id["proxima-centauri-c-candidate"].mass_kg
+        )
+
+        self.assertTrue(np.isclose(ab.mass_kg, expected_ab_mass))
+        self.assertTrue(np.isclose(proxima.mass_kg, expected_proxima_mass))
+        self.assertLess(abs(ab.position_m[0]), 0.1 * AU)
+        self.assertGreater(proxima.position_m[1], 12_000.0 * AU)
+
+    def test_alpha_centauri_system_overview_policy_allows_deep_time_steps(self):
+        alpha_centauri = next(
+            system
+            for system in load_builtin_solar_systems()
+            if system.id == "builtin-binary-system"
+        )
+        entities = system_overview_entities(alpha_centauri.bodies, alpha_centauri.groups)
+        overview_step = derived_overview_max_step_s(entities, "fast")
+
+        self.assertEqual(overview_step, 1_000.0 * YEAR)
+        self.assertLess((30.0 * 100.0 * YEAR) / overview_step, 4.0)
 
     def test_balanced_policy_keeps_solar_system_near_day_scale(self):
         max_step_s = derived_max_step_s(load_builtin_solar_system().bodies, "balanced")
@@ -283,6 +397,8 @@ class PhysicsTests(unittest.TestCase):
         self.assertEqual(format_elapsed_time(3 * DAY), "3.00 days")
         self.assertEqual(format_elapsed_time(2 * YEAR), "2.00 years")
         self.assertEqual(format_elapsed_time(100 * YEAR), "1.00 centuries")
+        self.assertEqual(format_elapsed_time(1_000 * YEAR), "1.00 millennia")
+        self.assertEqual(format_elapsed_time(1_000_000 * YEAR), "1.00 Myr")
         self.assertEqual(recommended_trail_sample_interval_s(90 * DAY), 90 * DAY)
 
     def test_distance_formatting_uses_au_then_light_years(self):

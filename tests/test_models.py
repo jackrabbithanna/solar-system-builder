@@ -22,6 +22,8 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(system.name, clone.name)
         self.assertEqual(clone.schema_version, SCHEMA_VERSION)
         self.assertEqual(clone.settings.accuracy_profile, "balanced")
+        self.assertEqual([group.name for group in clone.groups], ["Solar System"])
+        self.assertEqual(clone.groups[0].body_ids, ["sun"])
         self.assertGreaterEqual(len(clone.bodies), 11)
         self.assertIn("ceres", {body.id for body in clone.bodies})
         self.assertIn("pluto", {body.id for body in clone.bodies})
@@ -41,11 +43,15 @@ class ModelTests(unittest.TestCase):
         for system in systems:
             clone = SolarSystem.from_dict(system.to_dict())
             self.assertEqual(system.id, clone.id)
+            self.assertGreaterEqual(len(clone.groups), 1)
             self.assertGreaterEqual(len(clone.bodies), 1)
             body_ids = {body.id for body in clone.bodies}
             for body in clone.bodies:
                 if body.parent_id is not None:
                     self.assertIn(body.parent_id, body_ids)
+            for group in clone.groups:
+                for body_id in group.body_ids:
+                    self.assertIn(body_id, body_ids)
 
         dwarf_planets = systems[1]
         dwarf_body_ids = {body.id for body in dwarf_planets.bodies}
@@ -78,6 +84,7 @@ class ModelTests(unittest.TestCase):
         self.assertIsNone(system.bodies[0].parent_id)
         self.assertEqual(system.bodies[1].parent_id, "sun")
         self.assertEqual(system.settings.visible_step_s, DAY)
+        self.assertEqual(system.groups[0].body_ids, ["sun"])
 
     def test_v2_data_migrates_default_settings(self):
         data = _sample_system_data(schema_version=2)
@@ -94,6 +101,16 @@ class ModelTests(unittest.TestCase):
 
         self.assertEqual(system.schema_version, SCHEMA_VERSION)
         self.assertEqual(system.settings.simulation_scope, "auto")
+        self.assertEqual(system.groups[0].body_ids, ["sun"])
+
+    def test_v4_data_migrates_default_groups(self):
+        data = _sample_system_data(schema_version=4)
+        system = SolarSystem.from_dict(data)
+
+        self.assertEqual(system.schema_version, SCHEMA_VERSION)
+        self.assertEqual(system.groups[0].name, "Sample")
+        self.assertEqual(system.groups[0].kind, "planetary_system")
+        self.assertEqual(system.groups[0].body_ids, ["sun"])
 
     def test_dwarf_planets_preset_gets_large_step_default(self):
         system = next(
@@ -105,6 +122,48 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(system.settings.visible_step_s, 90.0 * DAY)
         self.assertEqual(system.settings.trail_sample_interval_s, 90.0 * DAY)
         self.assertEqual(system.settings.simulation_scope, "auto")
+        self.assertEqual(system.groups[0].body_ids, ["sun"])
+
+    def test_alpha_centauri_groups_describe_hierarchy(self):
+        system = next(
+            item
+            for item in load_builtin_solar_systems()
+            if item.id == "builtin-binary-system"
+        )
+        groups_by_id = {group.id: group for group in system.groups}
+
+        self.assertEqual(groups_by_id["alpha-centauri-system"].body_ids, [])
+        self.assertIsNone(groups_by_id["alpha-centauri-system"].parent_group_id)
+        self.assertEqual(
+            groups_by_id["alpha-centauri-ab-system"].body_ids,
+            ["alpha-centauri-a", "alpha-centauri-b"],
+        )
+        self.assertEqual(
+            groups_by_id["alpha-centauri-ab-system"].parent_group_id,
+            "alpha-centauri-system",
+        )
+        self.assertEqual(
+            groups_by_id["proxima-centauri-system"].body_ids,
+            ["proxima-centauri"],
+        )
+        self.assertEqual(
+            groups_by_id["proxima-centauri-system"].parent_group_id,
+            "alpha-centauri-system",
+        )
+        self.assertEqual(_body_ids_for_group(system, "alpha-centauri-system"), {
+            "alpha-centauri-a",
+            "alpha-centauri-b",
+            "alpha-centauri-a-candidate",
+            "proxima-centauri",
+            "proxima-centauri-b",
+            "proxima-centauri-d",
+            "proxima-centauri-c-candidate",
+        })
+        self.assertEqual(_body_ids_for_group(system, "alpha-centauri-ab-system"), {
+            "alpha-centauri-a",
+            "alpha-centauri-b",
+            "alpha-centauri-a-candidate",
+        })
 
     def test_alpha_centauri_generator_matches_preset(self):
         spec = importlib.util.spec_from_file_location(
@@ -149,6 +208,81 @@ class ModelTests(unittest.TestCase):
         with self.assertRaisesRegex(ModelError, "unsupported simulation_scope"):
             SolarSystem.from_dict(data)
 
+    def test_group_round_trip(self):
+        data = _sample_system_data()
+        data["groups"] = [
+            {
+                "id": "sample-root",
+                "name": "Sample Root",
+                "kind": "system",
+                "body_ids": [],
+            },
+            {
+                "id": "sample-inner",
+                "name": "Sample Inner",
+                "kind": "planetary_system",
+                "parent_group_id": "sample-root",
+                "body_ids": ["sun"],
+            },
+        ]
+
+        clone = SolarSystem.from_dict(SolarSystem.from_dict(data).to_dict())
+
+        self.assertEqual([group.id for group in clone.groups], ["sample-root", "sample-inner"])
+        self.assertEqual(clone.groups[1].parent_group_id, "sample-root")
+        self.assertEqual(clone.groups[1].body_ids, ["sun"])
+
+    def test_group_missing_body_fails(self):
+        data = _sample_system_data()
+        data["groups"] = [
+            {
+                "id": "bad-group",
+                "name": "Bad",
+                "kind": "system",
+                "body_ids": ["missing"],
+            }
+        ]
+
+        with self.assertRaisesRegex(ModelError, "body_id missing does not exist"):
+            SolarSystem.from_dict(data)
+
+    def test_group_missing_parent_fails(self):
+        data = _sample_system_data()
+        data["groups"] = [
+            {
+                "id": "child-group",
+                "name": "Child",
+                "kind": "system",
+                "parent_group_id": "missing-group",
+                "body_ids": ["sun"],
+            }
+        ]
+
+        with self.assertRaisesRegex(ModelError, "parent_group_id missing-group does not exist"):
+            SolarSystem.from_dict(data)
+
+    def test_group_cycle_fails(self):
+        data = _sample_system_data()
+        data["groups"] = [
+            {
+                "id": "first",
+                "name": "First",
+                "kind": "system",
+                "parent_group_id": "second",
+                "body_ids": ["sun"],
+            },
+            {
+                "id": "second",
+                "name": "Second",
+                "kind": "system",
+                "parent_group_id": "first",
+                "body_ids": [],
+            },
+        ]
+
+        with self.assertRaisesRegex(ModelError, "group cycle"):
+            SolarSystem.from_dict(data)
+
     def test_missing_parent_fails(self):
         data = _sample_system_data()
         data["bodies"][1]["parent_id"] = "missing"
@@ -182,6 +316,8 @@ class ModelTests(unittest.TestCase):
         star = next(body for body in duplicate.bodies if body.kind == "star")
         planet = next(body for body in duplicate.bodies if body.kind == "planet")
         self.assertEqual(planet.parent_id, star.id)
+        self.assertNotEqual(system.groups[0].id, duplicate.groups[0].id)
+        self.assertEqual(duplicate.groups[0].body_ids, [star.id])
 
 
 def _sample_system_data(schema_version: int = SCHEMA_VERSION):
@@ -214,6 +350,32 @@ def _sample_system_data(schema_version: int = SCHEMA_VERSION):
             },
         ],
     }
+
+
+def _body_ids_for_group(system: SolarSystem, group_id: str) -> set[str]:
+    group_ids = {group_id}
+    changed = True
+    while changed:
+        changed = False
+        for group in system.groups:
+            if group.parent_group_id in group_ids and group.id not in group_ids:
+                group_ids.add(group.id)
+                changed = True
+
+    body_ids = {
+        body_id
+        for group in system.groups
+        if group.id in group_ids
+        for body_id in group.body_ids
+    }
+    changed = True
+    while changed:
+        changed = False
+        for body in system.bodies:
+            if body.parent_id in body_ids and body.id not in body_ids:
+                body_ids.add(body.id)
+                changed = True
+    return body_ids
 
 
 if __name__ == "__main__":

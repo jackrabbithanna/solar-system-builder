@@ -12,12 +12,12 @@ from uuid import uuid4
 
 from .constants import DAY
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 ACCURACY_PROFILES = {"high", "balanced", "fast"}
 DISTANCE_UNITS = {"km", "AU", "kAU", "ly"}
 VIEW_MODES = {"fit_system", "follow_selected", "log_overview"}
-SIMULATION_SCOPES = {"auto", "full_nbody", "stellar_overview", "focused_subsystem"}
+SIMULATION_SCOPES = {"auto", "full_nbody", "stellar_overview", "focused_subsystem", "system_overview"}
 
 
 class ModelError(ValueError):
@@ -97,6 +97,47 @@ class Body:
 
 
 @dataclass
+class SystemGroup:
+    name: str
+    kind: str
+    body_ids: list[str] = field(default_factory=list)
+    id: str = field(default_factory=lambda: str(uuid4()))
+    parent_group_id: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SystemGroup":
+        group = cls(
+            id=str(data.get("id") or uuid4()),
+            name=str(data["name"]),
+            kind=str(data.get("kind", "system")),
+            body_ids=[str(body_id) for body_id in data.get("body_ids", [])],
+            parent_group_id=str(data["parent_group_id"]) if data.get("parent_group_id") is not None else None,
+        )
+        group.validate()
+        return group
+
+    def validate(self) -> None:
+        if not self.id:
+            raise ModelError("group id is required")
+        if not self.name.strip():
+            raise ModelError("group name is required")
+        if not self.kind.strip():
+            raise ModelError(f"{self.name} group kind is required")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        data = {
+            "id": self.id,
+            "name": self.name,
+            "kind": self.kind,
+            "body_ids": self.body_ids,
+        }
+        if self.parent_group_id is not None:
+            data["parent_group_id"] = self.parent_group_id
+        return data
+
+
+@dataclass
 class SystemSettings:
     visible_step_s: float = DAY
     accuracy_profile: str = "balanced"
@@ -164,16 +205,22 @@ class SolarSystem:
     id: str = field(default_factory=lambda: str(uuid4()))
     schema_version: int = SCHEMA_VERSION
     settings: SystemSettings = field(default_factory=SystemSettings)
+    groups: list[SystemGroup] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SolarSystem":
         version = int(data.get("schema_version", 0))
-        if version not in (1, 2, 3, SCHEMA_VERSION):
+        if version not in (1, 2, 3, 4, SCHEMA_VERSION):
             raise ModelError(f"unsupported schema version {version}")
         system_id = str(data.get("id") or uuid4())
         bodies = [Body.from_dict(item) for item in data.get("bodies", [])]
         if version == 1:
             cls._migrate_v1_parent_ids(bodies)
+        groups = (
+            [SystemGroup.from_dict(item) for item in data["groups"]]
+            if version >= 5 and "groups" in data
+            else cls._default_groups(system_id, str(data["name"]), bodies)
+        )
         system = cls(
             id=system_id,
             schema_version=SCHEMA_VERSION,
@@ -182,6 +229,7 @@ class SolarSystem:
             description=str(data.get("description", "")),
             bodies=bodies,
             settings=SystemSettings.from_dict(data.get("settings"), system_id),
+            groups=groups,
         )
         system.validate()
         return system
@@ -194,6 +242,29 @@ class SolarSystem:
         for body in bodies:
             if body.kind != "star" and body.parent_id is None:
                 body.parent_id = first_star.id
+
+    @staticmethod
+    def _default_groups(system_id: str, name: str, bodies: list[Body]) -> list[SystemGroup]:
+        root_stars = [body for body in bodies if body.kind == "star" and body.parent_id is None]
+        if root_stars:
+            kind = "planetary_system" if len(root_stars) == 1 else "stellar_system"
+            return [
+                SystemGroup(
+                    id=f"{system_id}-root-group",
+                    name=name,
+                    kind=kind,
+                    body_ids=[body.id for body in root_stars],
+                )
+            ]
+        root_bodies = [body for body in bodies if body.parent_id is None]
+        return [
+            SystemGroup(
+                id=f"{system_id}-root-group",
+                name=name,
+                kind="system",
+                body_ids=[body.id for body in root_bodies],
+            )
+        ]
 
     def validate(self) -> None:
         if not self.id:
@@ -217,6 +288,7 @@ class SolarSystem:
             if body.parent_id not in seen_ids:
                 raise ModelError(f"{body.name} parent_id {body.parent_id} does not exist")
         self._validate_parent_cycles()
+        self._validate_groups(seen_ids)
 
     def _validate_parent_cycles(self) -> None:
         bodies_by_id = {body.id: body for body in self.bodies}
@@ -230,6 +302,41 @@ class SolarSystem:
                 parent = bodies_by_id[parent_id]
                 parent_id = parent.parent_id
 
+    def _validate_groups(self, body_ids: set[str]) -> None:
+        seen_group_ids: set[str] = set()
+        for group in self.groups:
+            group.validate()
+            if group.id in seen_group_ids:
+                raise ModelError(f"duplicate group id {group.id}")
+            seen_group_ids.add(group.id)
+            seen_body_ids: set[str] = set()
+            for body_id in group.body_ids:
+                if body_id not in body_ids:
+                    raise ModelError(f"{group.name} group body_id {body_id} does not exist")
+                if body_id in seen_body_ids:
+                    raise ModelError(f"{group.name} group contains duplicate body_id {body_id}")
+                seen_body_ids.add(body_id)
+        for group in self.groups:
+            if group.parent_group_id is None:
+                continue
+            if group.parent_group_id == group.id:
+                raise ModelError(f"{group.name} group cannot parent itself")
+            if group.parent_group_id not in seen_group_ids:
+                raise ModelError(f"{group.name} parent_group_id {group.parent_group_id} does not exist")
+        self._validate_group_cycles()
+
+    def _validate_group_cycles(self) -> None:
+        groups_by_id = {group.id: group for group in self.groups}
+        for group in self.groups:
+            visited: set[str] = set()
+            parent_group_id = group.parent_group_id
+            while parent_group_id is not None:
+                if parent_group_id in visited:
+                    raise ModelError(f"group cycle involving {group.name}")
+                visited.add(parent_group_id)
+                parent = groups_by_id[parent_group_id]
+                parent_group_id = parent.parent_group_id
+
     def to_dict(self) -> dict[str, Any]:
         self.validate()
         return {
@@ -239,6 +346,7 @@ class SolarSystem:
             "epoch": self.epoch,
             "description": self.description,
             "settings": self.settings.to_dict(),
+            "groups": [group.to_dict() for group in self.groups],
             "bodies": [body.to_dict() for body in self.bodies],
         }
 
@@ -255,4 +363,17 @@ class SolarSystem:
             body["id"] = body_id_map[old_id]
             if body.get("parent_id") is not None:
                 body["parent_id"] = body_id_map[body["parent_id"]]
+        group_id_map = {
+            group["id"]: str(uuid4())
+            for group in data.get("groups", [])
+        }
+        for group in data.get("groups", []):
+            old_id = group["id"]
+            group["id"] = group_id_map[old_id]
+            if group.get("parent_group_id") is not None:
+                group["parent_group_id"] = group_id_map[group["parent_group_id"]]
+            group["body_ids"] = [
+                body_id_map[body_id]
+                for body_id in group.get("body_ids", [])
+            ]
         return SolarSystem.from_dict(data)

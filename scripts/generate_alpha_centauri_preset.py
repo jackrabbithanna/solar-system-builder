@@ -121,7 +121,7 @@ def build_preset() -> dict[str, Any]:
     alpha_a_candidate_position, alpha_a_candidate_velocity = circular_child_state(position_a, velocity_a, mass_a, 2.0, 80.0)
 
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "id": "builtin-binary-system",
         "name": "Alpha Centauri",
         "epoch": "Approximate Alpha Centauri seed",
@@ -138,6 +138,28 @@ def build_preset() -> dict[str, Any]:
             "simulation_scope": "auto",
             "trail_sample_interval_s": 30.0 * DAY,
         },
+        "groups": [
+            {
+                "id": "alpha-centauri-system",
+                "name": "Alpha Centauri",
+                "kind": "triple_system",
+                "body_ids": [],
+            },
+            {
+                "id": "alpha-centauri-ab-system",
+                "name": "Alpha Centauri AB",
+                "kind": "binary_system",
+                "parent_group_id": "alpha-centauri-system",
+                "body_ids": ["alpha-centauri-a", "alpha-centauri-b"],
+            },
+            {
+                "id": "proxima-centauri-system",
+                "name": "Proxima Centauri System",
+                "kind": "planetary_system",
+                "parent_group_id": "alpha-centauri-system",
+                "body_ids": ["proxima-centauri"],
+            },
+        ],
         "bodies": [
             body("alpha-centauri-a", "Alpha Centauri A", "star", mass_a, 1.2234 * SOLAR_RADIUS, position_a, velocity_a, "#fff1a8"),
             body("alpha-centauri-b", "Alpha Centauri B", "star", mass_b, 0.8632 * SOLAR_RADIUS, position_b, velocity_b, "#ffd166"),

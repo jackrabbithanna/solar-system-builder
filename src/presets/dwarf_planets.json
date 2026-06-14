@@ -1,9 +1,19 @@
 {
-  "schema_version": 2,
+  "schema_version": 5,
   "id": "builtin-dwarf-planets",
   "name": "Dwarf Planets",
   "epoch": "2026-06-14 00:00:00 TDB, JPL Horizons, solar-system barycentric",
   "description": "Built-in Dwarf Planets preset using SI units, JPL Horizons solar-system barycentric state vectors, and curated physical metadata.",
+  "groups": [
+    {
+      "id": "dwarf-planets-group",
+      "name": "Dwarf Planets",
+      "kind": "planetary_system",
+      "body_ids": [
+        "sun"
+      ]
+    }
+  ],
   "bodies": [
     {
       "id": "sun",
