@@ -116,11 +116,12 @@ collapse.
 `auto` simulation scope keeps the whole-system Alpha Centauri view interactive by
 using a system overview in `log_overview`: Alpha Centauri AB and the Proxima
 Centauri System are advanced as temporary group barycenters, and their group
-trails show the wide-system path. Switching to `stellar_overview` shows the
-individual stars. Switching to follow-selected or focused subsystem mode advances
-the selected star system and its children in detail, so Proxima b/d/c Candidate
-or the Alpha Centauri A Candidate can show local orbital paths without forcing
-every whole-system step to use the shortest planetary timestep.
+trails show the wide-system path. The sidebar focus action can zoom into either
+a semantic group or a star with child planets. In that focused state, `auto`
+uses hybrid focused context: the focused bodies are advanced in detail while
+outside systems are drawn as coarse barycenter context. This lets Proxima b/d/c
+Candidate or the Alpha Centauri A Candidate show local orbital paths without
+forcing every whole-system step to use the shortest planetary timestep.
 
 ## Limitations
 

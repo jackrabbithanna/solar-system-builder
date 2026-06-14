@@ -28,7 +28,7 @@ Completed active states are applied by `_apply_simulation_state(...)` on the GTK
 
 Trails are appended on the GTK main thread from the sampled positions returned by `advance_with_samples()`. The stored trail history is capped by `TRAIL_POINT_LIMIT` in `window.py`.
 
-The UI may pass only an active body subset to the worker. Stellar overview mode advances root stars only, while focused subsystem mode advances a selected root body and its children. System overview mode passes temporary group barycenter entities to the worker and applies only elapsed time plus group trails. Inactive bodies remain in the full UI state but are not updated by that worker result.
+The UI may pass only an active body subset to the worker. Stellar overview mode advances root stars only, while focused subsystem mode advances a selected root body and its children. System overview mode passes temporary group barycenter entities to the worker and applies only elapsed time plus group trails. Hybrid focused context mode advances focused bodies and outside context barycenters in the same worker job; only focused body state is merged back into the model, while context barycenters remain display-only. Inactive bodies remain in the full UI state but are not updated by that worker result.
 
 ## Stale Result Guard
 

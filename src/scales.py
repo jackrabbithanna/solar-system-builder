@@ -49,6 +49,7 @@ SIMULATION_SCOPE_LABELS: tuple[tuple[str, str], ...] = (
     ("Full N-body", "full_nbody"),
     ("Stellar Overview", "stellar_overview"),
     ("Focused Subsystem", "focused_subsystem"),
+    ("Hybrid Focus", "hybrid_focused_context"),
 )
 
 _PERIOD_FRACTIONS = {
@@ -67,6 +68,18 @@ _OVERVIEW_PROFILE_CLAMPS_S = {
     "high": (YEAR, 10.0 * YEAR),
     "balanced": (10.0 * YEAR, 100.0 * YEAR),
     "fast": (100.0 * YEAR, 1_000.0 * YEAR),
+}
+
+_FOCUSED_VISIBLE_STEP_FRACTIONS = {
+    "high": 1.0 / 96.0,
+    "balanced": 1.0 / 48.0,
+    "fast": 1.0 / 24.0,
+}
+
+_FOCUSED_VISIBLE_STEP_CLAMPS_S = {
+    "high": (DAY, 10.0 * YEAR),
+    "balanced": (7.0 * DAY, 100.0 * YEAR),
+    "fast": (30.0 * DAY, 1_000.0 * YEAR),
 }
 
 
@@ -168,9 +181,12 @@ def effective_simulation_scope(
     view_mode: str,
     selected_index: int,
     groups: list[SystemGroup] | None = None,
+    focus_target: str | None = None,
 ) -> str:
     if requested_scope != "auto":
         return requested_scope
+    if focus_target is not None:
+        return "hybrid_focused_context"
     if view_mode == "log_overview" and len(system_overview_entities(bodies, groups or [])) > 1:
         return "system_overview"
     root_star_count = sum(1 for body in bodies if body.kind == "star" and body.parent_id is None)
@@ -188,10 +204,11 @@ def active_body_indices(
     selected_index: int,
     groups: list[SystemGroup] | None = None,
     focus_group_id: str | None = None,
+    focus_target: str | None = None,
 ) -> list[int]:
     if not bodies:
         return []
-    scope = effective_simulation_scope(bodies, requested_scope, view_mode, selected_index, groups)
+    scope = effective_simulation_scope(bodies, requested_scope, view_mode, selected_index, groups, focus_target)
     if scope == "full_nbody":
         return list(range(len(bodies)))
     if scope == "stellar_overview":
@@ -201,9 +218,67 @@ def active_body_indices(
             if body.kind == "star" and body.parent_id is None
         ]
         return root_stars or list(range(len(bodies)))
-    if scope == "focused_subsystem":
+    if scope in {"focused_subsystem", "hybrid_focused_context"}:
+        target_indices = focus_target_body_indices(bodies, groups or [], focus_target)
+        if target_indices:
+            return target_indices
         return _focused_subsystem_indices(bodies, selected_index, groups or [], focus_group_id)
     return list(range(len(bodies)))
+
+
+def focus_target_body_indices(
+    bodies: list[Body],
+    groups: list[SystemGroup],
+    focus_target: str | None,
+) -> list[int]:
+    if focus_target is None:
+        return []
+    target_type, _, target_id = focus_target.partition(":")
+    if not target_type or not target_id:
+        return []
+    if target_type == "group":
+        return _body_indices_for_group(bodies, groups, target_id)
+    if target_type == "body":
+        return _body_descendant_indices(bodies, target_id)
+    return []
+
+
+def focused_visible_step_s(bodies: list[Body], accuracy_profile: str) -> float:
+    if not bodies:
+        return DAY
+    fraction = _FOCUSED_VISIBLE_STEP_FRACTIONS.get(
+        accuracy_profile,
+        _FOCUSED_VISIBLE_STEP_FRACTIONS["balanced"],
+    )
+    lower, upper = _FOCUSED_VISIBLE_STEP_CLAMPS_S.get(
+        accuracy_profile,
+        _FOCUSED_VISIBLE_STEP_CLAMPS_S["balanced"],
+    )
+    shortest_period = _shortest_parent_orbit_period_s(bodies) or _shortest_unparented_pair_period_s(bodies)
+    if shortest_period is None:
+        return lower
+    return max(lower, min(upper, shortest_period * fraction))
+
+
+def focused_canvas_bounds(
+    bodies: list[Body],
+    active_indices: list[int],
+) -> tuple[tuple[float, float], float] | None:
+    if not active_indices:
+        return None
+    active_bodies = [bodies[index] for index in active_indices]
+    total_mass = sum(body.mass_kg for body in active_bodies)
+    if total_mass > 0.0:
+        center_x = sum(body.mass_kg * body.position_m[0] for body in active_bodies) / total_mass
+        center_y = sum(body.mass_kg * body.position_m[1] for body in active_bodies) / total_mass
+    else:
+        center_x = sum(body.position_m[0] for body in active_bodies) / len(active_bodies)
+        center_y = sum(body.position_m[1] for body in active_bodies) / len(active_bodies)
+    radius = max(
+        math.hypot(body.position_m[0] - center_x, body.position_m[1] - center_y)
+        for body in active_bodies
+    )
+    return (center_x, center_y), max(radius, AU)
 
 
 def system_overview_entities(bodies: list[Body], groups: list[SystemGroup]) -> list[OverviewEntity]:
@@ -220,6 +295,43 @@ def system_overview_entities(bodies: list[Body], groups: list[SystemGroup]) -> l
         if not indices:
             continue
         entities.append(_overview_entity_for_indices(group, bodies, indices))
+    return entities
+
+
+def context_overview_entities(
+    bodies: list[Body],
+    groups: list[SystemGroup],
+    focus_target: str | None,
+) -> list[OverviewEntity]:
+    focused_indices = set(focus_target_body_indices(bodies, groups, focus_target))
+    if not focused_indices:
+        return []
+    focused_body_ids = {bodies[index].id for index in focused_indices}
+    entities: list[OverviewEntity] = []
+    used_indices: set[int] = set()
+
+    for entity in system_overview_entities(bodies, groups):
+        indices = set(_body_indices_for_group(bodies, groups, entity.id))
+        if not indices or indices & focused_indices:
+            continue
+        entities.append(entity)
+        used_indices.update(indices)
+
+    for root in bodies:
+        if root.parent_id is not None or root.id in focused_body_ids:
+            continue
+        indices = set(_body_descendant_indices(bodies, root.id))
+        if not indices or indices & focused_indices or indices <= used_indices:
+            continue
+        group = SystemGroup(
+            id=f"context-{root.id}",
+            name=f"{root.name} System",
+            kind=f"{root.kind}_system",
+            body_ids=[root.id],
+        )
+        entities.append(_overview_entity_for_indices(group, bodies, sorted(indices)))
+        used_indices.update(indices)
+
     return entities
 
 
@@ -259,6 +371,18 @@ def _body_indices_for_group(bodies: list[Body], groups: list[SystemGroup], group
     for group in groups:
         if group.id in group_ids:
             body_ids.update(group.body_ids)
+    changed = True
+    while changed:
+        changed = False
+        for body in bodies:
+            if body.parent_id in body_ids and body.id not in body_ids:
+                body_ids.add(body.id)
+                changed = True
+    return [index for index, body in enumerate(bodies) if body.id in body_ids]
+
+
+def _body_descendant_indices(bodies: list[Body], body_id: str) -> list[int]:
+    body_ids = {body_id}
     changed = True
     while changed:
         changed = False

@@ -9,10 +9,13 @@ from src.presets import load_builtin_solar_system, load_builtin_solar_systems
 from src.scales import (
     LIGHT_YEAR,
     active_body_indices,
+    context_overview_entities,
     derived_max_step_s,
     derived_overview_max_step_s,
     distance_between_bodies_m,
     effective_simulation_scope,
+    focused_visible_step_s,
+    focus_target_body_indices,
     format_distance,
     format_elapsed_time,
     recommended_trail_sample_interval_s,
@@ -295,6 +298,118 @@ class PhysicsTests(unittest.TestCase):
                 "proxima-centauri-c-candidate",
             },
         )
+
+    def test_alpha_centauri_body_focus_selects_star_and_planets(self):
+        alpha_centauri = next(
+            system
+            for system in load_builtin_solar_systems()
+            if system.id == "builtin-binary-system"
+        )
+
+        active_indices = focus_target_body_indices(
+            alpha_centauri.bodies,
+            alpha_centauri.groups,
+            "body:proxima-centauri",
+        )
+        active_ids = {alpha_centauri.bodies[index].id for index in active_indices}
+
+        self.assertEqual(
+            active_ids,
+            {
+                "proxima-centauri",
+                "proxima-centauri-b",
+                "proxima-centauri-d",
+                "proxima-centauri-c-candidate",
+            },
+        )
+
+    def test_alpha_centauri_body_focus_supports_star_without_group(self):
+        alpha_centauri = next(
+            system
+            for system in load_builtin_solar_systems()
+            if system.id == "builtin-binary-system"
+        )
+
+        active_indices = active_body_indices(
+            alpha_centauri.bodies,
+            "hybrid_focused_context",
+            "follow_selected",
+            0,
+            alpha_centauri.groups,
+            None,
+            "body:alpha-centauri-a",
+        )
+        active_ids = {alpha_centauri.bodies[index].id for index in active_indices}
+
+        self.assertEqual(active_ids, {"alpha-centauri-a", "alpha-centauri-a-candidate"})
+
+    def test_body_focus_descends_recursively_for_future_moons(self):
+        bodies = [
+            Body("Star", "star", SOLAR_MASS, 1, [0, 0, 0], [0, 0, 0], "#fff", id="star"),
+            Body("Planet", "planet", 1.0e24, 1, [AU, 0, 0], [0, 1, 0], "#00f", id="planet", parent_id="star"),
+            Body("Moon", "moon", 1.0e22, 1, [AU + 1.0e8, 0, 0], [0, 1, 0], "#aaa", id="moon", parent_id="planet"),
+        ]
+
+        active_indices = focus_target_body_indices(bodies, [], "body:star")
+        active_ids = {bodies[index].id for index in active_indices}
+
+        self.assertEqual(active_ids, {"star", "planet", "moon"})
+
+    def test_auto_scope_uses_hybrid_when_focus_target_exists(self):
+        alpha_centauri = next(
+            system
+            for system in load_builtin_solar_systems()
+            if system.id == "builtin-binary-system"
+        )
+
+        scope = effective_simulation_scope(
+            alpha_centauri.bodies,
+            "auto",
+            "follow_selected",
+            0,
+            alpha_centauri.groups,
+            "body:proxima-centauri",
+        )
+
+        self.assertEqual(scope, "hybrid_focused_context")
+
+    def test_context_entities_exclude_focused_target(self):
+        alpha_centauri = next(
+            system
+            for system in load_builtin_solar_systems()
+            if system.id == "builtin-binary-system"
+        )
+
+        entities = context_overview_entities(
+            alpha_centauri.bodies,
+            alpha_centauri.groups,
+            "body:proxima-centauri",
+        )
+
+        self.assertEqual({entity.id for entity in entities}, {"alpha-centauri-ab-system"})
+
+    def test_focused_visible_step_uses_local_orbits(self):
+        alpha_centauri = next(
+            system
+            for system in load_builtin_solar_systems()
+            if system.id == "builtin-binary-system"
+        )
+        proxima_bodies = [
+            alpha_centauri.bodies[index]
+            for index in focus_target_body_indices(
+                alpha_centauri.bodies,
+                alpha_centauri.groups,
+                "body:proxima-centauri",
+            )
+        ]
+        all_entities = system_overview_entities(alpha_centauri.bodies, alpha_centauri.groups)
+
+        focused_step = focused_visible_step_s(proxima_bodies, "balanced")
+        overview_step = derived_overview_max_step_s(all_entities, "balanced")
+
+        self.assertGreaterEqual(focused_step, 7.0 * DAY)
+        self.assertLess(focused_step, YEAR)
+        self.assertGreater(overview_step, focused_step)
 
     def test_alpha_centauri_overview_policy_ignores_planetary_timestep(self):
         alpha_centauri = next(

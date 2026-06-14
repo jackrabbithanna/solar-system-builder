@@ -17,7 +17,14 @@ SCHEMA_VERSION = 5
 ACCURACY_PROFILES = {"high", "balanced", "fast"}
 DISTANCE_UNITS = {"km", "AU", "kAU", "ly"}
 VIEW_MODES = {"fit_system", "follow_selected", "log_overview"}
-SIMULATION_SCOPES = {"auto", "full_nbody", "stellar_overview", "focused_subsystem", "system_overview"}
+SIMULATION_SCOPES = {
+    "auto",
+    "full_nbody",
+    "stellar_overview",
+    "focused_subsystem",
+    "system_overview",
+    "hybrid_focused_context",
+}
 
 
 class ModelError(ValueError):

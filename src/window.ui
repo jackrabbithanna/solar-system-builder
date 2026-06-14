@@ -257,11 +257,26 @@
                       </object>
                     </child>
                     <child>
-                      <object class="GtkLabel" id="selected_name_label">
-                        <property name="xalign">0</property>
-                        <style>
-                          <class name="heading"/>
-                        </style>
+                      <object class="GtkBox">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">8</property>
+                        <child>
+                          <object class="GtkLabel" id="selected_name_label">
+                            <property name="xalign">0</property>
+                            <property name="hexpand">True</property>
+                            <style>
+                              <class name="heading"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="focus_button">
+                            <property name="icon-name">zoom-fit-best-symbolic</property>
+                            <property name="tooltip-text" translatable="yes">Focus and fit this system</property>
+                            <property name="visible">False</property>
+                            <property name="valign">center</property>
+                          </object>
+                        </child>
                       </object>
                     </child>
                     <child>
