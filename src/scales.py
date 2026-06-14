@@ -40,6 +40,13 @@ VIEW_MODE_LABELS: tuple[tuple[str, str], ...] = (
     ("Log Overview", "log_overview"),
 )
 
+SIMULATION_SCOPE_LABELS: tuple[tuple[str, str], ...] = (
+    ("Auto", "auto"),
+    ("Full N-body", "full_nbody"),
+    ("Stellar Overview", "stellar_overview"),
+    ("Focused Subsystem", "focused_subsystem"),
+)
+
 _PERIOD_FRACTIONS = {
     "high": 1.0 / 120.0,
     "balanced": 1.0 / 80.0,
@@ -105,7 +112,7 @@ def format_distance(distance_m: float) -> str:
 def derived_max_step_s(bodies: list[Body], accuracy_profile: str) -> float:
     fraction = _PERIOD_FRACTIONS.get(accuracy_profile, _PERIOD_FRACTIONS["balanced"])
     lower, upper = _PROFILE_CLAMPS_S.get(accuracy_profile, _PROFILE_CLAMPS_S["balanced"])
-    shortest_period = _shortest_parent_orbit_period_s(bodies)
+    shortest_period = _shortest_parent_orbit_period_s(bodies) or _shortest_unparented_pair_period_s(bodies)
     if shortest_period is None:
         return DAY
     return max(lower, min(upper, shortest_period * fraction))
@@ -113,6 +120,65 @@ def derived_max_step_s(bodies: list[Body], accuracy_profile: str) -> float:
 
 def recommended_trail_sample_interval_s(visible_step_s: float) -> float:
     return max(DAY, abs(visible_step_s))
+
+
+def effective_simulation_scope(
+    bodies: list[Body],
+    requested_scope: str,
+    view_mode: str,
+    selected_index: int,
+) -> str:
+    if requested_scope != "auto":
+        return requested_scope
+    root_star_count = sum(1 for body in bodies if body.kind == "star" and body.parent_id is None)
+    if view_mode == "follow_selected":
+        return "focused_subsystem"
+    if root_star_count > 1:
+        return "stellar_overview"
+    return "full_nbody"
+
+
+def active_body_indices(
+    bodies: list[Body],
+    requested_scope: str,
+    view_mode: str,
+    selected_index: int,
+) -> list[int]:
+    if not bodies:
+        return []
+    scope = effective_simulation_scope(bodies, requested_scope, view_mode, selected_index)
+    if scope == "full_nbody":
+        return list(range(len(bodies)))
+    if scope == "stellar_overview":
+        root_stars = [
+            index
+            for index, body in enumerate(bodies)
+            if body.kind == "star" and body.parent_id is None
+        ]
+        return root_stars or list(range(len(bodies)))
+    if scope == "focused_subsystem":
+        return _focused_subsystem_indices(bodies, selected_index)
+    return list(range(len(bodies)))
+
+
+def collapsed_child_counts(bodies: list[Body], active_indices: list[int]) -> dict[int, int]:
+    active_ids = {bodies[index].id for index in active_indices}
+    index_by_id = {body.id: index for index, body in enumerate(bodies)}
+    counts: dict[int, int] = {}
+    for body in bodies:
+        if body.parent_id is None or body.id in active_ids:
+            continue
+        ancestor_id = body.parent_id
+        while ancestor_id is not None:
+            ancestor_index = index_by_id.get(ancestor_id)
+            if ancestor_index is None:
+                break
+            ancestor = bodies[ancestor_index]
+            if ancestor.id in active_ids:
+                counts[ancestor_index] = counts.get(ancestor_index, 0) + 1
+                break
+            ancestor_id = ancestor.parent_id
+    return counts
 
 
 def _shortest_parent_orbit_period_s(bodies: list[Body]) -> float | None:
@@ -131,3 +197,40 @@ def _shortest_parent_orbit_period_s(bodies: list[Body]) -> float | None:
         if math.isfinite(period_s):
             shortest = period_s if shortest is None else min(shortest, period_s)
     return shortest
+
+
+def _shortest_unparented_pair_period_s(bodies: list[Body]) -> float | None:
+    root_bodies = [body for body in bodies if body.parent_id is None]
+    shortest: float | None = None
+    for first_index, first in enumerate(root_bodies):
+        for second in root_bodies[first_index + 1:]:
+            radius_m = math.dist(first.position_m, second.position_m)
+            total_mass_kg = first.mass_kg + second.mass_kg
+            if radius_m <= 0.0 or total_mass_kg <= 0.0:
+                continue
+            period_s = math.tau * math.sqrt(radius_m**3 / (G * total_mass_kg))
+            if math.isfinite(period_s):
+                shortest = period_s if shortest is None else min(shortest, period_s)
+    return shortest
+
+
+def _focused_subsystem_indices(bodies: list[Body], selected_index: int) -> list[int]:
+    selected_index = max(0, min(selected_index, len(bodies) - 1))
+    bodies_by_id = {body.id: body for body in bodies}
+    selected = bodies[selected_index]
+    root = selected
+    while root.parent_id is not None:
+        parent = bodies_by_id.get(root.parent_id)
+        if parent is None:
+            break
+        root = parent
+
+    selected_ids = {root.id}
+    changed = True
+    while changed:
+        changed = False
+        for body in bodies:
+            if body.parent_id in selected_ids and body.id not in selected_ids:
+                selected_ids.add(body.id)
+                changed = True
+    return [index for index, body in enumerate(bodies) if body.id in selected_ids]

@@ -86,18 +86,27 @@ objects. They should not be treated as confirmed discoveries.
 
 ## Simulation Settings
 
-The preset stores schema v3 settings:
+The preset stores schema v4 settings:
 
 - `visible_step_s`: `30` days
 - `accuracy_profile`: `fast`
 - `distance_unit`: `AU`
 - `view_mode`: `log_overview`
+- `simulation_scope`: `auto`
 - `trail_sample_interval_s`: `30` days
 
 `log_overview` is important because Proxima is thousands of AU away from Alpha
 Centauri AB while the Proxima planets are much less than 2 AU from their parent.
 A linear fit-system view would make the close Proxima planetary system visually
 collapse.
+
+`auto` simulation scope keeps the whole-system Alpha Centauri view interactive by
+using a stellar overview: only Alpha Centauri A, Alpha Centauri B, and Proxima
+Centauri are advanced while child planets are collapsed for display. Switching to
+follow-selected or focused subsystem mode advances the selected star and its
+children in detail, so Proxima b/d/c Candidate or the Alpha Centauri A Candidate
+can show local orbital paths without forcing every whole-system step to use the
+shortest planetary timestep.
 
 ## Limitations
 

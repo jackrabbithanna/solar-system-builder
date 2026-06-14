@@ -86,6 +86,14 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(system.schema_version, SCHEMA_VERSION)
         self.assertEqual(system.settings.visible_step_s, DAY)
         self.assertEqual(system.settings.distance_unit, "AU")
+        self.assertEqual(system.settings.simulation_scope, "auto")
+
+    def test_v3_data_migrates_default_simulation_scope(self):
+        data = _sample_system_data(schema_version=3)
+        system = SolarSystem.from_dict(data)
+
+        self.assertEqual(system.schema_version, SCHEMA_VERSION)
+        self.assertEqual(system.settings.simulation_scope, "auto")
 
     def test_dwarf_planets_preset_gets_large_step_default(self):
         system = next(
@@ -96,6 +104,7 @@ class ModelTests(unittest.TestCase):
 
         self.assertEqual(system.settings.visible_step_s, 90.0 * DAY)
         self.assertEqual(system.settings.trail_sample_interval_s, 90.0 * DAY)
+        self.assertEqual(system.settings.simulation_scope, "auto")
 
     def test_alpha_centauri_generator_matches_preset(self):
         spec = importlib.util.spec_from_file_location(
@@ -119,6 +128,7 @@ class ModelTests(unittest.TestCase):
             "accuracy_profile": "fast",
             "distance_unit": "kAU",
             "view_mode": "log_overview",
+            "simulation_scope": "stellar_overview",
             "trail_sample_interval_s": 5.0 * DAY,
         }
 
@@ -129,7 +139,15 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(clone.settings.accuracy_profile, "fast")
         self.assertEqual(clone.settings.distance_unit, "kAU")
         self.assertEqual(clone.settings.view_mode, "log_overview")
+        self.assertEqual(clone.settings.simulation_scope, "stellar_overview")
         self.assertEqual(clone.settings.trail_sample_interval_s, 5.0 * DAY)
+
+    def test_invalid_simulation_scope_fails(self):
+        data = _sample_system_data()
+        data["settings"] = {"simulation_scope": "nearby_only"}
+
+        with self.assertRaisesRegex(ModelError, "unsupported simulation_scope"):
+            SolarSystem.from_dict(data)
 
     def test_missing_parent_fails(self):
         data = _sample_system_data()

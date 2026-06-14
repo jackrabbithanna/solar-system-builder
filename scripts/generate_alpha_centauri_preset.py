@@ -121,7 +121,7 @@ def build_preset() -> dict[str, Any]:
     alpha_a_candidate_position, alpha_a_candidate_velocity = circular_child_state(position_a, velocity_a, mass_a, 2.0, 80.0)
 
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "id": "builtin-binary-system",
         "name": "Alpha Centauri",
         "epoch": "Approximate Alpha Centauri seed",
@@ -135,6 +135,7 @@ def build_preset() -> dict[str, Any]:
             "accuracy_profile": "fast",
             "distance_unit": "AU",
             "view_mode": "log_overview",
+            "simulation_scope": "auto",
             "trail_sample_interval_s": 30.0 * DAY,
         },
         "bodies": [

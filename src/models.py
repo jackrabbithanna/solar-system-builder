@@ -12,11 +12,12 @@ from uuid import uuid4
 
 from .constants import DAY
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 ACCURACY_PROFILES = {"high", "balanced", "fast"}
 DISTANCE_UNITS = {"km", "AU", "kAU", "ly"}
 VIEW_MODES = {"fit_system", "follow_selected", "log_overview"}
+SIMULATION_SCOPES = {"auto", "full_nbody", "stellar_overview", "focused_subsystem"}
 
 
 class ModelError(ValueError):
@@ -101,6 +102,7 @@ class SystemSettings:
     accuracy_profile: str = "balanced"
     distance_unit: str = "AU"
     view_mode: str = "fit_system"
+    simulation_scope: str = "auto"
     trail_sample_interval_s: float = DAY
 
     @classmethod
@@ -119,6 +121,7 @@ class SystemSettings:
             accuracy_profile=str(data.get("accuracy_profile", defaults.accuracy_profile)),
             distance_unit=str(data.get("distance_unit", defaults.distance_unit)),
             view_mode=str(data.get("view_mode", defaults.view_mode)),
+            simulation_scope=str(data.get("simulation_scope", defaults.simulation_scope)),
             trail_sample_interval_s=float(
                 data.get("trail_sample_interval_s", defaults.trail_sample_interval_s)
             ),
@@ -137,6 +140,8 @@ class SystemSettings:
             raise ModelError(f"unsupported distance_unit {self.distance_unit}")
         if self.view_mode not in VIEW_MODES:
             raise ModelError(f"unsupported view_mode {self.view_mode}")
+        if self.simulation_scope not in SIMULATION_SCOPES:
+            raise ModelError(f"unsupported simulation_scope {self.simulation_scope}")
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -145,6 +150,7 @@ class SystemSettings:
             "accuracy_profile": self.accuracy_profile,
             "distance_unit": self.distance_unit,
             "view_mode": self.view_mode,
+            "simulation_scope": self.simulation_scope,
             "trail_sample_interval_s": self.trail_sample_interval_s,
         }
 
@@ -162,7 +168,7 @@ class SolarSystem:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SolarSystem":
         version = int(data.get("schema_version", 0))
-        if version not in (1, 2, SCHEMA_VERSION):
+        if version not in (1, 2, 3, SCHEMA_VERSION):
             raise ModelError(f"unsupported schema version {version}")
         system_id = str(data.get("id") or uuid4())
         bodies = [Body.from_dict(item) for item in data.get("bodies", [])]

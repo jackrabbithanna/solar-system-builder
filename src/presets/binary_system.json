@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "id": "builtin-binary-system",
   "name": "Alpha Centauri",
   "epoch": "Approximate Alpha Centauri seed",
@@ -9,6 +9,7 @@
     "accuracy_profile": "fast",
     "distance_unit": "AU",
     "view_mode": "log_overview",
+    "simulation_scope": "auto",
     "trail_sample_interval_s": 2592000.0
   },
   "bodies": [

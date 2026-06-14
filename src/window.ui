@@ -193,6 +193,11 @@
                         <property name="tooltip-text" translatable="yes">View scale mode</property>
                       </object>
                     </child>
+                    <child>
+                      <object class="GtkDropDown" id="simulation_scope_dropdown">
+                        <property name="tooltip-text" translatable="yes">Simulation scope</property>
+                      </object>
+                    </child>
                   </object>
                 </child>
               </object>

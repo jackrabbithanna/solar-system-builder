@@ -9,7 +9,7 @@ Stable playback uses `physics.advance_with_samples()`, which may run many 1-day 
 ## Threading Model
 
 - `window.py` owns a single `ThreadPoolExecutor`.
-- The worker receives a copied `SimulationState`.
+- The worker receives a copied active-scope `SimulationState`.
 - The worker runs physics only and returns the final `SimulationState` plus copied position samples.
 - The worker must not mutate `Body` objects.
 - The worker must not call GTK APIs.
@@ -17,16 +17,18 @@ Stable playback uses `physics.advance_with_samples()`, which may run many 1-day 
 
 ## Applying Results
 
-Completed states are applied by `_apply_simulation_state(...)` on the GTK main thread. That method updates:
+Completed active states are applied by `_apply_simulation_state(...)` on the GTK main thread. That method updates:
 
 - `self.state`
 - body positions and velocities
-- trails from sampled physics positions
+- trails from sampled physics positions for active bodies
 - selected body editor fields
 - time label
 - drawing area invalidation
 
 Trails are appended on the GTK main thread from the sampled positions returned by `advance_with_samples()`. The stored trail history is capped by `TRAIL_POINT_LIMIT` in `window.py`.
+
+The UI may pass only an active body subset to the worker. Stellar overview mode advances root stars only, while focused subsystem mode advances a selected root body and its children. Inactive bodies remain in the full UI state but are not updated by that worker result.
 
 ## Stale Result Guard
 

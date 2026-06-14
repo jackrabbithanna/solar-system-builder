@@ -8,8 +8,10 @@ from src.physics import SimulationState, acceleration, advance, advance_with_sam
 from src.presets import load_builtin_solar_system, load_builtin_solar_systems
 from src.scales import (
     LIGHT_YEAR,
+    active_body_indices,
     derived_max_step_s,
     distance_between_bodies_m,
+    effective_simulation_scope,
     format_distance,
     format_elapsed_time,
     recommended_trail_sample_interval_s,
@@ -164,6 +166,85 @@ class PhysicsTests(unittest.TestCase):
         for index in star_indices:
             movement = np.linalg.norm(state.positions_m[index] - start.positions_m[index])
             self.assertGreater(movement, 1.0e8)
+
+    def test_alpha_centauri_auto_scope_uses_stellar_overview(self):
+        alpha_centauri = next(
+            system
+            for system in load_builtin_solar_systems()
+            if system.id == "builtin-binary-system"
+        )
+
+        scope = effective_simulation_scope(
+            alpha_centauri.bodies,
+            alpha_centauri.settings.simulation_scope,
+            alpha_centauri.settings.view_mode,
+            0,
+        )
+        active_indices = active_body_indices(
+            alpha_centauri.bodies,
+            alpha_centauri.settings.simulation_scope,
+            alpha_centauri.settings.view_mode,
+            0,
+        )
+        active_ids = {alpha_centauri.bodies[index].id for index in active_indices}
+
+        self.assertEqual(scope, "stellar_overview")
+        self.assertEqual(
+            active_ids,
+            {"alpha-centauri-a", "alpha-centauri-b", "proxima-centauri"},
+        )
+
+    def test_alpha_centauri_focused_scope_selects_local_children(self):
+        alpha_centauri = next(
+            system
+            for system in load_builtin_solar_systems()
+            if system.id == "builtin-binary-system"
+        )
+        proxima_index = next(
+            index
+            for index, body in enumerate(alpha_centauri.bodies)
+            if body.id == "proxima-centauri-b"
+        )
+
+        active_indices = active_body_indices(
+            alpha_centauri.bodies,
+            "focused_subsystem",
+            alpha_centauri.settings.view_mode,
+            proxima_index,
+        )
+        active_ids = {alpha_centauri.bodies[index].id for index in active_indices}
+
+        self.assertEqual(
+            active_ids,
+            {
+                "proxima-centauri",
+                "proxima-centauri-b",
+                "proxima-centauri-d",
+                "proxima-centauri-c-candidate",
+            },
+        )
+
+    def test_alpha_centauri_overview_policy_ignores_planetary_timestep(self):
+        alpha_centauri = next(
+            system
+            for system in load_builtin_solar_systems()
+            if system.id == "builtin-binary-system"
+        )
+        full_step = derived_max_step_s(alpha_centauri.bodies, "fast")
+        overview_bodies = [
+            alpha_centauri.bodies[index]
+            for index in active_body_indices(
+                alpha_centauri.bodies,
+                "stellar_overview",
+                alpha_centauri.settings.view_mode,
+                0,
+            )
+        ]
+        overview_step = derived_max_step_s(overview_bodies, "fast")
+
+        self.assertEqual(full_step, 0.5 * DAY)
+        self.assertGreaterEqual(overview_step, 30.0 * DAY)
+        self.assertGreater(overview_step, full_step)
 
     def test_balanced_policy_keeps_solar_system_near_day_scale(self):
         max_step_s = derived_max_step_s(load_builtin_solar_system().bodies, "balanced")

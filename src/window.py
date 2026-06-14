@@ -26,8 +26,12 @@ from .scales import (
     DISTANCE_UNITS,
     TIME_UNITS,
     VIEW_MODE_LABELS,
+    SIMULATION_SCOPE_LABELS,
+    active_body_indices,
+    collapsed_child_counts,
     derived_max_step_s,
     distance_between_bodies_m,
+    effective_simulation_scope,
     format_distance,
     format_elapsed_time,
     recommended_trail_sample_interval_s,
@@ -60,6 +64,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     time_unit_dropdown = Gtk.Template.Child()
     accuracy_dropdown = Gtk.Template.Child()
     view_mode_dropdown = Gtk.Template.Child()
+    simulation_scope_dropdown = Gtk.Template.Child()
     time_label = Gtk.Template.Child()
     window_title = Gtk.Template.Child()
     system_name_entry = Gtk.Template.Child()
@@ -101,6 +106,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._setup_dropdown(self.time_unit_dropdown, TIME_UNITS)
         self._setup_dropdown(self.accuracy_dropdown, ACCURACY_LABELS)
         self._setup_dropdown(self.view_mode_dropdown, VIEW_MODE_LABELS)
+        self._setup_dropdown(self.simulation_scope_dropdown, SIMULATION_SCOPE_LABELS)
         self._setup_dropdown(self.distance_unit_dropdown, DISTANCE_UNITS)
 
         self.canvas.set_draw_func(self._draw)
@@ -127,6 +133,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.time_unit_dropdown.connect("notify::selected", self._on_time_step_changed)
         self.accuracy_dropdown.connect("notify::selected", self._on_accuracy_changed)
         self.view_mode_dropdown.connect("notify::selected", self._on_view_mode_changed)
+        self.simulation_scope_dropdown.connect("notify::selected", self._on_simulation_scope_changed)
         self.distance_unit_dropdown.connect("notify::selected", self._on_distance_unit_changed)
 
         self.system_name_entry.connect("activate", self._on_system_name_edit)
@@ -417,6 +424,9 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.view_mode_dropdown.set_selected(
                 unit_index(VIEW_MODE_LABELS, self.system.settings.view_mode)
             )
+            self.simulation_scope_dropdown.set_selected(
+                unit_index(SIMULATION_SCOPE_LABELS, self.system.settings.simulation_scope)
+            )
             self.distance_unit_dropdown.set_selected(
                 unit_index(DISTANCE_UNITS, self.system.settings.distance_unit)
             )
@@ -507,6 +517,18 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         selected = dropdown.get_selected()
         if selected < len(VIEW_MODE_LABELS):
             self.system.settings.view_mode = VIEW_MODE_LABELS[selected][1]
+            self._update_title()
+            self.canvas.queue_draw()
+
+    def _on_simulation_scope_changed(self, dropdown, _param) -> None:
+        if self.editing:
+            return
+        selected = dropdown.get_selected()
+        if selected < len(SIMULATION_SCOPE_LABELS):
+            self.system.settings.simulation_scope = SIMULATION_SCOPE_LABELS[selected][1]
+            self.trails = [[] for _ in self.system.bodies]
+            self.last_trail_sample_elapsed_s = self.state.elapsed_s
+            self._update_title()
             self.canvas.queue_draw()
 
     def _on_distance_unit_changed(self, dropdown, _param) -> None:
@@ -560,6 +582,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         if body_index != self.selected_index:
             self.selected_index = body_index
             self._load_body_editor(self.system.bodies[body_index])
+            self._update_title()
             self.canvas.queue_draw()
 
     def _on_system_selected(self, dropdown, _param) -> None:
@@ -663,19 +686,22 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         return True
 
     def _advance(self, dt_s: float) -> None:
+        active_indices = self._active_body_indices()
+        active_state = self._simulation_state_for_indices(active_indices)
         state, position_samples = advance_with_samples(
-            self.state,
+            active_state,
             dt_s,
             "post_newtonian",
             self._max_step_seconds(),
         )
-        self._apply_simulation_state(state, position_samples, self.state.elapsed_s)
+        self._apply_simulation_state(state, position_samples, active_indices, self.state.elapsed_s)
 
     def _queue_simulation_job(self) -> None:
         if self.closed or self.simulation_future is not None:
             return
 
-        state = self.state.copy()
+        active_indices = self._active_body_indices()
+        state = self._simulation_state_for_indices(active_indices)
         dt_s = self._step_seconds()
         generation = self.simulation_generation
         max_step_s = self._max_step_seconds()
@@ -687,10 +713,22 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             max_step_s,
         )
         self.simulation_future.add_done_callback(
-            lambda future: GLib.idle_add(self._finish_simulation_job, future, generation, state.elapsed_s)
+            lambda future: GLib.idle_add(
+                self._finish_simulation_job,
+                future,
+                generation,
+                active_indices,
+                state.elapsed_s,
+            )
         )
 
-    def _finish_simulation_job(self, future: Future, generation: int, start_elapsed_s: float) -> bool:
+    def _finish_simulation_job(
+        self,
+        future: Future,
+        generation: int,
+        active_indices: list[int],
+        start_elapsed_s: float,
+    ) -> bool:
         if future is self.simulation_future:
             self.simulation_future = None
 
@@ -706,18 +744,23 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             return False
 
         if generation == self.simulation_generation:
-            self.state = state
-            self._apply_simulation_state(state, position_samples, start_elapsed_s)
+            self._apply_simulation_state(state, position_samples, active_indices, start_elapsed_s)
 
         if self.playing:
             self._queue_simulation_job()
 
         return False
 
-    def _apply_simulation_state(self, state: SimulationState, position_samples, start_elapsed_s: float) -> None:
-        self.state = state
+    def _apply_simulation_state(
+        self,
+        state: SimulationState,
+        position_samples,
+        active_indices: list[int],
+        start_elapsed_s: float,
+    ) -> None:
+        self._merge_active_state(state, active_indices)
         self.state.apply_to_bodies(self.system.bodies)
-        self._append_trails(position_samples, start_elapsed_s, state.elapsed_s)
+        self._append_trails(position_samples, active_indices, start_elapsed_s, state.elapsed_s)
         self._refresh_body_relationship_labels()
         self._load_body_editor(self.system.bodies[self.selected_index])
         self._update_time_label()
@@ -729,9 +772,16 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         return self.speed_spin.get_value() * unit_factor(TIME_UNITS, unit)
 
     def _max_step_seconds(self) -> float:
-        return derived_max_step_s(self.system.bodies, self.system.settings.accuracy_profile)
+        active_bodies = [self.system.bodies[index] for index in self._active_body_indices()]
+        return derived_max_step_s(active_bodies, self.system.settings.accuracy_profile)
 
-    def _append_trails(self, position_samples, start_elapsed_s: float, end_elapsed_s: float) -> None:
+    def _append_trails(
+        self,
+        position_samples,
+        active_indices: list[int],
+        start_elapsed_s: float,
+        end_elapsed_s: float,
+    ) -> None:
         if not position_samples:
             return
         sample_count = len(position_samples)
@@ -753,19 +803,21 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
 
         if not selected_samples:
             return
-        for index, body in enumerate(self.system.bodies):
+        for sample_index, body_index in enumerate(active_indices):
+            body = self.system.bodies[body_index]
             if not body.trail_enabled:
                 continue
-            trail = self.trails[index]
+            trail = self.trails[body_index]
             for positions_m in selected_samples:
-                trail.append((float(positions_m[index][0]), float(positions_m[index][1])))
+                trail.append((float(positions_m[sample_index][0]), float(positions_m[sample_index][1])))
             if len(trail) > TRAIL_POINT_LIMIT:
                 del trail[: len(trail) - TRAIL_POINT_LIMIT]
 
     def _update_title(self) -> None:
         self.window_title.set_title(self.system.name)
         max_step_days = self._max_step_seconds() / DAY
-        self.window_title.set_subtitle(f"{self.system.epoch} - max step {max_step_days:,.2f} days")
+        scope = self._effective_simulation_scope().replace("_", " ")
+        self.window_title.set_subtitle(f"{self.system.epoch} - {scope}, max step {max_step_days:,.2f} days")
 
     def _update_time_label(self) -> None:
         self.time_label.set_label(f"Simulation time: {format_elapsed_time(self.state.elapsed_s)}")
@@ -780,9 +832,12 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         scale = self._canvas_scale(width, height, center_x_m, center_y_m)
         origin_x = width / 2.0
         origin_y = height / 2.0
+        active_indices = set(self._active_body_indices())
 
         cr.set_line_width(1.0)
         for index, trail in enumerate(self.trails):
+            if index not in active_indices:
+                continue
             if len(trail) < 2:
                 continue
             rgba = self._rgba(self.system.bodies[index].color)
@@ -795,6 +850,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             cr.stroke()
 
         for index, body in enumerate(self.system.bodies):
+            if index not in active_indices:
+                continue
             if not body.visible:
                 continue
             x, y = self._project(body.position_m[0], body.position_m[1], origin_x, origin_y, scale, center_x_m, center_y_m)
@@ -808,11 +865,14 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
                 cr.set_line_width(2.0)
                 cr.arc(x, y, radius + 4.0, 0.0, math.tau)
                 cr.stroke()
+            self._draw_collapsed_child_indicator(cr, index, x, y, radius, active_indices)
 
     def _canvas_scale(self, width: int, height: int, center_x_m: float, center_y_m: float) -> float:
+        active_indices = self._active_body_indices()
         max_distance = max(
             self._view_distance(body.position_m[0], body.position_m[1], center_x_m, center_y_m)
-            for body in self.system.bodies
+            for index, body in enumerate(self.system.bodies)
+            if index in active_indices
         )
         return min(width, height) * 0.45 / max(max_distance, AU) * self.zoom_factor
 
@@ -832,7 +892,10 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         closest_index = None
         closest_distance = math.inf
 
+        active_indices = set(self._active_body_indices())
         for index, body in enumerate(self.system.bodies):
+            if index not in active_indices:
+                continue
             if not body.visible:
                 continue
             body_x, body_y = self._project(
@@ -896,6 +959,65 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             sum(body.mass_kg * body.position_m[0] for body in self.system.bodies) / total_mass,
             sum(body.mass_kg * body.position_m[1] for body in self.system.bodies) / total_mass,
         )
+
+    def _active_body_indices(self) -> list[int]:
+        return active_body_indices(
+            self.system.bodies,
+            self.system.settings.simulation_scope,
+            self.system.settings.view_mode,
+            self.selected_index,
+        )
+
+    def _effective_simulation_scope(self) -> str:
+        return effective_simulation_scope(
+            self.system.bodies,
+            self.system.settings.simulation_scope,
+            self.system.settings.view_mode,
+            self.selected_index,
+        )
+
+    def _simulation_state_for_indices(self, active_indices: list[int]) -> SimulationState:
+        return SimulationState(
+            self.state.masses_kg[active_indices].copy(),
+            self.state.positions_m[active_indices].copy(),
+            self.state.velocities_mps[active_indices].copy(),
+            self.state.elapsed_s,
+        )
+
+    def _merge_active_state(self, active_state: SimulationState, active_indices: list[int]) -> None:
+        self.state.positions_m[active_indices] = active_state.positions_m
+        self.state.velocities_mps[active_indices] = active_state.velocities_mps
+        self.state.elapsed_s = active_state.elapsed_s
+
+    def _draw_collapsed_child_indicator(
+        self,
+        cr,
+        body_index: int,
+        x: float,
+        y: float,
+        radius: float,
+        active_indices: set[int],
+    ) -> None:
+        count = collapsed_child_counts(self.system.bodies, list(active_indices)).get(body_index, 0)
+        if count <= 0:
+            return
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.45)
+        cr.set_line_width(1.0)
+        cr.arc(x, y, radius + 8.0, 0.0, math.tau)
+        cr.stroke()
+        marker_count = min(4, count)
+        marker_radius = 1.5
+        orbit_radius = radius + 8.0
+        for marker_index in range(marker_count):
+            angle = math.tau * marker_index / marker_count
+            cr.arc(
+                x + math.cos(angle) * orbit_radius,
+                y + math.sin(angle) * orbit_radius,
+                marker_radius,
+                0.0,
+                math.tau,
+            )
+            cr.fill()
 
     def _distance_factor(self) -> float:
         return unit_factor(DISTANCE_UNITS, self.system.settings.distance_unit)
