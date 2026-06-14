@@ -1,83 +1,146 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "id": "builtin-binary-system",
-  "name": "Binary System",
-  "epoch": "Fictional barycentric seed",
-  "description": "Built-in fictional binary-star system using SI units and barycentric state vectors.",
+  "name": "Alpha Centauri",
+  "epoch": "Approximate Alpha Centauri seed",
+  "description": "Built-in Alpha Centauri-inspired preset using SI units, approximate 2D state vectors, three known stars, confirmed Proxima b/d, and selected candidate planets. This is a readable simulation seed, not a current-date ephemeris.",
+  "settings": {
+    "visible_step_s": 2592000.0,
+    "accuracy_profile": "fast",
+    "distance_unit": "AU",
+    "view_mode": "log_overview",
+    "trail_sample_interval_s": 2592000.0
+  },
   "bodies": [
     {
-      "id": "primary-star",
-      "name": "Primary Star",
+      "id": "alpha-centauri-a",
+      "name": "Alpha Centauri A",
       "kind": "star",
-      "mass_kg": 1.98847e+30,
-      "radius_m": 696340000.0,
+      "mass_kg": 2.145161436e+30,
+      "radius_m": 851902356.0,
       "position_m": [
-        -74798935350.0,
+        -2422977204885.5537,
         0.0,
         0.0
       ],
       "velocity_mps": [
         0.0,
-        -21066.474963407215,
+        -2252.6225722170516,
+        0.0
+      ],
+      "color": "#fff1a8"
+    },
+    {
+      "id": "alpha-centauri-b",
+      "name": "Alpha Centauri B",
+      "kind": "star",
+      "mass_kg": 1.807916924e+30,
+      "radius_m": 601080688.0,
+      "position_m": [
+        2874953595062.1816,
+        0.0,
+        0.0
+      ],
+      "velocity_mps": [
+        0.0,
+        2636.5802238207953,
         0.0
       ],
       "color": "#ffd166"
     },
     {
-      "id": "companion-star",
-      "name": "Companion Star",
+      "id": "proxima-centauri",
+      "name": "Proxima Centauri",
       "kind": "star",
-      "mass_kg": 1.98847e+30,
-      "radius_m": 626706000.0,
+      "mass_kg": 2.42792187e+29,
+      "radius_m": 107375628.0,
       "position_m": [
-        74798935350.0,
         0.0,
+        1944772319100000.0,
         0.0
       ],
       "velocity_mps": [
+        -269.8647945117734,
         0.0,
-        21066.474963407215,
         0.0
       ],
-      "color": "#f4a261"
+      "color": "#ff7b54"
     },
     {
-      "id": "inner-world",
-      "name": "Inner World",
+      "id": "proxima-centauri-d",
+      "name": "Proxima d",
       "kind": "planet",
-      "mass_kg": 5.97237e+24,
-      "radius_m": 6371000.0,
+      "mass_kg": 1.5528162e+24,
+      "radius_m": 3376630.0,
       "position_m": [
-        -37399467675.0,
-        0.0,
+        4338338250.3,
+        1944772319100000.0,
         0.0
       ],
       "velocity_mps": [
-        0.0,
-        38499.339266550764,
+        -269.8647945117734,
+        61116.50495016155,
+        0.0
+      ],
+      "color": "#b8f2e6",
+      "parent_id": "proxima-centauri"
+    },
+    {
+      "id": "proxima-centauri-b",
+      "name": "Proxima b",
+      "kind": "planet",
+      "mass_kg": 7.584909899999999e+24,
+      "radius_m": 6689550.0,
+      "position_m": [
+        -3627748364.4749985,
+        1944778602544484.2,
+        0.0
+      ],
+      "velocity_mps": [
+        -41197.55841746577,
+        -23629.61493052301,
         0.0
       ],
       "color": "#3a86ff",
-      "parent_id": "primary-star"
+      "parent_id": "proxima-centauri"
     },
     {
-      "id": "outer-world",
-      "name": "Outer World",
+      "id": "proxima-centauri-c-candidate",
+      "name": "Proxima c Candidate",
       "kind": "planet",
-      "mass_kg": 6.4171e+23,
-      "radius_m": 3389500.0,
+      "mass_kg": 4.180658999999999e+25,
+      "radius_m": 12742000.0,
       "position_m": [
-        37399467675.0,
-        0.0,
+        -111450413671.50009,
+        1944579281320996.5,
         0.0
       ],
       "velocity_mps": [
-        0.0,
-        -38499.339266550764,
+        7114.191633591139,
+        -4263.186966476608,
         0.0
       ],
-      "color": "#2a9d8f",
-      "parent_id": "companion-star"
+      "color": "#7f8c8d",
+      "parent_id": "proxima-centauri"
+    },
+    {
+      "id": "alpha-centauri-a-candidate",
+      "name": "Alpha Centauri A Candidate",
+      "kind": "planet",
+      "mass_kg": 5.97237e+26,
+      "radius_m": 24622000.0,
+      "position_m": [
+        -2371022409625.7373,
+        294650285798.9557,
+        0.0
+      ],
+      "velocity_mps": [
+        -21543.021130474124,
+        1545.9932990581137,
+        0.0
+      ],
+      "color": "#9b59b6",
+      "parent_id": "alpha-centauri-a"
     }
   ]
 }

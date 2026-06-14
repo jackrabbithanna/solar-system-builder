@@ -123,13 +123,25 @@ class PhysicsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             acceleration(np.array([0.0]), np.zeros((1, 3)), np.zeros((1, 3)))
 
-    def test_binary_preset_stars_move(self):
-        binary = next(
+    def test_alpha_centauri_preset_contents_and_stars_move(self):
+        alpha_centauri = next(
             system
             for system in load_builtin_solar_systems()
             if system.id == "builtin-binary-system"
         )
-        start = SimulationState.from_bodies(binary.bodies)
+        self.assertEqual(alpha_centauri.name, "Alpha Centauri")
+        body_ids = {body.id for body in alpha_centauri.bodies}
+        self.assertIn("proxima-centauri-b", body_ids)
+        self.assertIn("proxima-centauri-d", body_ids)
+        self.assertIn("proxima-centauri-c-candidate", body_ids)
+        self.assertIn("alpha-centauri-a-candidate", body_ids)
+        bodies_by_id = {body.id: body for body in alpha_centauri.bodies}
+        self.assertEqual(bodies_by_id["proxima-centauri-b"].parent_id, "proxima-centauri")
+        self.assertEqual(bodies_by_id["proxima-centauri-d"].parent_id, "proxima-centauri")
+        self.assertEqual(bodies_by_id["proxima-centauri-c-candidate"].parent_id, "proxima-centauri")
+        self.assertEqual(bodies_by_id["alpha-centauri-a-candidate"].parent_id, "alpha-centauri-a")
+
+        start = SimulationState.from_bodies(alpha_centauri.bodies)
         state = start
 
         for _ in range(10):
@@ -137,10 +149,18 @@ class PhysicsTests(unittest.TestCase):
 
         star_indices = [
             index
-            for index, body in enumerate(binary.bodies)
+            for index, body in enumerate(alpha_centauri.bodies)
             if body.kind == "star"
         ]
-        self.assertEqual(len(star_indices), 2)
+        self.assertEqual(len(star_indices), 3)
+        separations_au = [
+            np.linalg.norm(start.positions_m[first] - start.positions_m[second]) / AU
+            for first in star_indices
+            for second in star_indices
+            if first < second
+        ]
+        self.assertGreater(max(separations_au), 10_000.0)
+        self.assertGreater(min(separations_au), 10.0)
         for index in star_indices:
             movement = np.linalg.norm(state.positions_m[index] - start.positions_m[index])
             self.assertGreater(movement, 1.0e8)

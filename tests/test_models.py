@@ -1,8 +1,16 @@
+import importlib.util
+import json
+import sys
 import unittest
+from pathlib import Path
 
 from src.constants import DAY
 from src.models import Body, ModelError, SCHEMA_VERSION, SolarSystem
 from src.presets import load_builtin_solar_system, load_builtin_solar_systems
+
+ALPHA_CENTAURI_GENERATOR_PATH = (
+    Path(__file__).resolve().parent.parent / "scripts" / "generate_alpha_centauri_preset.py"
+)
 
 
 class ModelTests(unittest.TestCase):
@@ -29,7 +37,7 @@ class ModelTests(unittest.TestCase):
             [system.id for system in systems],
             ["builtin-solar-system", "builtin-dwarf-planets", "builtin-binary-system"],
         )
-        self.assertEqual([system.name for system in systems], ["Solar System", "Dwarf Planets", "Binary System"])
+        self.assertEqual([system.name for system in systems], ["Solar System", "Dwarf Planets", "Alpha Centauri"])
         for system in systems:
             clone = SolarSystem.from_dict(system.to_dict())
             self.assertEqual(system.id, clone.id)
@@ -88,6 +96,21 @@ class ModelTests(unittest.TestCase):
 
         self.assertEqual(system.settings.visible_step_s, 90.0 * DAY)
         self.assertEqual(system.settings.trail_sample_interval_s, 90.0 * DAY)
+
+    def test_alpha_centauri_generator_matches_preset(self):
+        spec = importlib.util.spec_from_file_location(
+            "generate_alpha_centauri_preset",
+            ALPHA_CENTAURI_GENERATOR_PATH,
+        )
+        generate_alpha_centauri_preset = importlib.util.module_from_spec(spec)
+        sys.modules["generate_alpha_centauri_preset"] = generate_alpha_centauri_preset
+        spec.loader.exec_module(generate_alpha_centauri_preset)
+        preset_path = Path(__file__).resolve().parent.parent / "src" / "presets" / "binary_system.json"
+
+        generated = generate_alpha_centauri_preset.build_preset()
+        current = json.loads(preset_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(generated, current)
 
     def test_settings_round_trip(self):
         data = _sample_system_data()

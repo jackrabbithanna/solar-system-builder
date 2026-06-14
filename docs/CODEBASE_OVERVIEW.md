@@ -9,7 +9,7 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 - `src/models.py`: schema-versioned `Body` and `SolarSystem` dataclasses with validation, parent-body relationships, migration, and JSON conversion.
 - `src/physics.py`: NumPy-backed simulation state, acceleration, low-level `step()`, user-facing `advance()`, and sampled `advance_with_samples()`.
 - `src/scales.py`: pure scale helpers for time/distance units, elapsed-time formatting, adaptive internal step policy, and trail sampling cadence.
-- `src/presets.py`: loads bundled Solar System and Dwarf Planets preset data from `src/presets/`.
+- `src/presets.py`: loads bundled preset data from `src/presets/`.
 - `src/storage.py`: local JSON library using GLib app data paths.
 - `src/constants.py`: SI constants used by physics and UI conversion.
 
