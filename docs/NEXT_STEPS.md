@@ -23,12 +23,10 @@ Potential follow-up work for future sessions.
 - Improve integrator options if long-range stability becomes a requirement.
 - Add more regression tests around large masses, close approaches, and backwards playback.
 
-## Details
+## Other ideas
 
-Allow selection of systems from the canvas.
-Zoom into systems, or stars, and automatically adjust simulation timescales / scope. 
-Display a dot for baryocenters.
 Add moons to solar system preset. New lower scale?
+
 Exoplanet entry? Values like:
   "semi_major_axis_au": 1.0,
   "eccentricity": 0.0167,
@@ -37,7 +35,6 @@ Exoplanet entry? Values like:
   "longitude_of_ascending_node_deg": 0.0,
   "mean_anomaly_deg": 100.5,
   "epoch_jd": 2461205.5
-Alpha Centuri 2 big system simulation looks very odd. "Wavy" 
 
 
 ## Packaging And Quality
