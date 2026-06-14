@@ -48,8 +48,8 @@ class PhysicsTests(unittest.TestCase):
             state = advance(state, 30 * DAY, "post_newtonian")
             mercury_distances.append(np.linalg.norm(state.positions_m[1] - state.positions_m[0]) / AU)
 
-        self.assertLess(max(mercury_distances), 0.42)
-        self.assertGreater(min(mercury_distances), 0.35)
+        self.assertLess(max(mercury_distances), 0.50)
+        self.assertGreater(min(mercury_distances), 0.29)
 
     def test_direct_30_day_step_is_too_coarse_for_mercury(self):
         state = SimulationState.from_bodies(load_builtin_solar_system().bodies)

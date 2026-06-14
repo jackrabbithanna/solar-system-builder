@@ -2,97 +2,169 @@
   "schema_version": 1,
   "id": "builtin-solar-system",
   "name": "Solar System",
-  "epoch": "J2000 approximate circular-orbit seed",
-  "description": "Built-in starter system using SI units and approximate heliocentric circular positions.",
+  "epoch": "2026-06-14 00:00:00 TDB, JPL Horizons, solar-system barycentric",
+  "description": "Built-in Solar System preset using SI units and JPL Horizons solar-system barycentric state vectors; local physical metadata preserved.",
   "bodies": [
     {
       "id": "sun",
       "name": "Sun",
       "kind": "star",
-      "mass_kg": 1.98847e30,
+      "mass_kg": 1.98847e+30,
       "radius_m": 696340000.0,
-      "position_m": [0.0, 0.0, 0.0],
-      "velocity_mps": [0.0, 0.0, 0.0],
+      "position_m": [
+        -288769470.3604101,
+        -803783954.5016888,
+        16290945.51431603
+      ],
+      "velocity_mps": [
+        11.35852007958314,
+        3.052838185233512,
+        -0.2330129383221811
+      ],
       "color": "#ffd166"
     },
     {
       "id": "mercury",
       "name": "Mercury",
       "kind": "planet",
-      "mass_kg": 3.3011e23,
+      "mass_kg": 3.3011e+23,
       "radius_m": 2439700.0,
-      "position_m": [57909050000.0, 0.0, 0.0],
-      "velocity_mps": [0.0, 47870.0, 0.0],
+      "position_m": [
+        -57177968357.76245,
+        -29312433992.94577,
+        2904181166.819028
+      ],
+      "velocity_mps": [
+        11789.67389345151,
+        -41427.599218043986,
+        -4466.372893456207
+      ],
       "color": "#b7b7ad"
     },
     {
       "id": "venus",
       "name": "Venus",
       "kind": "planet",
-      "mass_kg": 4.8675e24,
+      "mass_kg": 4.8675e+24,
       "radius_m": 6051800.0,
-      "position_m": [108208000000.0, 0.0, 0.0],
-      "velocity_mps": [0.0, 35020.0, 0.0],
+      "position_m": [
+        -107828613553.1939,
+        -736081184.2381177,
+        6222185720.561303
+      ],
+      "velocity_mps": [
+        -216.1564983023461,
+        -35172.62766347085,
+        -470.3805024740717
+      ],
       "color": "#d6b27c"
     },
     {
       "id": "earth",
       "name": "Earth",
       "kind": "planet",
-      "mass_kg": 5.97237e24,
+      "mass_kg": 5.97237e+24,
       "radius_m": 6371000.0,
-      "position_m": [149597870700.0, 0.0, 0.0],
-      "velocity_mps": [0.0, 29780.0, 0.0],
+      "position_m": [
+        -19825100922.02215,
+        -151475243327.009,
+        25060501.64104253
+      ],
+      "velocity_mps": [
+        29081.93390436376,
+        -3943.639376822162,
+        -0.05038615568508931
+      ],
       "color": "#3a86ff"
     },
     {
       "id": "mars",
       "name": "Mars",
       "kind": "planet",
-      "mass_kg": 6.4171e23,
+      "mass_kg": 6.4171e+23,
       "radius_m": 3389500.0,
-      "position_m": [227939200000.0, 0.0, 0.0],
-      "velocity_mps": [0.0, 24070.0, 0.0],
+      "position_m": [
+        191701982202.2667,
+        91463712392.05392,
+        -2757846571.91271
+      ],
+      "velocity_mps": [
+        -9555.736049542676,
+        23911.77504738798,
+        735.4051455978681
+      ],
       "color": "#c65d32"
     },
     {
       "id": "jupiter",
       "name": "Jupiter",
       "kind": "planet",
-      "mass_kg": 1.8982e27,
+      "mass_kg": 1.8982e+27,
       "radius_m": 69911000.0,
-      "position_m": [778570000000.0, 0.0, 0.0],
-      "velocity_mps": [0.0, 13070.0, 0.0],
+      "position_m": [
+        -422456724427.33167,
+        665042142675.2067,
+        6695780721.631468
+      ],
+      "velocity_mps": [
+        -11185.92810532968,
+        -6389.725970316965,
+        276.7805010547151
+      ],
       "color": "#d9a066"
     },
     {
       "id": "saturn",
       "name": "Saturn",
       "kind": "planet",
-      "mass_kg": 5.6834e26,
+      "mass_kg": 5.6834e+26,
       "radius_m": 58232000.0,
-      "position_m": [1433530000000.0, 0.0, 0.0],
-      "velocity_mps": [0.0, 9690.0, 0.0],
+      "position_m": [
+        1404055459337.908,
+        173868494150.4284,
+        -58926841729.18792
+      ],
+      "velocity_mps": [
+        -1717.146648095935,
+        9565.141604578006,
+        -97.97526811381773
+      ],
       "color": "#d7c27d"
     },
     {
       "id": "uranus",
       "name": "Uranus",
       "kind": "planet",
-      "mass_kg": 8.6810e25,
+      "mass_kg": 8.681e+25,
       "radius_m": 25362000.0,
-      "position_m": [2872460000000.0, 0.0, 0.0],
-      "velocity_mps": [0.0, 6810.0, 0.0],
+      "position_m": [
+        1392945274898.0159,
+        2555475671223.202,
+        -8555058303.131342
+      ],
+      "velocity_mps": [
+        -6029.582546399094,
+        2941.887623163757,
+        89.3406056315469
+      ],
       "color": "#87d6d1"
     },
     {
       "id": "neptune",
       "name": "Neptune",
       "kind": "planet",
-      "mass_kg": 1.02413e26,
+      "mass_kg": 1.02413e+26,
       "radius_m": 24622000.0,
-      "position_m": [4495060000000.0, 0.0, 0.0],
-      "velocity_mps": [0.0, 5430.0, 0.0],
+      "position_m": [
+        4465848740570.349,
+        154250163575.77432,
+        -106096572172.2432
+      ],
+      "velocity_mps": [
+        -223.1864305183416,
+        5463.6895582390725,
+        -108.0629239870325
+      ],
       "color": "#4d75d9"
     }
   ]
