@@ -10,7 +10,13 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
-SCHEMA_VERSION = 2
+from .constants import DAY
+
+SCHEMA_VERSION = 3
+
+ACCURACY_PROFILES = {"high", "balanced", "fast"}
+DISTANCE_UNITS = {"km", "AU", "kAU", "ly"}
+VIEW_MODES = {"fit_system", "follow_selected", "log_overview"}
 
 
 class ModelError(ValueError):
@@ -90,6 +96,60 @@ class Body:
 
 
 @dataclass
+class SystemSettings:
+    visible_step_s: float = DAY
+    accuracy_profile: str = "balanced"
+    distance_unit: str = "AU"
+    view_mode: str = "fit_system"
+    trail_sample_interval_s: float = DAY
+
+    @classmethod
+    def default_for_system(cls, system_id: str) -> "SystemSettings":
+        if system_id == "builtin-dwarf-planets":
+            return cls(visible_step_s=90.0 * DAY, trail_sample_interval_s=90.0 * DAY)
+        return cls()
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None, system_id: str) -> "SystemSettings":
+        defaults = cls.default_for_system(system_id)
+        if data is None:
+            return defaults
+        settings = cls(
+            visible_step_s=float(data.get("visible_step_s", defaults.visible_step_s)),
+            accuracy_profile=str(data.get("accuracy_profile", defaults.accuracy_profile)),
+            distance_unit=str(data.get("distance_unit", defaults.distance_unit)),
+            view_mode=str(data.get("view_mode", defaults.view_mode)),
+            trail_sample_interval_s=float(
+                data.get("trail_sample_interval_s", defaults.trail_sample_interval_s)
+            ),
+        )
+        settings.validate()
+        return settings
+
+    def validate(self) -> None:
+        if self.visible_step_s <= 0.0:
+            raise ModelError("visible_step_s must be positive")
+        if self.trail_sample_interval_s <= 0.0:
+            raise ModelError("trail_sample_interval_s must be positive")
+        if self.accuracy_profile not in ACCURACY_PROFILES:
+            raise ModelError(f"unsupported accuracy_profile {self.accuracy_profile}")
+        if self.distance_unit not in DISTANCE_UNITS:
+            raise ModelError(f"unsupported distance_unit {self.distance_unit}")
+        if self.view_mode not in VIEW_MODES:
+            raise ModelError(f"unsupported view_mode {self.view_mode}")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return {
+            "visible_step_s": self.visible_step_s,
+            "accuracy_profile": self.accuracy_profile,
+            "distance_unit": self.distance_unit,
+            "view_mode": self.view_mode,
+            "trail_sample_interval_s": self.trail_sample_interval_s,
+        }
+
+
+@dataclass
 class SolarSystem:
     name: str
     epoch: str
@@ -97,22 +157,25 @@ class SolarSystem:
     description: str = ""
     id: str = field(default_factory=lambda: str(uuid4()))
     schema_version: int = SCHEMA_VERSION
+    settings: SystemSettings = field(default_factory=SystemSettings)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SolarSystem":
         version = int(data.get("schema_version", 0))
-        if version not in (1, SCHEMA_VERSION):
+        if version not in (1, 2, SCHEMA_VERSION):
             raise ModelError(f"unsupported schema version {version}")
+        system_id = str(data.get("id") or uuid4())
         bodies = [Body.from_dict(item) for item in data.get("bodies", [])]
         if version == 1:
             cls._migrate_v1_parent_ids(bodies)
         system = cls(
-            id=str(data.get("id") or uuid4()),
+            id=system_id,
             schema_version=SCHEMA_VERSION,
             name=str(data["name"]),
             epoch=str(data.get("epoch", "")),
             description=str(data.get("description", "")),
             bodies=bodies,
+            settings=SystemSettings.from_dict(data.get("settings"), system_id),
         )
         system.validate()
         return system
@@ -133,6 +196,7 @@ class SolarSystem:
             raise ModelError("system name is required")
         if not self.bodies:
             raise ModelError("system must contain at least one body")
+        self.settings.validate()
         seen_ids: set[str] = set()
         for body in self.bodies:
             body.validate()
@@ -168,6 +232,7 @@ class SolarSystem:
             "name": self.name,
             "epoch": self.epoch,
             "description": self.description,
+            "settings": self.settings.to_dict(),
             "bodies": [body.to_dict() for body in self.bodies],
         }
 

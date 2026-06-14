@@ -33,6 +33,7 @@ solar_system_builder_sources = [
   'models.py',
   'physics.py',
   'presets.py',
+  'scales.py',
   'storage.py',
   'window.py',
 ]

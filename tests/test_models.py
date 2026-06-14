@@ -1,5 +1,6 @@
 import unittest
 
+from src.constants import DAY
 from src.models import Body, ModelError, SCHEMA_VERSION, SolarSystem
 from src.presets import load_builtin_solar_system, load_builtin_solar_systems
 
@@ -12,6 +13,7 @@ class ModelTests(unittest.TestCase):
 
         self.assertEqual(system.name, clone.name)
         self.assertEqual(clone.schema_version, SCHEMA_VERSION)
+        self.assertEqual(clone.settings.accuracy_profile, "balanced")
         self.assertGreaterEqual(len(clone.bodies), 11)
         self.assertIn("ceres", {body.id for body in clone.bodies})
         self.assertIn("pluto", {body.id for body in clone.bodies})
@@ -67,6 +69,44 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(system.schema_version, SCHEMA_VERSION)
         self.assertIsNone(system.bodies[0].parent_id)
         self.assertEqual(system.bodies[1].parent_id, "sun")
+        self.assertEqual(system.settings.visible_step_s, DAY)
+
+    def test_v2_data_migrates_default_settings(self):
+        data = _sample_system_data(schema_version=2)
+        system = SolarSystem.from_dict(data)
+
+        self.assertEqual(system.schema_version, SCHEMA_VERSION)
+        self.assertEqual(system.settings.visible_step_s, DAY)
+        self.assertEqual(system.settings.distance_unit, "AU")
+
+    def test_dwarf_planets_preset_gets_large_step_default(self):
+        system = next(
+            item
+            for item in load_builtin_solar_systems()
+            if item.id == "builtin-dwarf-planets"
+        )
+
+        self.assertEqual(system.settings.visible_step_s, 90.0 * DAY)
+        self.assertEqual(system.settings.trail_sample_interval_s, 90.0 * DAY)
+
+    def test_settings_round_trip(self):
+        data = _sample_system_data()
+        data["settings"] = {
+            "visible_step_s": 10.0 * DAY,
+            "accuracy_profile": "fast",
+            "distance_unit": "kAU",
+            "view_mode": "log_overview",
+            "trail_sample_interval_s": 5.0 * DAY,
+        }
+
+        system = SolarSystem.from_dict(data)
+        clone = SolarSystem.from_dict(system.to_dict())
+
+        self.assertEqual(clone.settings.visible_step_s, 10.0 * DAY)
+        self.assertEqual(clone.settings.accuracy_profile, "fast")
+        self.assertEqual(clone.settings.distance_unit, "kAU")
+        self.assertEqual(clone.settings.view_mode, "log_overview")
+        self.assertEqual(clone.settings.trail_sample_interval_s, 5.0 * DAY)
 
     def test_missing_parent_fails(self):
         data = _sample_system_data()

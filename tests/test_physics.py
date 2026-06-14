@@ -2,10 +2,11 @@ import unittest
 
 import numpy as np
 
-from src.constants import AU, DAY, G, SOLAR_MASS
+from src.constants import AU, DAY, G, SOLAR_MASS, YEAR
 from src.models import Body
 from src.physics import SimulationState, acceleration, advance, advance_with_samples, step
 from src.presets import load_builtin_solar_system, load_builtin_solar_systems
+from src.scales import derived_max_step_s, format_elapsed_time, recommended_trail_sample_interval_s
 
 
 class PhysicsTests(unittest.TestCase):
@@ -136,6 +137,45 @@ class PhysicsTests(unittest.TestCase):
         for index in star_indices:
             movement = np.linalg.norm(state.positions_m[index] - start.positions_m[index])
             self.assertGreater(movement, 1.0e8)
+
+    def test_balanced_policy_keeps_solar_system_near_day_scale(self):
+        max_step_s = derived_max_step_s(load_builtin_solar_system().bodies, "balanced")
+
+        self.assertGreaterEqual(max_step_s, 0.25 * DAY)
+        self.assertLessEqual(max_step_s, 1.5 * DAY)
+
+    def test_policy_allows_larger_outer_system_steps(self):
+        bodies = [
+            Body("Sun", "star", SOLAR_MASS, 1, [0, 0, 0], [0, 0, 0], "#fff", id="sun"),
+            Body(
+                "Outer",
+                "planet",
+                1.0e24,
+                1,
+                [100.0 * AU, 0, 0],
+                [0, (G * SOLAR_MASS / (100.0 * AU)) ** 0.5, 0],
+                "#00f",
+                id="outer",
+                parent_id="sun",
+            ),
+        ]
+
+        balanced = derived_max_step_s(bodies, "balanced")
+        fast = derived_max_step_s(bodies, "fast")
+
+        self.assertGreater(balanced, DAY)
+        self.assertGreater(fast, balanced)
+
+    def test_policy_falls_back_without_parent_orbits(self):
+        bodies = [Body("Body", "body", 1.0, 1, [0, 0, 0], [0, 0, 0], "#fff")]
+
+        self.assertEqual(derived_max_step_s(bodies, "balanced"), DAY)
+
+    def test_scale_formatting_helpers(self):
+        self.assertEqual(format_elapsed_time(3 * DAY), "3.00 days")
+        self.assertEqual(format_elapsed_time(2 * YEAR), "2.00 years")
+        self.assertEqual(format_elapsed_time(100 * YEAR), "1.00 centuries")
+        self.assertEqual(recommended_trail_sample_interval_s(90 * DAY), 90 * DAY)
 
 
 if __name__ == "__main__":

@@ -39,9 +39,13 @@ The fix is:
 
 Regression coverage exists in `tests/test_physics.py`.
 
+The UI now derives the internal `max_step_s` from a scale policy in `src/scales.py` instead of always using the physics default. That policy estimates parent-child orbital periods where possible and clamps the result by the selected accuracy profile. The visible time step can be days, years, decades, or centuries; it must still be passed through `advance()` or `advance_with_samples()` with a bounded internal step.
+
 ## Trail Sampling
 
 Dense trail rendering uses `advance_with_samples()` to collect positions after each bounded internal step. At `Days / step = 30`, the physics and trail renderer see up to 30 one-day samples instead of one sparse 30-day line segment. This keeps zoomed inner-planet trails from looking polygonal or rosette-like solely because of display sampling.
+
+For large visible time steps, the UI decimates those physics samples before appending trails. Trail cadence is a display policy and should not change integration accuracy.
 
 ## Stability Expectations
 
