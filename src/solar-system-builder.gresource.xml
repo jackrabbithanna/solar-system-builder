@@ -3,5 +3,9 @@
   <gresource prefix="/io/github/jackrabbithanna/solarsystembuilder">
     <file preprocess="xml-stripblanks">window.ui</file>
     <file preprocess="xml-stripblanks">shortcuts-dialog.ui</file>
+    <file>icons/step-backward-symbolic.svg</file>
+    <file>icons/reset-symbolic.svg</file>
+    <file>icons/reset-zoom-symbolic.svg</file>
+    <file>icons/step-forward-symbolic.svg</file>
   </gresource>
 </gresources>

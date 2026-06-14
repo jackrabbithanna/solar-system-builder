@@ -37,6 +37,7 @@ class SolarSystemBuilderApplication(Adw.Application):
         self.create_action('quit', lambda *_: self.quit(), ['<control>q'])
         self.create_action('about', self.on_about_action)
         self.create_action('preferences', self.on_preferences_action)
+        self.create_action('shortcuts', self.on_shortcuts_action)
 
     def do_activate(self):
         """Called when the application is activated.
@@ -64,6 +65,14 @@ class SolarSystemBuilderApplication(Adw.Application):
     def on_preferences_action(self, widget, _):
         """Callback for the app.preferences action."""
         print('app.preferences action activated')
+
+    def on_shortcuts_action(self, widget, _):
+        """Callback for the app.shortcuts action."""
+        builder = Gtk.Builder.new_from_resource(
+            '/io/github/jackrabbithanna/solarsystembuilder/shortcuts-dialog.ui'
+        )
+        shortcuts = builder.get_object('shortcuts_dialog')
+        shortcuts.present(self.props.active_window)
 
     def create_action(self, name, callback, shortcuts=None):
         """Add an application action.

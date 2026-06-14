@@ -3,13 +3,72 @@
   <requires lib="gtk" version="4.0"/>
   <requires lib="Adw" version="1.0"/>
   <template class="SolarSystemBuilderWindow" parent="AdwApplicationWindow">
-    <property name="title" translatable="yes">Solar-system-builder</property>
-    <property name="default-width">800</property>
-    <property name="default-height">600</property>
+    <property name="title" translatable="yes">Solar System Builder</property>
+    <property name="default-width">1180</property>
+    <property name="default-height">760</property>
     <property name="content">
       <object class="AdwToolbarView">
         <child type="top">
           <object class="AdwHeaderBar">
+            <child type="start">
+              <object class="GtkButton" id="play_button">
+                <property name="icon-name">media-playback-start-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Play or pause</property>
+              </object>
+            </child>
+            <child type="start">
+              <object class="GtkButton" id="step_back_button">
+                <property name="tooltip-text" translatable="yes">Step backward</property>
+                <property name="child">
+                  <object class="GtkImage">
+                    <property name="resource">/io/github/jackrabbithanna/solarsystembuilder/icons/step-backward-symbolic.svg</property>
+                  </object>
+                </property>
+              </object>
+            </child>
+            <child type="start">
+              <object class="GtkButton" id="reset_button">
+                <property name="tooltip-text" translatable="yes">Reset to loaded state</property>
+                <property name="child">
+                  <object class="GtkImage">
+                    <property name="resource">/io/github/jackrabbithanna/solarsystembuilder/icons/reset-symbolic.svg</property>
+                  </object>
+                </property>
+              </object>
+            </child>
+            <child type="start">
+              <object class="GtkButton" id="step_forward_button">
+                <property name="tooltip-text" translatable="yes">Step forward</property>
+                <property name="child">
+                  <object class="GtkImage">
+                    <property name="resource">/io/github/jackrabbithanna/solarsystembuilder/icons/step-forward-symbolic.svg</property>
+                  </object>
+                </property>
+              </object>
+            </child>
+            <property name="title-widget">
+              <object class="AdwWindowTitle" id="window_title">
+                <property name="title" translatable="yes">Solar System</property>
+                <property name="subtitle" translatable="yes">J2000 approximate circular-orbit seed</property>
+              </object>
+            </property>
+            <child type="end">
+              <object class="GtkDropDown" id="system_dropdown">
+                <property name="tooltip-text" translatable="yes">Saved systems</property>
+              </object>
+            </child>
+            <child type="end">
+              <object class="GtkButton" id="duplicate_button">
+                <property name="icon-name">edit-copy-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Duplicate current system</property>
+              </object>
+            </child>
+            <child type="end">
+              <object class="GtkButton" id="save_button">
+                <property name="icon-name">document-save-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Save current system</property>
+              </object>
+            </child>
             <child type="end">
               <object class="GtkMenuButton">
                 <property name="primary">True</property>
@@ -21,11 +80,280 @@
           </object>
         </child>
         <property name="content">
-          <object class="GtkLabel" id="label">
-            <property name="label" translatable="yes">Hello, World!</property>
-            <style>
-              <class name="title-1"/>
-            </style>
+          <object class="GtkPaned">
+            <property name="orientation">horizontal</property>
+            <property name="position">790</property>
+            <child type="start">
+              <object class="GtkBox">
+                <property name="orientation">vertical</property>
+                <property name="hexpand">True</property>
+                <property name="vexpand">True</property>
+                <child>
+                  <object class="GtkOverlay">
+                    <property name="hexpand">True</property>
+                    <property name="vexpand">True</property>
+                    <child>
+                      <object class="GtkDrawingArea" id="canvas">
+                        <property name="hexpand">True</property>
+                        <property name="vexpand">True</property>
+                      </object>
+                    </child>
+                    <child type="overlay">
+                      <object class="GtkBox">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">4</property>
+                        <property name="halign">end</property>
+                        <property name="valign">start</property>
+                        <property name="margin-top">12</property>
+                        <property name="margin-end">12</property>
+                        <child>
+                          <object class="GtkButton" id="zoom_out_button">
+                            <property name="icon-name">zoom-out-symbolic</property>
+                            <property name="tooltip-text" translatable="yes">Zoom out</property>
+                            <style>
+                              <class name="osd"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="reset_zoom_button">
+                            <property name="tooltip-text" translatable="yes">Reset zoom</property>
+                            <property name="child">
+                              <object class="GtkImage">
+                                <property name="resource">/io/github/jackrabbithanna/solarsystembuilder/icons/reset-zoom-symbolic.svg</property>
+                              </object>
+                            </property>
+                            <style>
+                              <class name="osd"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="zoom_in_button">
+                            <property name="icon-name">zoom-in-symbolic</property>
+                            <property name="tooltip-text" translatable="yes">Zoom in</property>
+                            <style>
+                              <class name="osd"/>
+                            </style>
+                          </object>
+                        </child>
+                        <style>
+                          <class name="linked"/>
+                        </style>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkBox">
+                    <property name="orientation">horizontal</property>
+                    <property name="spacing">12</property>
+                    <property name="margin-start">12</property>
+                    <property name="margin-end">12</property>
+                    <property name="margin-top">8</property>
+                    <property name="margin-bottom">8</property>
+                    <child>
+                      <object class="GtkLabel" id="time_label">
+                        <property name="xalign">0</property>
+                        <property name="hexpand">True</property>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkLabel">
+                        <property name="label" translatable="yes">Days / step</property>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkSpinButton" id="speed_spin">
+                        <property name="adjustment">
+                          <object class="GtkAdjustment">
+                            <property name="lower">0.25</property>
+                            <property name="upper">30</property>
+                            <property name="step-increment">0.25</property>
+                            <property name="page-increment">1</property>
+                            <property name="value">1</property>
+                          </object>
+                        </property>
+                        <property name="digits">2</property>
+                        <property name="width-chars">6</property>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+              </object>
+            </child>
+            <child type="end">
+              <object class="GtkScrolledWindow">
+                <property name="min-content-width">340</property>
+                <property name="hscrollbar-policy">never</property>
+                <property name="vexpand">True</property>
+                <child>
+                  <object class="GtkBox">
+                    <property name="orientation">vertical</property>
+                    <property name="spacing">12</property>
+                    <property name="margin-start">12</property>
+                    <property name="margin-end">12</property>
+                    <property name="margin-top">12</property>
+                    <property name="margin-bottom">12</property>
+                    <child>
+                      <object class="GtkLabel">
+                        <property name="label" translatable="yes">Bodies</property>
+                        <property name="xalign">0</property>
+                        <style>
+                          <class name="heading"/>
+                        </style>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkListBox" id="body_list">
+                        <property name="selection-mode">single</property>
+                        <style>
+                          <class name="boxed-list"/>
+                        </style>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkLabel" id="selected_name_label">
+                        <property name="xalign">0</property>
+                        <style>
+                          <class name="heading"/>
+                        </style>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkGrid">
+                        <property name="column-spacing">10</property>
+                        <property name="row-spacing">8</property>
+                        <child>
+                          <object class="GtkLabel">
+                            <property name="label" translatable="yes">Mass (kg)</property>
+                            <property name="xalign">0</property>
+                            <layout>
+                              <property name="column">0</property>
+                              <property name="row">0</property>
+                            </layout>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkEntry" id="mass_entry">
+                            <layout>
+                              <property name="column">1</property>
+                              <property name="row">0</property>
+                            </layout>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkLabel">
+                            <property name="label" translatable="yes">X (AU)</property>
+                            <property name="xalign">0</property>
+                            <layout>
+                              <property name="column">0</property>
+                              <property name="row">1</property>
+                            </layout>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkSpinButton" id="x_spin">
+                            <property name="digits">4</property>
+                            <property name="adjustment">
+                              <object class="GtkAdjustment">
+                                <property name="lower">-100</property>
+                                <property name="upper">100</property>
+                                <property name="step-increment">0.01</property>
+                                <property name="page-increment">1</property>
+                              </object>
+                            </property>
+                            <layout>
+                              <property name="column">1</property>
+                              <property name="row">1</property>
+                            </layout>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkLabel">
+                            <property name="label" translatable="yes">Y (AU)</property>
+                            <property name="xalign">0</property>
+                            <layout>
+                              <property name="column">0</property>
+                              <property name="row">2</property>
+                            </layout>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkSpinButton" id="y_spin">
+                            <property name="digits">4</property>
+                            <property name="adjustment">
+                              <object class="GtkAdjustment">
+                                <property name="lower">-100</property>
+                                <property name="upper">100</property>
+                                <property name="step-increment">0.01</property>
+                                <property name="page-increment">1</property>
+                              </object>
+                            </property>
+                            <layout>
+                              <property name="column">1</property>
+                              <property name="row">2</property>
+                            </layout>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkLabel">
+                            <property name="label" translatable="yes">VX (m/s)</property>
+                            <property name="xalign">0</property>
+                            <layout>
+                              <property name="column">0</property>
+                              <property name="row">3</property>
+                            </layout>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkSpinButton" id="vx_spin">
+                            <property name="adjustment">
+                              <object class="GtkAdjustment">
+                                <property name="lower">-100000</property>
+                                <property name="upper">100000</property>
+                                <property name="step-increment">10</property>
+                                <property name="page-increment">1000</property>
+                              </object>
+                            </property>
+                            <layout>
+                              <property name="column">1</property>
+                              <property name="row">3</property>
+                            </layout>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkLabel">
+                            <property name="label" translatable="yes">VY (m/s)</property>
+                            <property name="xalign">0</property>
+                            <layout>
+                              <property name="column">0</property>
+                              <property name="row">4</property>
+                            </layout>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkSpinButton" id="vy_spin">
+                            <property name="adjustment">
+                              <object class="GtkAdjustment">
+                                <property name="lower">-100000</property>
+                                <property name="upper">100000</property>
+                                <property name="step-increment">10</property>
+                                <property name="page-increment">1000</property>
+                              </object>
+                            </property>
+                            <layout>
+                              <property name="column">1</property>
+                              <property name="row">4</property>
+                            </layout>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+              </object>
+            </child>
           </object>
         </property>
       </object>
@@ -42,7 +370,7 @@
         <attribute name="action">app.shortcuts</attribute>
       </item>
       <item>
-        <attribute name="label" translatable="yes">_About Solar-system-builder</attribute>
+        <attribute name="label" translatable="yes">_About Solar System Builder</attribute>
         <attribute name="action">app.about</attribute>
       </item>
     </section>

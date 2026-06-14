@@ -28,8 +28,14 @@ configure_file(
 
 solar_system_builder_sources = [
   '__init__.py',
+  'constants.py',
   'main.py',
+  'models.py',
+  'physics.py',
+  'presets.py',
+  'storage.py',
   'window.py',
 ]
 
 install_data(solar_system_builder_sources, install_dir: moduledir)
+install_subdir('presets', install_dir: moduledir)

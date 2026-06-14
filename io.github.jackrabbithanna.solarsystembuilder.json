@@ -1,7 +1,7 @@
 {
     "id" : "io.github.jackrabbithanna.solarsystembuilder",
     "runtime" : "org.gnome.Platform",
-    "runtime-version" : "48",
+    "runtime-version" : "49",
     "sdk" : "org.gnome.Sdk",
     "command" : "solar-system-builder",
     "finish-args" : [
@@ -23,6 +23,25 @@
         "*.a"
     ],
     "modules" : [
+        {
+            "name": "python3-numpy",
+            "buildsystem": "simple",
+            "build-commands": [
+                "python3 -m pip install --ignore-installed --no-cache-dir --no-index --find-links=\"file://${PWD}\" --prefix=${FLATPAK_DEST} numpy==2.2.4"
+            ],
+            "sources": [
+                {
+                    "type": "file",
+                    "url": "https://files.pythonhosted.org/packages/13/73/41b7b27f169ecf368b52533edb72e56a133f9e86256e809e169362553b49/numpy-2.2.4-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+                    "sha256": "6f527d8fdb0286fd2fd97a2a96c6be17ba4232da346931d967a0630050dfd298"
+                },
+                {
+                    "type": "file",
+                    "url": "https://files.pythonhosted.org/packages/4b/04/e208ff3ae3ddfbafc05910f89546382f15a3f10186b1f56bd99f159689c2/numpy-2.2.4-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+                    "sha256": "bce43e386c16898b91e162e5baaad90c4b06f9dcbe36282490032cec98dc8ae7"
+                }
+            ]
+        },
         {
             "name" : "solar-system-builder",
             "builddir" : true,
