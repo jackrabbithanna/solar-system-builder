@@ -20,7 +20,7 @@ from gi.repository import Adw, Gdk, GLib, Gtk
 from .constants import AU, DAY
 from .models import Body, SolarSystem
 from .physics import SimulationState, advance
-from .presets import load_builtin_solar_system
+from .presets import load_builtin_solar_system, load_builtin_solar_systems
 from .storage import Library
 
 
@@ -59,6 +59,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.loaded_system_snapshot = self._clone_system(self.system)
         self.state = SimulationState.from_bodies(self.system.bodies)
         self.selected_index = 0
+        self.body_list_indices: list[int] = []
         self.playing = False
         self.editing = False
         self.closed = False
@@ -108,7 +109,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
 
     def _reload_system_list(self) -> None:
         saved = self.library.list_systems()
-        self.systems = [load_builtin_solar_system(), *saved]
+        self.systems = [*load_builtin_solar_systems(), *saved]
         names = [system.name for system in self.systems]
         self.system_dropdown.set_model(Gtk.StringList.new(names))
         active = next((index for index, system in enumerate(self.systems) if system.id == self.system.id), 0)
@@ -149,7 +150,9 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _populate_body_list(self) -> None:
         while child := self.body_list.get_first_child():
             self.body_list.remove(child)
-        for body in self.system.bodies:
+        self.body_list_indices = self._body_list_order()
+        for body_index in self.body_list_indices:
+            body = self.system.bodies[body_index]
             row = Gtk.ListBoxRow()
             box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
             box.set_margin_top(8)
@@ -170,11 +173,38 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             row.set_child(box)
             self.body_list.append(row)
 
+    def _body_list_order(self) -> list[int]:
+        if not self.system.bodies:
+            return []
+        sun = next(
+            (
+                body
+                for body in self.system.bodies
+                if body.id == "sun" or body.kind == "star"
+            ),
+            self.system.bodies[0],
+        )
+
+        def sort_key(index: int) -> tuple[float, str]:
+            body = self.system.bodies[index]
+            distance_m = math.dist(body.position_m, sun.position_m)
+            return (distance_m, body.name.casefold())
+
+        return sorted(range(len(self.system.bodies)), key=sort_key)
+
     def _select_body(self, index: int) -> None:
         if not self.system.bodies:
             return
         self.selected_index = max(0, min(index, len(self.system.bodies) - 1))
-        row = self.body_list.get_row_at_index(self.selected_index)
+        row_index = next(
+            (
+                list_index
+                for list_index, body_index in enumerate(self.body_list_indices)
+                if body_index == self.selected_index
+            ),
+            self.selected_index,
+        )
+        row = self.body_list.get_row_at_index(row_index)
         if row:
             self.body_list.select_row(row)
         self._load_body_editor(self.system.bodies[self.selected_index])
@@ -192,6 +222,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _on_body_edit(self, *_args) -> None:
         if self.editing or not self.system.bodies:
             return
+        selected_body_id = self.system.bodies[self.selected_index].id
         body = self.system.bodies[self.selected_index]
         try:
             mass = float(self.mass_entry.get_text())
@@ -207,6 +238,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.state = SimulationState.from_bodies(self.system.bodies)
         self.simulation_generation += 1
         self.trails = [[] for _ in self.system.bodies]
+        self._populate_body_list()
+        self._select_body(self._body_index_for_id(selected_body_id))
         self._update_title()
         self.canvas.queue_draw()
 
@@ -217,10 +250,13 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _on_body_selected(self, _list_box, row) -> None:
         if row is None:
             return
-        index = row.get_index()
-        if index != self.selected_index:
-            self.selected_index = index
-            self._load_body_editor(self.system.bodies[index])
+        row_index = row.get_index()
+        if row_index < 0 or row_index >= len(self.body_list_indices):
+            return
+        body_index = self.body_list_indices[row_index]
+        if body_index != self.selected_index:
+            self.selected_index = body_index
+            self._load_body_editor(self.system.bodies[body_index])
 
     def _on_system_selected(self, dropdown, _param) -> None:
         selected = dropdown.get_selected()
@@ -281,8 +317,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         )
 
     def _on_save_clicked(self, _button) -> None:
-        if self.system.id == "builtin-solar-system":
-            self.system = self.system.duplicate("Solar System Copy")
+        if self.system.id.startswith("builtin-"):
+            self.system = self.system.duplicate()
         self.state.apply_to_bodies(self.system.bodies)
         self.library.save(self.system)
         self.loaded_system_snapshot = self._clone_system(self.system)

@@ -78,6 +78,53 @@ class UpdateSolarSystemPresetTests(unittest.TestCase):
             self.assertNotEqual(body["position_m"], original_body["position_m"])
             self.assertNotEqual(body["velocity_mps"], original_body["velocity_mps"])
 
+    def test_apply_vectors_accepts_dwarf_planet_target_set(self):
+        targets = update_solar_system_preset.DWARF_PLANET_TARGETS
+        preset = {
+            "schema_version": 1,
+            "id": "builtin-dwarf-planets",
+            "name": "Dwarf Planets",
+            "epoch": "old",
+            "description": "old",
+            "bodies": [
+                {
+                    "id": body_id,
+                    "name": body_id.title(),
+                    "kind": "dwarf planet",
+                    "mass_kg": index + 1,
+                    "radius_m": index + 2,
+                    "position_m": [0, 0, 0],
+                    "velocity_mps": [0, 0, 0],
+                    "color": f"#{index:06x}",
+                }
+                for index, body_id in enumerate(targets)
+            ],
+        }
+        vectors = {
+            body_id: update_solar_system_preset.StateVector([1.0, 2.0, 3.0], [4.0, 5.0, 6.0])
+            for body_id in targets
+        }
+
+        updated = update_solar_system_preset.apply_vectors(
+            preset,
+            vectors,
+            "2026-06-14 00:00:00",
+            targets,
+            "updated description",
+        )
+
+        self.assertEqual(updated["description"], "updated description")
+        self.assertEqual(len(updated["bodies"]), len(targets))
+        self.assertEqual(updated["bodies"][-1]["id"], "orcus")
+        self.assertEqual(updated["bodies"][-1]["position_m"], [1.0, 2.0, 3.0])
+
+    def test_dwarf_planet_targets_use_small_body_disambiguation(self):
+        targets = update_solar_system_preset.DWARF_PLANET_TARGETS
+
+        self.assertEqual(targets["ceres"], "1;")
+        self.assertEqual(targets["eris"], "136199;")
+        self.assertNotIn("sedna", targets)
+
     def test_apply_vectors_requires_all_targets(self):
         preset = {
             "schema_version": 1,
