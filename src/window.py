@@ -27,6 +27,8 @@ from .scales import (
     TIME_UNITS,
     VIEW_MODE_LABELS,
     derived_max_step_s,
+    distance_between_bodies_m,
+    format_distance,
     format_elapsed_time,
     recommended_trail_sample_interval_s,
     time_unit_for_seconds,
@@ -63,6 +65,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     system_name_entry = Gtk.Template.Child()
     delete_system_button = Gtk.Template.Child()
     selected_name_label = Gtk.Template.Child()
+    selected_distance_list = Gtk.Template.Child()
     distance_unit_dropdown = Gtk.Template.Child()
     mass_entry = Gtk.Template.Child()
     x_label = Gtk.Template.Child()
@@ -82,6 +85,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.state = SimulationState.from_bodies(self.system.bodies)
         self.selected_index = 0
         self.body_list_indices: list[int] = []
+        self.body_relationship_labels: dict[int, Gtk.Label] = {}
         self.playing = False
         self.editing = False
         self.updating_system_dropdown = False
@@ -210,6 +214,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _populate_body_list(self) -> None:
         while child := self.body_list.get_first_child():
             self.body_list.remove(child)
+        self.body_relationship_labels = {}
         self.body_list_indices = self._body_list_order()
         for body_index in self.body_list_indices:
             body = self.system.bodies[body_index]
@@ -227,6 +232,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             name.set_hexpand(True)
             kind = Gtk.Label(label=self._body_relationship_label(body))
             kind.add_css_class("dim-label")
+            self.body_relationship_labels[body_index] = kind
             box.append(swatch)
             box.append(name)
             box.append(kind)
@@ -279,11 +285,33 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
 
     def _body_relationship_label(self, body: Body) -> str:
         if body.parent_id is None:
+            nearest_star = self._nearest_other_star(body)
+            if body.kind == "star" and nearest_star is not None:
+                distance = distance_between_bodies_m(body, nearest_star)
+                return f"star - nearest star {format_distance(distance)}"
             return body.kind
         parent = next((item for item in self.system.bodies if item.id == body.parent_id), None)
         if parent is None:
             return body.kind
-        return f"orbits {parent.name}"
+        distance = distance_between_bodies_m(body, parent)
+        return f"orbits {parent.name} - {format_distance(distance)}"
+
+    def _nearest_other_star(self, body: Body) -> Body | None:
+        if body.kind != "star":
+            return None
+        other_stars = [
+            other
+            for other in self.system.bodies
+            if other.kind == "star" and other.id != body.id
+        ]
+        if not other_stars:
+            return None
+        return min(other_stars, key=lambda other: distance_between_bodies_m(body, other))
+
+    def _refresh_body_relationship_labels(self) -> None:
+        for body_index, label in self.body_relationship_labels.items():
+            if body_index < len(self.system.bodies):
+                label.set_label(self._body_relationship_label(self.system.bodies[body_index]))
 
     def _select_body(self, index: int) -> None:
         if not self.system.bodies:
@@ -306,6 +334,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.editing = True
         distance_factor = self._distance_factor()
         self.selected_name_label.set_label(body.name)
+        self._populate_selected_distance_list(body)
         self.mass_entry.set_text(f"{body.mass_kg:.12g}")
         self._configure_position_spins()
         self.x_spin.set_value(body.position_m[0] / distance_factor)
@@ -313,6 +342,59 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.vx_spin.set_value(body.velocity_mps[0])
         self.vy_spin.set_value(body.velocity_mps[1])
         self.editing = False
+
+    def _populate_selected_distance_list(self, body: Body) -> None:
+        while child := self.selected_distance_list.get_first_child():
+            self.selected_distance_list.remove(child)
+
+        rows = self._selected_distance_rows(body)
+        self.selected_distance_list.set_visible(bool(rows))
+        for label, value in rows:
+            row = Gtk.ListBoxRow()
+            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            box.set_margin_top(8)
+            box.set_margin_bottom(8)
+            box.set_margin_start(10)
+            box.set_margin_end(10)
+            name = Gtk.Label(label=label, xalign=0)
+            name.set_hexpand(True)
+            name.add_css_class("dim-label")
+            distance = Gtk.Label(label=value, xalign=1)
+            box.append(name)
+            box.append(distance)
+            row.set_child(box)
+            self.selected_distance_list.append(row)
+
+    def _selected_distance_rows(self, body: Body) -> list[tuple[str, str]]:
+        rows: list[tuple[str, str]] = []
+        if body.parent_id is not None:
+            parent = next((item for item in self.system.bodies if item.id == body.parent_id), None)
+            if parent is not None:
+                rows.append(
+                    (
+                        f"Distance to {parent.name}",
+                        format_distance(distance_between_bodies_m(body, parent)),
+                    )
+                )
+            return rows
+
+        if body.kind != "star":
+            return rows
+
+        other_stars = [
+            other
+            for other in self.system.bodies
+            if other.kind == "star" and other.id != body.id
+        ]
+        other_stars.sort(key=lambda other: distance_between_bodies_m(body, other))
+        for other in other_stars:
+            rows.append(
+                (
+                    f"Distance to {other.name}",
+                    format_distance(distance_between_bodies_m(body, other)),
+                )
+            )
+        return rows
 
     def _load_system_editor(self) -> None:
         self.editing = True
@@ -636,6 +718,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.state = state
         self.state.apply_to_bodies(self.system.bodies)
         self._append_trails(position_samples, start_elapsed_s, state.elapsed_s)
+        self._refresh_body_relationship_labels()
         self._load_body_editor(self.system.bodies[self.selected_index])
         self._update_time_label()
         self.canvas.queue_draw()

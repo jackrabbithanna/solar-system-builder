@@ -12,6 +12,7 @@ from .constants import AU, DAY, G, YEAR
 from .models import Body
 
 LIGHT_YEAR = 299_792_458.0 * YEAR
+LIGHT_YEAR_THRESHOLD_M = 10_000.0 * AU
 
 TIME_UNITS: tuple[tuple[str, str, float], ...] = (
     ("Days", "days", DAY),
@@ -79,6 +80,26 @@ def format_elapsed_time(seconds: float) -> str:
     if abs_seconds >= 2.0 * YEAR:
         return f"{sign}{abs_seconds / YEAR:,.2f} years"
     return f"{sign}{abs_seconds / DAY:,.2f} days"
+
+
+def distance_between_bodies_m(body: Body, other: Body) -> float:
+    return math.dist(body.position_m, other.position_m)
+
+
+def format_distance(distance_m: float) -> str:
+    abs_distance_m = abs(distance_m)
+    if abs_distance_m >= LIGHT_YEAR_THRESHOLD_M:
+        light_years = abs_distance_m / LIGHT_YEAR
+        if light_years < 10.0:
+            return f"{light_years:.4f} ly"
+        return f"{light_years:,.2f} ly"
+
+    au = abs_distance_m / AU
+    if au < 0.01:
+        return f"{au:.4f} AU"
+    if au < 100.0:
+        return f"{au:.2f} AU"
+    return f"{au:,.1f} AU"
 
 
 def derived_max_step_s(bodies: list[Body], accuracy_profile: str) -> float:

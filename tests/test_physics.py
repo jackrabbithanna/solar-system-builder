@@ -6,7 +6,14 @@ from src.constants import AU, DAY, G, SOLAR_MASS, YEAR
 from src.models import Body
 from src.physics import SimulationState, acceleration, advance, advance_with_samples, step
 from src.presets import load_builtin_solar_system, load_builtin_solar_systems
-from src.scales import derived_max_step_s, format_elapsed_time, recommended_trail_sample_interval_s
+from src.scales import (
+    LIGHT_YEAR,
+    derived_max_step_s,
+    distance_between_bodies_m,
+    format_distance,
+    format_elapsed_time,
+    recommended_trail_sample_interval_s,
+)
 
 
 class PhysicsTests(unittest.TestCase):
@@ -176,6 +183,19 @@ class PhysicsTests(unittest.TestCase):
         self.assertEqual(format_elapsed_time(2 * YEAR), "2.00 years")
         self.assertEqual(format_elapsed_time(100 * YEAR), "1.00 centuries")
         self.assertEqual(recommended_trail_sample_interval_s(90 * DAY), 90 * DAY)
+
+    def test_distance_formatting_uses_au_then_light_years(self):
+        self.assertEqual(format_distance(0.0), "0.0000 AU")
+        self.assertEqual(format_distance(39.48 * AU), "39.48 AU")
+        self.assertEqual(format_distance(1_500.0 * AU), "1,500.0 AU")
+        self.assertEqual(format_distance(10_000.0 * AU), "0.1581 ly")
+        self.assertEqual(format_distance(2.0 * LIGHT_YEAR), "2.0000 ly")
+
+    def test_distance_between_bodies_uses_3d_positions(self):
+        body = Body("A", "body", 1.0, 1.0, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], "#fff")
+        other = Body("B", "body", 1.0, 1.0, [3.0, 4.0, 12.0], [0.0, 0.0, 0.0], "#fff")
+
+        self.assertEqual(distance_between_bodies_m(body, other), 13.0)
 
 
 if __name__ == "__main__":
