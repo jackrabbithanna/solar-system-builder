@@ -197,6 +197,30 @@
                     <property name="margin-bottom">12</property>
                     <child>
                       <object class="GtkLabel">
+                        <property name="label" translatable="yes">System Name</property>
+                        <property name="xalign">0</property>
+                        <style>
+                          <class name="heading"/>
+                        </style>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkEntry" id="system_name_entry">
+                        <property name="tooltip-text" translatable="yes">Saved system name</property>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkButton" id="delete_system_button">
+                        <property name="icon-name">user-trash-symbolic</property>
+                        <property name="tooltip-text" translatable="yes">Delete saved system</property>
+                        <property name="halign">end</property>
+                        <style>
+                          <class name="destructive-action"/>
+                        </style>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkLabel">
                         <property name="label" translatable="yes">Bodies</property>
                         <property name="xalign">0</property>
                         <style>

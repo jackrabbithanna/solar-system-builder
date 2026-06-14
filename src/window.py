@@ -43,6 +43,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     speed_spin = Gtk.Template.Child()
     time_label = Gtk.Template.Child()
     window_title = Gtk.Template.Child()
+    system_name_entry = Gtk.Template.Child()
+    delete_system_button = Gtk.Template.Child()
     selected_name_label = Gtk.Template.Child()
     mass_entry = Gtk.Template.Child()
     x_spin = Gtk.Template.Child()
@@ -62,6 +64,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.body_list_indices: list[int] = []
         self.playing = False
         self.editing = False
+        self.updating_system_dropdown = False
         self.closed = False
         self.simulation_generation = 0
         self.simulation_future: Future | None = None
@@ -91,12 +94,16 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.system_dropdown.connect("notify::selected", self._on_system_selected)
         self.body_list.connect("row-selected", self._on_body_selected)
 
+        self.system_name_entry.connect("activate", self._on_system_name_edit)
+        self.system_name_entry.connect("notify::has-focus", self._on_system_name_focus_changed)
+        self.delete_system_button.connect("clicked", self._on_delete_system_clicked)
         self.mass_entry.connect("activate", self._on_body_edit)
         self.mass_entry.connect("notify::has-focus", self._on_mass_focus_changed)
         for spin in (self.x_spin, self.y_spin, self.vx_spin, self.vy_spin):
             spin.connect("value-changed", self._on_body_edit)
 
         self._reload_system_list()
+        self._load_system_editor()
         self._populate_body_list()
         self._select_body(0)
         self._update_title()
@@ -115,10 +122,20 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _reload_system_list(self) -> None:
         saved = self.library.list_systems()
         self.systems = [*load_builtin_solar_systems(), *saved]
-        names = [system.name for system in self.systems]
-        self.system_dropdown.set_model(Gtk.StringList.new(names))
         active = next((index for index, system in enumerate(self.systems) if system.id == self.system.id), 0)
-        self.system_dropdown.set_selected(active)
+        self.updating_system_dropdown = True
+        try:
+            self._refresh_system_dropdown_labels()
+            self.system_dropdown.set_selected(active)
+        finally:
+            self.updating_system_dropdown = False
+
+    def _refresh_system_dropdown_labels(self) -> None:
+        names = [
+            self.system.name if system.id == self.system.id else system.name
+            for system in self.systems
+        ]
+        self.system_dropdown.set_model(Gtk.StringList.new(names))
 
     def _load_system(self, system: SolarSystem) -> None:
         self.playing = False
@@ -140,6 +157,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.trails = [[] for _ in self.system.bodies]
         self._populate_body_list()
         self._select_body(self.selected_index)
+        self._load_system_editor()
         self._update_title()
         self._update_time_label()
         self.canvas.queue_draw()
@@ -224,6 +242,17 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.vy_spin.set_value(body.velocity_mps[1])
         self.editing = False
 
+    def _load_system_editor(self) -> None:
+        self.editing = True
+        self.system_name_entry.set_text(self.system.name)
+        editable = self._system_is_user_saved()
+        self.system_name_entry.set_sensitive(editable)
+        self.delete_system_button.set_sensitive(editable)
+        self.editing = False
+
+    def _system_is_user_saved(self) -> bool:
+        return not self.system.id.startswith("builtin-")
+
     def _on_body_edit(self, *_args) -> None:
         if self.editing or not self.system.bodies:
             return
@@ -252,6 +281,65 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         if not entry.has_focus():
             self._on_body_edit()
 
+    def _on_system_name_focus_changed(self, entry, _param) -> None:
+        if not entry.has_focus():
+            self._on_system_name_edit()
+
+    def _on_system_name_edit(self, *_args) -> None:
+        if self.editing:
+            return
+        if not self._system_is_user_saved():
+            self._load_system_editor()
+            return
+        name = self.system_name_entry.get_text().strip()
+        if not name:
+            self._load_system_editor()
+            return
+        if name == self.system.name:
+            return
+        selected = self.system_dropdown.get_selected()
+        self.system.name = name
+        self._update_title()
+        self.updating_system_dropdown = True
+        try:
+            self._refresh_system_dropdown_labels()
+            if selected != Gtk.INVALID_LIST_POSITION:
+                self.system_dropdown.set_selected(selected)
+        finally:
+            self.updating_system_dropdown = False
+
+    def _on_delete_system_clicked(self, _button) -> None:
+        if not self._system_is_user_saved():
+            return
+
+        system_id = self.system.id
+        dialog = Adw.AlertDialog.new(
+            "Delete Saved System?",
+            f"'{self.system.name}' will be permanently deleted.",
+        )
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("delete", "Delete")
+        dialog.set_close_response("cancel")
+        dialog.set_default_response("cancel")
+        dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.choose(
+            self,
+            None,
+            lambda dialog, result, *_args: self._on_delete_system_response(dialog, result, system_id),
+        )
+
+    def _on_delete_system_response(self, dialog, result, system_id: str) -> None:
+        if dialog.choose_finish(result) != "delete":
+            return
+        if system_id.startswith("builtin-"):
+            return
+
+        self.playing = False
+        self.play_button.set_icon_name("media-playback-start-symbolic")
+        self.library.delete(system_id)
+        self._reload_system_list()
+        self._load_system(load_builtin_solar_system())
+
     def _on_body_selected(self, _list_box, row) -> None:
         if row is None:
             return
@@ -265,6 +353,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.canvas.queue_draw()
 
     def _on_system_selected(self, dropdown, _param) -> None:
+        if self.updating_system_dropdown:
+            return
         selected = dropdown.get_selected()
         if selected == Gtk.INVALID_LIST_POSITION or selected >= len(self.systems):
             return
@@ -344,6 +434,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.loaded_system_snapshot = self._clone_system(self.system)
         self.simulation_generation += 1
         self._reload_system_list()
+        self._load_system_editor()
         self._update_title()
 
     def _on_duplicate_clicked(self, _button) -> None:
