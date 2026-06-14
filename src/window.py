@@ -71,6 +71,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.timer_id = GLib.timeout_add(33, self._tick)
 
         self.canvas.set_draw_func(self._draw)
+        self.canvas.set_has_tooltip(True)
+        self.canvas.connect("query-tooltip", self._on_canvas_query_tooltip)
         scroll_controller = Gtk.EventControllerScroll.new(Gtk.EventControllerScrollFlags.VERTICAL)
         scroll_controller.connect("scroll", self._on_canvas_scroll)
         self.canvas.add_controller(scroll_controller)
@@ -297,6 +299,13 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             return True
         return False
 
+    def _on_canvas_query_tooltip(self, _widget, x: int, y: int, _keyboard_mode: bool, tooltip) -> bool:
+        body = self._body_at_canvas_point(float(x), float(y))
+        if body is None:
+            return False
+        tooltip.set_text(body.name)
+        return True
+
     def _set_zoom_factor(self, zoom_factor: float) -> None:
         self.zoom_factor = max(1.0, min(64.0, zoom_factor))
         self.zoom_out_button.set_sensitive(self.zoom_factor > 1.0)
@@ -453,6 +462,33 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             for body in self.system.bodies
         )
         return min(width, height) * 0.45 / max(max_distance, AU) * self.zoom_factor
+
+    def _body_at_canvas_point(self, pointer_x: float, pointer_y: float) -> Body | None:
+        if not self.system.bodies:
+            return None
+
+        width = self.canvas.get_width()
+        height = self.canvas.get_height()
+        if width <= 0 or height <= 0:
+            return None
+
+        scale = self._canvas_scale(width, height)
+        origin_x = width / 2.0
+        origin_y = height / 2.0
+        closest_body = None
+        closest_distance = math.inf
+
+        for body in self.system.bodies:
+            if not body.visible:
+                continue
+            body_x, body_y = self._project(body.position_m[0], body.position_m[1], origin_x, origin_y, scale)
+            distance = math.hypot(pointer_x - body_x, pointer_y - body_y)
+            hit_radius = max(self._display_radius(body) + 4.0, 8.0)
+            if distance <= hit_radius and distance < closest_distance:
+                closest_body = body
+                closest_distance = distance
+
+        return closest_body
 
     def _project(self, x_m: float, y_m: float, origin_x: float, origin_y: float, scale: float) -> tuple[float, float]:
         return origin_x + x_m * scale, origin_y - y_m * scale
