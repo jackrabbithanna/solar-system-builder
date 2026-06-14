@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=solar-system-builder
+Exec=solar-system-builder
+Icon=io.github.jackrabbithanna.solarsystembuilder
+Terminal=false
+Type=Application
+Categories=Utility;
+Keywords=GTK;
+StartupNotify=true
+DBusActivatable=true

@@ -1,0 +1,4 @@
+.venv
+.flatpak-builder
+/src/__pycache__/
+src/widgets/__pycache__/
