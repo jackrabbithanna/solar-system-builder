@@ -4,7 +4,7 @@ import numpy as np
 
 from src.constants import AU, DAY, G, SOLAR_MASS
 from src.models import Body
-from src.physics import SimulationState, acceleration, advance, step
+from src.physics import SimulationState, acceleration, advance, advance_with_samples, step
 from src.presets import load_builtin_solar_system
 
 
@@ -67,6 +67,39 @@ class PhysicsTests(unittest.TestCase):
 
         self.assertAlmostEqual(backward.elapsed_s, start.elapsed_s, places=6)
         self.assertTrue(np.allclose(start.positions_m, backward.positions_m, rtol=0, atol=1.2e8))
+
+    def test_advance_with_samples_matches_advance(self):
+        start = SimulationState.from_bodies(load_builtin_solar_system().bodies)
+
+        sampled, samples = advance_with_samples(start, 30 * DAY, "post_newtonian")
+        advanced = advance(start, 30 * DAY, "post_newtonian")
+
+        self.assertEqual(len(samples), 30)
+        self.assertTrue(np.array_equal(sampled.positions_m, advanced.positions_m))
+        self.assertTrue(np.array_equal(sampled.velocities_mps, advanced.velocities_mps))
+        self.assertEqual(sampled.elapsed_s, advanced.elapsed_s)
+        self.assertTrue(np.array_equal(samples[-1], sampled.positions_m))
+
+    def test_advance_with_samples_handles_negative_time(self):
+        start = SimulationState.from_bodies(load_builtin_solar_system().bodies)
+
+        sampled, samples = advance_with_samples(start, -3 * DAY, "post_newtonian")
+        advanced = advance(start, -3 * DAY, "post_newtonian")
+
+        self.assertEqual(len(samples), 3)
+        self.assertTrue(np.array_equal(sampled.positions_m, advanced.positions_m))
+        self.assertEqual(sampled.elapsed_s, advanced.elapsed_s)
+        self.assertLess(sampled.elapsed_s, start.elapsed_s)
+
+    def test_advance_with_samples_zero_duration_returns_no_samples(self):
+        start = SimulationState.from_bodies(load_builtin_solar_system().bodies)
+
+        sampled, samples = advance_with_samples(start, 0.0, "post_newtonian")
+
+        self.assertEqual(samples, [])
+        self.assertIsNot(sampled, start)
+        self.assertTrue(np.array_equal(sampled.positions_m, start.positions_m))
+        self.assertEqual(sampled.elapsed_s, start.elapsed_s)
 
     def test_post_newtonian_differs_from_newtonian(self):
         masses = np.array([SOLAR_MASS, 3.3011e23])

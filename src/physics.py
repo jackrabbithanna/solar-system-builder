@@ -132,12 +132,35 @@ def advance(
 ) -> SimulationState:
     """Advance by a user-visible interval using bounded internal steps."""
 
+    next_state, _samples = _advance(state, total_dt_s, mode, max_step_s, collect_samples=False)
+    return next_state
+
+
+def advance_with_samples(
+    state: SimulationState,
+    total_dt_s: float,
+    mode: PhysicsMode = "post_newtonian",
+    max_step_s: float = DEFAULT_MAX_STEP_S,
+) -> tuple[SimulationState, list[np.ndarray]]:
+    """Advance using bounded internal steps and return sampled positions."""
+
+    return _advance(state, total_dt_s, mode, max_step_s, collect_samples=True)
+
+
+def _advance(
+    state: SimulationState,
+    total_dt_s: float,
+    mode: PhysicsMode,
+    max_step_s: float,
+    collect_samples: bool,
+) -> tuple[SimulationState, list[np.ndarray]]:
     if total_dt_s == 0.0:
-        return state.copy()
+        return state.copy(), []
     if max_step_s <= 0.0:
         raise ValueError("max_step_s must be positive")
 
     next_state = state.copy()
+    samples: list[np.ndarray] = []
     remaining = float(total_dt_s)
     direction = 1.0 if remaining > 0.0 else -1.0
     bounded_step = abs(float(max_step_s))
@@ -145,9 +168,11 @@ def advance(
     while abs(remaining) > 0.0:
         dt_s = direction * min(abs(remaining), bounded_step)
         next_state = step(next_state, dt_s, mode)
+        if collect_samples:
+            samples.append(next_state.positions_m.copy())
         remaining -= dt_s
 
-    return next_state
+    return next_state, samples
 
 
 def _validate_arrays(

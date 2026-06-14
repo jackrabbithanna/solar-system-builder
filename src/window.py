@@ -19,9 +19,11 @@ from gi.repository import Adw, Gdk, GLib, Gtk
 
 from .constants import AU, DAY
 from .models import Body, SolarSystem
-from .physics import SimulationState, advance
+from .physics import SimulationState, advance_with_samples
 from .presets import load_builtin_solar_system, load_builtin_solar_systems
 from .storage import Library
+
+TRAIL_POINT_LIMIT = 2000
 
 
 @Gtk.Template(resource_path="/io/github/jackrabbithanna/solarsystembuilder/window.ui")
@@ -453,8 +455,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         return True
 
     def _advance(self, dt_s: float) -> None:
-        self.state = advance(self.state, dt_s, "post_newtonian")
-        self._apply_simulation_state(self.state)
+        state, position_samples = advance_with_samples(self.state, dt_s, "post_newtonian")
+        self._apply_simulation_state(state, position_samples)
 
     def _queue_simulation_job(self) -> None:
         if self.closed or self.simulation_future is not None:
@@ -463,7 +465,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         state = self.state.copy()
         dt_s = self._step_seconds()
         generation = self.simulation_generation
-        self.simulation_future = self.simulation_executor.submit(advance, state, dt_s, "post_newtonian")
+        self.simulation_future = self.simulation_executor.submit(advance_with_samples, state, dt_s, "post_newtonian")
         self.simulation_future.add_done_callback(
             lambda future: GLib.idle_add(self._finish_simulation_job, future, generation)
         )
@@ -476,7 +478,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             return False
 
         try:
-            state = future.result()
+            state, position_samples = future.result()
         except Exception:
             traceback.print_exc()
             self.playing = False
@@ -485,17 +487,17 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
 
         if generation == self.simulation_generation:
             self.state = state
-            self._apply_simulation_state(state)
+            self._apply_simulation_state(state, position_samples)
 
         if self.playing:
             self._queue_simulation_job()
 
         return False
 
-    def _apply_simulation_state(self, state: SimulationState) -> None:
+    def _apply_simulation_state(self, state: SimulationState, position_samples) -> None:
         self.state = state
         self.state.apply_to_bodies(self.system.bodies)
-        self._append_trails()
+        self._append_trails(position_samples)
         self._load_body_editor(self.system.bodies[self.selected_index])
         self._update_time_label()
         self.canvas.queue_draw()
@@ -503,14 +505,15 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _step_seconds(self) -> float:
         return self.speed_spin.get_value() * DAY
 
-    def _append_trails(self) -> None:
+    def _append_trails(self, position_samples) -> None:
         for index, body in enumerate(self.system.bodies):
             if not body.trail_enabled:
                 continue
             trail = self.trails[index]
-            trail.append((body.position_m[0], body.position_m[1]))
-            if len(trail) > 500:
-                del trail[0]
+            for positions_m in position_samples:
+                trail.append((float(positions_m[index][0]), float(positions_m[index][1])))
+            if len(trail) > TRAIL_POINT_LIMIT:
+                del trail[: len(trail) - TRAIL_POINT_LIMIT]
 
     def _update_title(self) -> None:
         self.window_title.set_title(self.system.name)
