@@ -1403,6 +1403,9 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
                 cr.arc(x, y, radius + 4.0, 0.0, math.tau)
                 cr.stroke()
             self._draw_collapsed_child_indicator(cr, index, x, y, radius, active_indices)
+        barycenter = self._focused_body_barycenter_point(active_indices, origin_x, origin_y, scale, center_x_m, center_y_m)
+        if barycenter is not None:
+            self._draw_shared_barycenter(cr, barycenter[0], barycenter[1])
         if self._using_hybrid_focus():
             self._draw_context_entities(cr, origin_x, origin_y, scale, center_x_m, center_y_m)
 
@@ -1443,6 +1446,10 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
                 cr.arc(x, y, 12.0, 0.0, math.tau)
                 cr.stroke()
 
+        barycenter = self._shared_barycenter_point(entities, positions, origin_x, origin_y, scale, center_x_m, center_y_m)
+        if barycenter is not None:
+            self._draw_shared_barycenter(cr, barycenter[0], barycenter[1])
+
     def _draw_context_entities(
         self,
         cr,
@@ -1478,6 +1485,69 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.45)
             cr.arc(x, y, 5.0, 0.0, math.tau)
             cr.fill()
+
+        barycenter = self._shared_barycenter_point(entities, positions, origin_x, origin_y, scale, center_x_m, center_y_m)
+        if barycenter is not None:
+            self._draw_shared_barycenter(cr, barycenter[0], barycenter[1])
+
+    def _shared_barycenter_point(
+        self,
+        entities: list[OverviewEntity],
+        positions,
+        origin_x: float,
+        origin_y: float,
+        scale: float,
+        center_x_m: float,
+        center_y_m: float,
+    ) -> tuple[float, float] | None:
+        if len(entities) < 2 or len(positions) < len(entities):
+            return None
+        total_mass = sum(entity.mass_kg for entity in entities)
+        if total_mass <= 0.0:
+            return None
+        barycenter_x_m = sum(
+            entity.mass_kg * float(positions[index][0])
+            for index, entity in enumerate(entities)
+        ) / total_mass
+        barycenter_y_m = sum(
+            entity.mass_kg * float(positions[index][1])
+            for index, entity in enumerate(entities)
+        ) / total_mass
+        return self._project(barycenter_x_m, barycenter_y_m, origin_x, origin_y, scale, center_x_m, center_y_m)
+
+    def _focused_body_barycenter_point(
+        self,
+        active_indices: set[int],
+        origin_x: float,
+        origin_y: float,
+        scale: float,
+        center_x_m: float,
+        center_y_m: float,
+    ) -> tuple[float, float] | None:
+        visible_indices = [
+            index
+            for index in active_indices
+            if 0 <= index < len(self.system.bodies) and self.system.bodies[index].visible
+        ]
+        if len(visible_indices) < 2:
+            return None
+        total_mass = sum(self.system.bodies[index].mass_kg for index in visible_indices)
+        if total_mass <= 0.0:
+            return None
+        barycenter_x_m = sum(
+            self.system.bodies[index].mass_kg * self.system.bodies[index].position_m[0]
+            for index in visible_indices
+        ) / total_mass
+        barycenter_y_m = sum(
+            self.system.bodies[index].mass_kg * self.system.bodies[index].position_m[1]
+            for index in visible_indices
+        ) / total_mass
+        return self._project(barycenter_x_m, barycenter_y_m, origin_x, origin_y, scale, center_x_m, center_y_m)
+
+    def _draw_shared_barycenter(self, cr, x: float, y: float) -> None:
+        cr.set_source_rgba(1.0, 0.08, 0.06, 0.95)
+        cr.arc(x, y, 3.0, 0.0, math.tau)
+        cr.fill()
 
     def _overview_positions(self):
         if self.overview_state is not None and self.overview_entity_ids == [entity.id for entity in self._overview_entities()]:
