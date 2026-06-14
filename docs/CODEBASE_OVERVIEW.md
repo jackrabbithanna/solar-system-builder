@@ -6,7 +6,7 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 
 - `src/main.py`: application object, app actions, About dialog, shortcuts dialog.
 - `src/window.py`: main GTK window controller, drawing, playback controls, body inspector, local-library actions.
-- `src/models.py`: schema-versioned `Body` and `SolarSystem` dataclasses with validation and JSON conversion.
+- `src/models.py`: schema-versioned `Body` and `SolarSystem` dataclasses with validation, parent-body relationships, migration, and JSON conversion.
 - `src/physics.py`: NumPy-backed simulation state, acceleration, low-level `step()`, user-facing `advance()`, and sampled `advance_with_samples()`.
 - `src/presets.py`: loads bundled Solar System and Dwarf Planets preset data from `src/presets/`.
 - `src/storage.py`: local JSON library using GLib app data paths.
@@ -20,6 +20,8 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 4. Completed states and sampled trail points are applied on the GTK main thread.
 5. `window.py` draws body positions and trails on a `GtkDrawingArea`.
 6. Save/duplicate writes `SolarSystem` JSON through `storage.Library`.
+
+`Body.parent_id` records display and authoring hierarchy, such as planets orbiting a star. Physics remains a flat N-body simulation over `SolarSystem.bodies`, so multiple stars naturally exert gravity on each other and their planets.
 
 ## Reset Flow
 

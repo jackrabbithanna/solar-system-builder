@@ -34,7 +34,7 @@ class UpdateSolarSystemPresetTests(unittest.TestCase):
 
     def test_apply_vectors_preserves_non_vector_fields(self):
         preset = {
-            "schema_version": 1,
+            "schema_version": 2,
             "id": "builtin-solar-system",
             "name": "Solar System",
             "epoch": "old",
@@ -49,6 +49,7 @@ class UpdateSolarSystemPresetTests(unittest.TestCase):
                     "position_m": [0, 0, 0],
                     "velocity_mps": [0, 0, 0],
                     "color": f"#{index:06x}",
+                    **({} if body_id == "sun" else {"parent_id": "sun"}),
                 }
                 for index, body_id in enumerate(update_solar_system_preset.TARGETS)
             ],
@@ -75,13 +76,14 @@ class UpdateSolarSystemPresetTests(unittest.TestCase):
             self.assertEqual(body["mass_kg"], original_body["mass_kg"])
             self.assertEqual(body["radius_m"], original_body["radius_m"])
             self.assertEqual(body["color"], original_body["color"])
+            self.assertEqual(body.get("parent_id"), original_body.get("parent_id"))
             self.assertNotEqual(body["position_m"], original_body["position_m"])
             self.assertNotEqual(body["velocity_mps"], original_body["velocity_mps"])
 
     def test_apply_vectors_accepts_dwarf_planet_target_set(self):
         targets = update_solar_system_preset.DWARF_PLANET_TARGETS
         preset = {
-            "schema_version": 1,
+            "schema_version": 2,
             "id": "builtin-dwarf-planets",
             "name": "Dwarf Planets",
             "epoch": "old",
@@ -96,6 +98,7 @@ class UpdateSolarSystemPresetTests(unittest.TestCase):
                     "position_m": [0, 0, 0],
                     "velocity_mps": [0, 0, 0],
                     "color": f"#{index:06x}",
+                    **({} if body_id == "sun" else {"parent_id": "sun"}),
                 }
                 for index, body_id in enumerate(targets)
             ],
@@ -117,17 +120,25 @@ class UpdateSolarSystemPresetTests(unittest.TestCase):
         self.assertEqual(len(updated["bodies"]), len(targets))
         self.assertEqual(updated["bodies"][-1]["id"], "orcus")
         self.assertEqual(updated["bodies"][-1]["position_m"], [1.0, 2.0, 3.0])
+        self.assertEqual(updated["bodies"][-1]["parent_id"], "sun")
 
     def test_dwarf_planet_targets_use_small_body_disambiguation(self):
         targets = update_solar_system_preset.DWARF_PLANET_TARGETS
 
-        self.assertEqual(targets["ceres"], "1;")
         self.assertEqual(targets["eris"], "136199;")
+        self.assertEqual(targets["orcus"], "90482;")
+        self.assertNotIn("ceres", targets)
         self.assertNotIn("sedna", targets)
+
+    def test_solar_system_targets_include_ceres_and_pluto(self):
+        targets = update_solar_system_preset.SOLAR_SYSTEM_TARGETS
+
+        self.assertEqual(targets["pluto"], "999")
+        self.assertEqual(targets["ceres"], "1;")
 
     def test_apply_vectors_requires_all_targets(self):
         preset = {
-            "schema_version": 1,
+            "schema_version": 2,
             "id": "builtin-solar-system",
             "name": "Solar System",
             "bodies": [],

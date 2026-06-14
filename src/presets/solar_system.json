@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "builtin-solar-system",
   "name": "Solar System",
   "epoch": "2026-06-14 00:00:00 TDB, JPL Horizons, solar-system barycentric",
@@ -39,7 +39,8 @@
         -41427.599218043986,
         -4466.372893456207
       ],
-      "color": "#b7b7ad"
+      "color": "#b7b7ad",
+      "parent_id": "sun"
     },
     {
       "id": "venus",
@@ -57,7 +58,8 @@
         -35172.62766347085,
         -470.3805024740717
       ],
-      "color": "#d6b27c"
+      "color": "#d6b27c",
+      "parent_id": "sun"
     },
     {
       "id": "earth",
@@ -75,7 +77,8 @@
         -3943.639376822162,
         -0.05038615568508931
       ],
-      "color": "#3a86ff"
+      "color": "#3a86ff",
+      "parent_id": "sun"
     },
     {
       "id": "mars",
@@ -93,7 +96,8 @@
         23911.77504738798,
         735.4051455978681
       ],
-      "color": "#c65d32"
+      "color": "#c65d32",
+      "parent_id": "sun"
     },
     {
       "id": "jupiter",
@@ -111,7 +115,8 @@
         -6389.725970316965,
         276.7805010547151
       ],
-      "color": "#d9a066"
+      "color": "#d9a066",
+      "parent_id": "sun"
     },
     {
       "id": "saturn",
@@ -129,7 +134,8 @@
         9565.141604578006,
         -97.97526811381773
       ],
-      "color": "#d7c27d"
+      "color": "#d7c27d",
+      "parent_id": "sun"
     },
     {
       "id": "uranus",
@@ -147,7 +153,8 @@
         2941.887623163757,
         89.3406056315469
       ],
-      "color": "#87d6d1"
+      "color": "#87d6d1",
+      "parent_id": "sun"
     },
     {
       "id": "neptune",
@@ -165,7 +172,46 @@
         5463.6895582390725,
         -108.0629239870325
       ],
-      "color": "#4d75d9"
+      "color": "#4d75d9",
+      "parent_id": "sun"
+    },
+    {
+      "id": "pluto",
+      "name": "Pluto",
+      "kind": "dwarf planet",
+      "mass_kg": 1.303e+22,
+      "radius_m": 1188300.0,
+      "position_m": [
+        2942504163239.284,
+        -4411609399108.988,
+        -379079938031.98553
+      ],
+      "velocity_mps": [
+        4658.428973024263,
+        1793.750433219713,
+        -1530.495986740084
+      ],
+      "color": "#c9b39a",
+      "parent_id": "sun"
+    },
+    {
+      "id": "ceres",
+      "name": "Ceres",
+      "kind": "dwarf planet",
+      "mass_kg": 9.38392e+20,
+      "radius_m": 469700.0,
+      "position_m": [
+        204548970333.0441,
+        357063143249.08014,
+        -26390223312.050583
+      ],
+      "velocity_mps": [
+        -15880.78896427128,
+        7683.558931796014,
+        3170.712265521805
+      ],
+      "color": "#9c9b94",
+      "parent_id": "sun"
     }
   ]
 }

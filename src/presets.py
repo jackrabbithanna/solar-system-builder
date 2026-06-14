@@ -14,6 +14,7 @@ from .models import SolarSystem
 BUILTIN_PRESET_FILES = (
     "solar_system.json",
     "dwarf_planets.json",
+    "binary_system.json",
 )
 
 

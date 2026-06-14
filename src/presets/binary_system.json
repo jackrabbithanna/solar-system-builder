@@ -1,0 +1,83 @@
+{
+  "schema_version": 2,
+  "id": "builtin-binary-system",
+  "name": "Binary System",
+  "epoch": "Fictional barycentric seed",
+  "description": "Built-in fictional binary-star system using SI units and barycentric state vectors.",
+  "bodies": [
+    {
+      "id": "primary-star",
+      "name": "Primary Star",
+      "kind": "star",
+      "mass_kg": 1.98847e+30,
+      "radius_m": 696340000.0,
+      "position_m": [
+        -74798935350.0,
+        0.0,
+        0.0
+      ],
+      "velocity_mps": [
+        0.0,
+        -21066.474963407215,
+        0.0
+      ],
+      "color": "#ffd166"
+    },
+    {
+      "id": "companion-star",
+      "name": "Companion Star",
+      "kind": "star",
+      "mass_kg": 1.98847e+30,
+      "radius_m": 626706000.0,
+      "position_m": [
+        74798935350.0,
+        0.0,
+        0.0
+      ],
+      "velocity_mps": [
+        0.0,
+        21066.474963407215,
+        0.0
+      ],
+      "color": "#f4a261"
+    },
+    {
+      "id": "inner-world",
+      "name": "Inner World",
+      "kind": "planet",
+      "mass_kg": 5.97237e+24,
+      "radius_m": 6371000.0,
+      "position_m": [
+        -37399467675.0,
+        0.0,
+        0.0
+      ],
+      "velocity_mps": [
+        0.0,
+        38499.339266550764,
+        0.0
+      ],
+      "color": "#3a86ff",
+      "parent_id": "primary-star"
+    },
+    {
+      "id": "outer-world",
+      "name": "Outer World",
+      "kind": "planet",
+      "mass_kg": 6.4171e+23,
+      "radius_m": 3389500.0,
+      "position_m": [
+        37399467675.0,
+        0.0,
+        0.0
+      ],
+      "velocity_mps": [
+        0.0,
+        -38499.339266550764,
+        0.0
+      ],
+      "color": "#2a9d8f",
+      "parent_id": "companion-star"
+    }
+  ]
+}

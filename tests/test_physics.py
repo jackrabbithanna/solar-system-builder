@@ -5,7 +5,7 @@ import numpy as np
 from src.constants import AU, DAY, G, SOLAR_MASS
 from src.models import Body
 from src.physics import SimulationState, acceleration, advance, advance_with_samples, step
-from src.presets import load_builtin_solar_system
+from src.presets import load_builtin_solar_system, load_builtin_solar_systems
 
 
 class PhysicsTests(unittest.TestCase):
@@ -114,6 +114,28 @@ class PhysicsTests(unittest.TestCase):
     def test_invalid_arrays_fail(self):
         with self.assertRaises(ValueError):
             acceleration(np.array([0.0]), np.zeros((1, 3)), np.zeros((1, 3)))
+
+    def test_binary_preset_stars_move(self):
+        binary = next(
+            system
+            for system in load_builtin_solar_systems()
+            if system.id == "builtin-binary-system"
+        )
+        start = SimulationState.from_bodies(binary.bodies)
+        state = start
+
+        for _ in range(10):
+            state = advance(state, DAY, "post_newtonian")
+
+        star_indices = [
+            index
+            for index, body in enumerate(binary.bodies)
+            if body.kind == "star"
+        ]
+        self.assertEqual(len(star_indices), 2)
+        for index in star_indices:
+            movement = np.linalg.norm(state.positions_m[index] - start.positions_m[index])
+            self.assertGreater(movement, 1.0e8)
 
 
 if __name__ == "__main__":

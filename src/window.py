@@ -182,7 +182,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
             box.set_margin_top(8)
             box.set_margin_bottom(8)
-            box.set_margin_start(10)
+            box.set_margin_start(10 + self._body_depth(body) * 18)
             box.set_margin_end(10)
             swatch = Gtk.DrawingArea()
             swatch.set_content_width(14)
@@ -190,7 +190,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             swatch.set_draw_func(self._draw_swatch, body.color)
             name = Gtk.Label(label=body.name, xalign=0)
             name.set_hexpand(True)
-            kind = Gtk.Label(label=body.kind)
+            kind = Gtk.Label(label=self._body_relationship_label(body))
             kind.add_css_class("dim-label")
             box.append(swatch)
             box.append(name)
@@ -201,21 +201,54 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _body_list_order(self) -> list[int]:
         if not self.system.bodies:
             return []
-        sun = next(
-            (
-                body
-                for body in self.system.bodies
-                if body.id == "sun" or body.kind == "star"
-            ),
-            self.system.bodies[0],
-        )
+        body_index_by_id = {
+            body.id: index
+            for index, body in enumerate(self.system.bodies)
+        }
+        children_by_parent_id: dict[str | None, list[int]] = {}
+        for index, body in enumerate(self.system.bodies):
+            children_by_parent_id.setdefault(body.parent_id, []).append(index)
 
-        def sort_key(index: int) -> tuple[float, str]:
-            body = self.system.bodies[index]
-            distance_m = math.dist(body.position_m, sun.position_m)
-            return (distance_m, body.name.casefold())
+        def sort_key(parent_index: int | None, child_index: int) -> tuple[int, float, str]:
+            body = self.system.bodies[child_index]
+            parent = self.system.bodies[parent_index] if parent_index is not None else None
+            distance_m = math.dist(body.position_m, parent.position_m) if parent is not None else 0.0
+            root_rank = 0 if body.kind == "star" else 1
+            return (root_rank, distance_m, body.name.casefold())
 
-        return sorted(range(len(self.system.bodies)), key=sort_key)
+        ordered: list[int] = []
+
+        def append_children(parent_id: str | None) -> None:
+            parent_index = body_index_by_id.get(parent_id) if parent_id is not None else None
+            for child_index in sorted(
+                children_by_parent_id.get(parent_id, []),
+                key=lambda index: sort_key(parent_index, index),
+            ):
+                ordered.append(child_index)
+                append_children(self.system.bodies[child_index].id)
+
+        append_children(None)
+        return ordered
+
+    def _body_depth(self, body: Body) -> int:
+        bodies_by_id = {item.id: item for item in self.system.bodies}
+        depth = 0
+        parent_id = body.parent_id
+        while parent_id is not None:
+            depth += 1
+            parent = bodies_by_id.get(parent_id)
+            if parent is None:
+                break
+            parent_id = parent.parent_id
+        return depth
+
+    def _body_relationship_label(self, body: Body) -> str:
+        if body.parent_id is None:
+            return body.kind
+        parent = next((item for item in self.system.bodies if item.id == body.parent_id), None)
+        if parent is None:
+            return body.kind
+        return f"orbits {parent.name}"
 
     def _select_body(self, index: int) -> None:
         if not self.system.bodies:

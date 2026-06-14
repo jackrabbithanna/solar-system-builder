@@ -36,14 +36,12 @@ SOLAR_SYSTEM_TARGETS = {
     "saturn": "699",
     "uranus": "799",
     "neptune": "899",
+    "pluto": "999",
+    "ceres": "1;",
 }
 
 DWARF_PLANET_TARGETS = {
     "sun": "10",
-    "earth": "399",
-    "jupiter": "599",
-    "saturn": "699",
-    "uranus": "799",
     "neptune": "899",
     "pluto": "999",
     "eris": "136199;",
@@ -51,7 +49,6 @@ DWARF_PLANET_TARGETS = {
     "makemake": "136472;",
     "gonggong": "225088;",
     "quaoar": "50000;",
-    "ceres": "1;",
     "orcus": "90482;",
 }
 
