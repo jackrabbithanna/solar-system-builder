@@ -271,10 +271,14 @@
                         </child>
                         <child>
                           <object class="GtkButton" id="focus_button">
-                            <property name="icon-name">zoom-fit-best-symbolic</property>
                             <property name="tooltip-text" translatable="yes">Focus and fit this system</property>
                             <property name="visible">False</property>
                             <property name="valign">center</property>
+                            <property name="child">
+                              <object class="GtkImage">
+                                <property name="resource">/io/github/jackrabbithanna/solarsystembuilder/icons/focus-fit-symbolic.svg</property>
+                              </object>
+                            </property>
                           </object>
                         </child>
                       </object>

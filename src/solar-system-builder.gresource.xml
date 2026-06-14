@@ -6,6 +6,7 @@
     <file>icons/step-backward-symbolic.svg</file>
     <file>icons/reset-symbolic.svg</file>
     <file>icons/reset-zoom-symbolic.svg</file>
+    <file>icons/focus-fit-symbolic.svg</file>
     <file>icons/step-forward-symbolic.svg</file>
   </gresource>
 </gresources>
