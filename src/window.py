@@ -73,6 +73,9 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.canvas.set_draw_func(self._draw)
         self.canvas.set_has_tooltip(True)
         self.canvas.connect("query-tooltip", self._on_canvas_query_tooltip)
+        click_controller = Gtk.GestureClick.new()
+        click_controller.connect("pressed", self._on_canvas_pressed)
+        self.canvas.add_controller(click_controller)
         scroll_controller = Gtk.EventControllerScroll.new(Gtk.EventControllerScrollFlags.VERTICAL)
         scroll_controller.connect("scroll", self._on_canvas_scroll)
         self.canvas.add_controller(scroll_controller)
@@ -259,6 +262,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         if body_index != self.selected_index:
             self.selected_index = body_index
             self._load_body_editor(self.system.bodies[body_index])
+            self.canvas.queue_draw()
 
     def _on_system_selected(self, dropdown, _param) -> None:
         selected = dropdown.get_selected()
@@ -300,11 +304,18 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         return False
 
     def _on_canvas_query_tooltip(self, _widget, x: int, y: int, _keyboard_mode: bool, tooltip) -> bool:
-        body = self._body_at_canvas_point(float(x), float(y))
-        if body is None:
+        body_index = self._body_index_at_canvas_point(float(x), float(y))
+        if body_index is None:
             return False
-        tooltip.set_text(body.name)
+        tooltip.set_text(self.system.bodies[body_index].name)
         return True
+
+    def _on_canvas_pressed(self, _gesture, _n_press: int, x: float, y: float) -> None:
+        body_index = self._body_index_at_canvas_point(x, y)
+        if body_index is None:
+            return
+        self._select_body(body_index)
+        self.canvas.queue_draw()
 
     def _set_zoom_factor(self, zoom_factor: float) -> None:
         self.zoom_factor = max(1.0, min(64.0, zoom_factor))
@@ -463,7 +474,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         )
         return min(width, height) * 0.45 / max(max_distance, AU) * self.zoom_factor
 
-    def _body_at_canvas_point(self, pointer_x: float, pointer_y: float) -> Body | None:
+    def _body_index_at_canvas_point(self, pointer_x: float, pointer_y: float) -> int | None:
         if not self.system.bodies:
             return None
 
@@ -475,20 +486,20 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         scale = self._canvas_scale(width, height)
         origin_x = width / 2.0
         origin_y = height / 2.0
-        closest_body = None
+        closest_index = None
         closest_distance = math.inf
 
-        for body in self.system.bodies:
+        for index, body in enumerate(self.system.bodies):
             if not body.visible:
                 continue
             body_x, body_y = self._project(body.position_m[0], body.position_m[1], origin_x, origin_y, scale)
             distance = math.hypot(pointer_x - body_x, pointer_y - body_y)
             hit_radius = max(self._display_radius(body) + 4.0, 8.0)
             if distance <= hit_radius and distance < closest_distance:
-                closest_body = body
+                closest_index = index
                 closest_distance = distance
 
-        return closest_body
+        return closest_index
 
     def _project(self, x_m: float, y_m: float, origin_x: float, origin_y: float, scale: float) -> tuple[float, float]:
         return origin_x + x_m * scale, origin_y - y_m * scale
