@@ -2,6 +2,12 @@
 
 Solar System Builder is a Python GNOME  / GTK4 / Libadwaita application for configuring and simulating solar systems. It currently provides a 2D top-down orbital view, a bundled Solar System preset, editable body parameters, local JSON persistence, and a NumPy-backed physics core with a first post-Newtonian approximation.
 
+## Using the App
+
+Use the canvas to inspect bodies, select objects, view trails, and zoom into the active simulation. The controls below the canvas set the visible time step, accuracy profile, view mode, and simulation scope. The right sidebar switches systems, saves or duplicates them, and edits the selected body's mass, position, and velocity.
+
+For a full guide to the canvas controls and simulation settings, see `docs/USER_INTERFACE.md`.
+
 ## Development
 
 Configure and test with Meson:
@@ -23,6 +29,7 @@ GNOME Builder runs the app inside the Flatpak sandbox described by `io.github.ja
 
 Start with:
 
+- `docs/USER_INTERFACE.md`
 - `docs/CODEBASE_OVERVIEW.md`
 - `docs/PHYSICS.md`
 - `docs/GTK_PLAYBACK.md`

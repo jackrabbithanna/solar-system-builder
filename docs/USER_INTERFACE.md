@@ -1,0 +1,138 @@
+# User Interface
+
+Solar System Builder opens to a 2D, top-down simulation canvas with playback controls, simulation settings, and a right-side editor for saved systems and bodies.
+
+## Canvas
+
+The canvas shows the active simulation view.
+
+- Colored dots represent visible bodies, or group markers when the app is showing a system overview.
+- Faint colored lines show orbital trails collected during playback and manual stepping.
+- A white ring marks the selected body or selected overview group.
+- A small red dot marks the shared barycenter when the visible active set has enough mass data to compute one.
+- In Hybrid Focus mode, muted markers and trails show outside context while the focused subsystem remains the main active view.
+
+Move the pointer over a body or group marker to see its name. Click a body to select it in the body list and load its editable properties. In System Overview mode, click a group marker to select that group.
+
+Scroll over the canvas to zoom. Scrolling up zooms in and scrolling down zooms out.
+
+## Canvas Zoom Controls
+
+The canvas has overlay zoom buttons in the upper-right corner.
+
+- Zoom Out reduces the current zoom level.
+- Reset Zoom returns the canvas to the fitted default zoom.
+- Zoom In increases the current zoom level.
+
+Zoom is clamped between the default fitted scale and the maximum zoom level. Zoom Out and Reset Zoom are disabled while the canvas is already at the default fitted scale.
+
+## Playback Controls
+
+The header bar contains the main simulation controls.
+
+- Play or pause starts and stops continuous simulation playback.
+- Step backward moves the simulation back by one visible time step.
+- Reset to loaded state stops playback and restores the current system to the state it had when it was loaded or last saved.
+- Step forward moves the simulation forward by one visible time step.
+
+The label below the canvas shows the current elapsed simulation time. Playback and stepping append trails for active bodies or overview markers.
+
+## Simulation Settings
+
+Simulation settings are shown below the canvas. They are saved with the current system when you save or duplicate it.
+
+### Time / step
+
+Time / step controls the visible simulation interval used by Step Forward, Step Backward, and each playback update. The numeric field sets the amount, and the unit menu sets the scale.
+
+Available time units:
+
+- Days
+- Years
+- Decades
+- Centuries
+- Millennia
+- Myr
+
+This is a user-facing playback interval, not a single physics integrator step. The app internally breaks large visible steps into smaller substeps to keep the simulation stable and to draw smoother trails.
+
+### Simulation Accuracy
+
+The accuracy menu controls how small the internal simulation substeps should be.
+
+- High uses smaller internal steps for more accurate motion.
+- Balanced is the default tradeoff between speed and accuracy.
+- Fast allows larger internal steps for quicker playback.
+
+The window subtitle shows the effective simulation scope and the current maximum internal step in days.
+
+### View Scale Mode
+
+The view mode controls how the canvas is centered and scaled.
+
+- Fit System centers the full active system around its mass-weighted center and fits it into the canvas.
+- Follow Selected centers the view around the selected body, the selected body's parent, or the selected group.
+- Log Overview compresses large distances so wide systems can be inspected more easily.
+
+Changing the view mode clears existing trails because the active display context may change.
+
+### Simulation Scope
+
+The simulation scope controls which bodies or system markers are actively advanced and displayed.
+
+- Auto chooses a scope from the current system, view mode, and focus state.
+- System Overview simulates and displays high-level group barycenters instead of every body.
+- Full N-body simulates all bodies together.
+- Stellar Overview simulates root stars in multi-star systems.
+- Focused Subsystem simulates the selected body or group context, such as a star and its descendants.
+- Hybrid Focus simulates a focused subsystem while showing outside context as muted overview markers.
+
+Auto uses System Overview for Log Overview when the system has multiple overview groups, Focused Subsystem for Follow Selected, Stellar Overview for multi-star root systems, and Full N-body otherwise. Using the Focus and Fit button switches Auto into a hybrid focused context.
+
+## Focus and Selection
+
+The body list on the right shows groups and bodies in hierarchical order. Group rows show a group type and body count. Body rows show a color swatch, the body name, and relationship text such as the parent it orbits or the nearest other star.
+
+Selecting a body loads its editable properties. Selecting a group loads a group focus view and disables body-specific edit fields.
+
+The Focus and Fit button appears when the selected body or group has a focusable subsystem. Activating it:
+
+- sets the view mode to Follow Selected,
+- sets the simulation scope to Auto,
+- resets canvas zoom,
+- chooses a visible time step suitable for the focused bodies,
+- clears existing trails.
+
+## System Controls
+
+The system menu in the header switches between bundled presets and saved systems.
+
+- Duplicate current system creates a saved copy of the current system.
+- Save current system writes the current system to the local library. Saving a bundled preset first creates a user-saved copy.
+- Delete saved system removes the selected user-saved system. Bundled presets cannot be deleted.
+
+The System Name field can rename user-saved systems. Bundled presets are read-only until saved or duplicated.
+
+## Body Editor
+
+The right-side editor shows fields for the selected body.
+
+- Distance Unit changes the unit used by the X and Y position fields.
+- Mass (kg) edits the body mass in kilograms.
+- X and Y edit the body's 2D position in the selected distance unit.
+- VX and VY edit the body's velocity in meters per second.
+
+Position units available in the editor:
+
+- km
+- AU
+- kAU
+- ly
+
+Changing mass, position, or velocity rebuilds the simulation state and clears existing trails. The physics model stores values internally in SI units: kilograms, meters, meters per second, and seconds.
+
+When a body has a parent, the distance panel shows its distance to that parent. For root stars in multi-star systems, it shows distances to the other stars.
+
+## App Menu
+
+The main menu contains Preferences, Keyboard Shortcuts, and About Solar System Builder. The current shortcuts dialog lists shortcuts for showing keyboard shortcuts and quitting the app.
