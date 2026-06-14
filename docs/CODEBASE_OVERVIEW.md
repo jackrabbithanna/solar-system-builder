@@ -7,17 +7,17 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 - `src/main.py`: application object, app actions, About dialog, shortcuts dialog.
 - `src/window.py`: main GTK window controller, drawing, playback controls, body inspector, local-library actions.
 - `src/models.py`: schema-versioned `Body` and `SolarSystem` dataclasses with validation and JSON conversion.
-- `src/physics.py`: NumPy-backed simulation state, acceleration, low-level `step()`, and user-facing `advance()`.
-- `src/presets.py`: loads bundled preset data from `src/presets/`.
+- `src/physics.py`: NumPy-backed simulation state, acceleration, low-level `step()`, user-facing `advance()`, and sampled `advance_with_samples()`.
+- `src/presets.py`: loads bundled Solar System and Dwarf Planets preset data from `src/presets/`.
 - `src/storage.py`: local JSON library using GLib app data paths.
 - `src/constants.py`: SI constants used by physics and UI conversion.
 
 ## Data Flow
 
-1. `load_builtin_solar_system()` loads JSON preset data into a `SolarSystem`.
+1. `load_builtin_solar_system()` or `load_builtin_solar_systems()` loads JSON preset data into `SolarSystem` objects.
 2. `SimulationState.from_bodies()` copies masses, positions, and velocities into NumPy arrays.
-3. Playback advances `SimulationState` through `physics.advance()`.
-4. Completed states are applied back to `Body` objects on the GTK main thread.
+3. Playback advances `SimulationState` through `physics.advance_with_samples()` so internal substep positions can be reused for dense trails.
+4. Completed states and sampled trail points are applied on the GTK main thread.
 5. `window.py` draws body positions and trails on a `GtkDrawingArea`.
 6. Save/duplicate writes `SolarSystem` JSON through `storage.Library`.
 
@@ -32,6 +32,7 @@ Tests live in `tests/` and are registered through `tests/meson.build`.
 - `test_models.py`: model validation and preset round trips.
 - `test_physics.py`: orbital stability, 1PN differences, invalid arrays, large-step regression coverage.
 - `test_storage.py`: local library save/load/list/delete.
+- `test_update_solar_system_preset.py`: preset update script behavior.
 
 Run:
 

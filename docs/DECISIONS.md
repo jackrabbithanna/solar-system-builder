@@ -16,15 +16,19 @@ The app uses a practical first post-Newtonian approximation for solar-system sca
 
 ## User Step Versus Integrator Step
 
-The UI `Days / step` value is the visible simulation interval. It must not be used directly as one large integrator step. Use `physics.advance()` for substepping.
+The UI `Days / step` value is the visible simulation interval. It must not be used directly as one large integrator step. Use `physics.advance()` for final-state-only callers and `physics.advance_with_samples()` for UI playback.
+
+## Trail Sampling
+
+UI trails are sampled from bounded physics substeps, not just from the final position of each visible UI step. This keeps high `Days / step` playback from drawing sparse line segments that make inner orbits look artificially angular or rosette-like.
 
 ## Local JSON Library
 
 User-created systems are stored as JSON in the app data directory. Document import/export is a later feature.
 
-## Bundled Preset
+## Bundled Presets
 
-The initial Solar System is bundled as versioned JSON data. It is treated as a read-only template; user edits should create or save a local copy.
+Bundled systems are versioned JSON data. They are treated as read-only templates; user edits should create or save a local copy.
 
 ## Main-Thread GTK Updates
 

@@ -8,13 +8,11 @@ Potential follow-up work for future sessions.
 - Add editable body radius, kind, color, visibility, and trail settings.
 - Add explicit reset-to-bundled-preset and reset-to-last-save variants if users need separate commands beyond the current loaded-state reset.
 - Add import/export of `.json` solar-system documents.
-- Add a better bundled Solar System dataset with a real named epoch and barycentric positions.
 
 ## Canvas And Interaction
 
-- Add pan and zoom controls.
+- Add pan controls.
 - Add fixed zoom or follow-selected-body modes.
-- Add click-to-select bodies on the canvas.
 - Add orbit/trail display options.
 - Add visual indication while playback simulation is running.
 

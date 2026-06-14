@@ -4,13 +4,13 @@ GTK widgets must only be touched on the GTK main thread.
 
 ## Why Playback Uses A Worker
 
-Stable playback uses `physics.advance()`, which may run many 1-day internal substeps for a single user-visible interval. At `Days / step = 30`, this can take longer than a 33 ms GTK timer tick. Running it synchronously in `_tick()` starves GTK redraw and input handling.
+Stable playback uses `physics.advance_with_samples()`, which may run many 1-day internal substeps for a single user-visible interval. At `Days / step = 30`, this can take longer than a 33 ms GTK timer tick. Running it synchronously in `_tick()` starves GTK redraw and input handling.
 
 ## Threading Model
 
 - `window.py` owns a single `ThreadPoolExecutor`.
 - The worker receives a copied `SimulationState`.
-- The worker runs physics only.
+- The worker runs physics only and returns the final `SimulationState` plus copied position samples.
 - The worker must not mutate `Body` objects.
 - The worker must not call GTK APIs.
 - Completion is handed back to the main thread with `GLib.idle_add(...)`.
@@ -21,10 +21,12 @@ Completed states are applied by `_apply_simulation_state(...)` on the GTK main t
 
 - `self.state`
 - body positions and velocities
-- trails
+- trails from sampled physics positions
 - selected body editor fields
 - time label
 - drawing area invalidation
+
+Trails are appended on the GTK main thread from the sampled positions returned by `advance_with_samples()`. The stored trail history is capped by `TRAIL_POINT_LIMIT` in `window.py`.
 
 ## Stale Result Guard
 
