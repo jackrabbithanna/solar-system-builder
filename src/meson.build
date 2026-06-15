@@ -28,6 +28,7 @@ configure_file(
 
 solar_system_builder_sources = [
   '__init__.py',
+  'canvas.py',
   'constants.py',
   'hierarchy.py',
   'main.py',

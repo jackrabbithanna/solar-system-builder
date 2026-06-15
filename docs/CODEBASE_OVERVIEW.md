@@ -5,7 +5,8 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 ## Main Modules
 
 - `src/main.py`: application object, app actions, About dialog, shortcuts dialog.
-- `src/window.py`: main GTK window controller, drawing, playback controls, body inspector, local-library actions.
+- `src/window.py`: main GTK window coordinator, playback controls, body inspector, local-library actions, and main-thread state application.
+- `src/canvas.py`: `SolarSystemCanvas` GTK drawing widget, canvas gestures/tooltips, zoom state, and body/group selection signals.
 - `src/models.py`: schema-versioned `Body`, `SystemGroup`, and `SolarSystem` dataclasses with validation, parent-body relationships, group hierarchy, migration, and JSON conversion.
 - `src/orbits.py`: pure Keplerian orbit conversion helpers for generating Cartesian simulation state from optional orbital metadata.
 - `src/physics.py`: NumPy-backed simulation state, acceleration, low-level `step()`, user-facing `advance()`, and sampled `advance_with_samples()`.
@@ -25,8 +26,9 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 4. The UI chooses an active simulation scope, such as full N-body, system overview, stellar overview, focused subsystem, or hybrid focused context.
 5. `playback.py` builds copied active/overview `SimulationState` data for workers. Playback advances those copies through `physics.advance_with_samples()` so internal substep positions can be reused for dense trails.
 6. Completed active body states are merged back into the full UI state on the GTK main thread; temporary overview/context states update elapsed time and group trails without mutating bodies.
-7. `viewport.py` computes view centers, canvas scales, projected points, barycenters, and hit-test targets. `window.py` still performs Cairo drawing on the `GtkDrawingArea`.
-8. Save/duplicate writes `SolarSystem` JSON through `storage.Library`.
+7. `window.py` builds a `CanvasScene` snapshot from main-thread state and passes it to `SolarSystemCanvas`.
+8. `canvas.py` draws body positions/trails, system overview group positions/trails, or focused bodies with muted context markers, while delegating coordinate math and hit tests to `viewport.py`.
+9. Save/duplicate writes `SolarSystem` JSON through `storage.Library`.
 
 `Body.parent_id` records local orbital/display parentage, such as planets orbiting a star. Body descendant chains can be used as focus targets, which also supports future planet-and-moon systems. Optional `Body.orbit` and `Body.data_source` records preserve user-entered orbital/source metadata for generating approximate initial state vectors, but `position_m` and `velocity_mps` remain the canonical simulation state. `SystemGroup` records larger semantic hierarchy, such as a binary subsystem or a planetary system. Physics remains a flat N-body simulation over the active body set, so groups do not constrain gravity by themselves.
 

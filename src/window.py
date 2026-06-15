@@ -17,7 +17,8 @@ gi.require_version("Adw", "1")
 
 from gi.repository import Adw, Gdk, GLib, Gtk
 
-from . import hierarchy, playback, viewport
+from . import hierarchy, playback
+from .canvas import CanvasScene, SolarSystemCanvas
 from .constants import AU, DAY
 from .models import Body, DataSource, ModelError, OrbitData, SolarSystem, SystemGroup
 from .orbits import (
@@ -39,7 +40,6 @@ from .scales import (
     SIMULATION_SCOPE_LABELS,
     OverviewEntity,
     active_body_indices,
-    collapsed_child_counts,
     derived_max_step_s,
     derived_overview_max_step_s,
     distance_between_bodies_m,
@@ -153,15 +153,9 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._setup_dropdown(self.simulation_scope_dropdown, SIMULATION_SCOPE_LABELS)
         self._setup_dropdown(self.distance_unit_dropdown, DISTANCE_UNITS)
 
-        self.canvas.set_draw_func(self._draw)
-        self.canvas.set_has_tooltip(True)
-        self.canvas.connect("query-tooltip", self._on_canvas_query_tooltip)
-        click_controller = Gtk.GestureClick.new()
-        click_controller.connect("pressed", self._on_canvas_pressed)
-        self.canvas.add_controller(click_controller)
-        scroll_controller = Gtk.EventControllerScroll.new(Gtk.EventControllerScrollFlags.VERTICAL)
-        scroll_controller.connect("scroll", self._on_canvas_scroll)
-        self.canvas.add_controller(scroll_controller)
+        self.canvas.connect("body-selected", self._on_canvas_body_selected)
+        self.canvas.connect("group-selected", self._on_canvas_group_selected)
+        self.canvas.connect("zoom-factor-changed", self._on_canvas_zoom_factor_changed)
         self.play_button.connect("clicked", self._on_play_clicked)
         self.step_back_button.connect("clicked", self._on_step_back_clicked)
         self.reset_button.connect("clicked", self._on_reset_clicked)
@@ -258,7 +252,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._load_settings_editor()
         self._update_title()
         self._update_time_label()
-        self.canvas.queue_draw()
+        self._refresh_canvas()
 
     def _body_index_for_id(self, body_id: str | None) -> int:
         if body_id is None:
@@ -418,7 +412,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.selected_group_id = group_id
             self._load_group_focus(group_id)
             self._update_title()
-        self.canvas.queue_draw()
+        self._refresh_canvas()
 
     def _load_body_editor(self, body: Body) -> None:
         self.editing = True
@@ -746,7 +740,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._populate_body_list()
         self._select_body(self._body_index_for_id(selected_body_id))
         self._update_title()
-        self.canvas.queue_draw()
+        self._refresh_canvas()
 
     def _on_mass_focus_changed(self, entry, _param) -> None:
         if not entry.has_focus():
@@ -805,7 +799,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.focus_target = None
             self._clear_dynamic_simulation_state()
             self._update_title()
-            self.canvas.queue_draw()
+            self._refresh_canvas()
 
     def _on_simulation_scope_changed(self, dropdown, _param) -> None:
         if self.editing:
@@ -815,7 +809,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.system.settings.simulation_scope = SIMULATION_SCOPE_LABELS[selected][1]
             self._clear_dynamic_simulation_state()
             self._update_title()
-            self.canvas.queue_draw()
+            self._refresh_canvas()
 
     def _on_distance_unit_changed(self, dropdown, _param) -> None:
         if self.editing:
@@ -857,7 +851,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._load_body_editor(body)
         self._refresh_body_relationship_labels()
         self._update_title()
-        self.canvas.queue_draw()
+        self._refresh_canvas()
 
     def _on_generate_group_orbit_clicked(self, _button) -> None:
         if self.editing or self.selected_group_id is None:
@@ -966,7 +960,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._populate_body_list()
         self._refresh_body_relationship_labels()
         self._update_title()
-        self.canvas.queue_draw()
+        self._refresh_canvas()
 
     def _show_error_dialog(self, title: str, message: str) -> None:
         dialog = Adw.AlertDialog.new(title, message)
@@ -1005,7 +999,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._clear_dynamic_simulation_state()
         self._load_settings_editor()
         self._update_title()
-        self.canvas.queue_draw()
+        self._refresh_canvas()
 
     def _on_delete_system_clicked(self, _button) -> None:
         if not self._system_is_user_saved():
@@ -1053,7 +1047,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
                 self.selected_group_id = group_id
                 self._load_group_focus(group_id)
                 self._update_title()
-                self.canvas.queue_draw()
+                self._refresh_canvas()
             return
 
         body_index = int(row_id)
@@ -1064,7 +1058,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.focus_group_id = self._group_id_for_body_index(body_index)
             self._load_body_editor(self.system.bodies[body_index])
             self._update_title()
-            self.canvas.queue_draw()
+            self._refresh_canvas()
 
     def _on_system_selected(self, dropdown, _param) -> None:
         if self.updating_system_dropdown:
@@ -1098,42 +1092,27 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _on_zoom_in_clicked(self, _button) -> None:
         self._set_zoom_factor(self.zoom_factor * 1.5)
 
-    def _on_canvas_scroll(self, _controller, _dx: float, dy: float) -> bool:
-        if dy < 0.0:
-            self._set_zoom_factor(self.zoom_factor * 1.5)
-            return True
-        if dy > 0.0:
-            self._set_zoom_factor(self.zoom_factor / 1.5)
-            return True
-        return False
+    def _on_canvas_body_selected(self, _canvas: SolarSystemCanvas, body_index: int) -> None:
+        self._select_body(body_index)
+        self._refresh_canvas()
 
-    def _on_canvas_query_tooltip(self, _widget, x: int, y: int, _keyboard_mode: bool, tooltip) -> bool:
-        body_index = self._body_index_at_canvas_point(float(x), float(y))
-        if body_index is not None:
-            tooltip.set_text(self.system.bodies[body_index].name)
-            return True
-        entity = self._overview_entity_at_canvas_point(float(x), float(y))
-        if entity is not None:
-            tooltip.set_text(entity.name)
-            return True
-        return False
+    def _on_canvas_group_selected(self, _canvas: SolarSystemCanvas, group_id: str) -> None:
+        self._select_group(group_id)
 
-    def _on_canvas_pressed(self, _gesture, _n_press: int, x: float, y: float) -> None:
-        body_index = self._body_index_at_canvas_point(x, y)
-        if body_index is not None:
-            self._select_body(body_index)
-            self.canvas.queue_draw()
-            return
-        entity = self._overview_entity_at_canvas_point(x, y)
-        if entity is not None and self._group_by_id(entity.id) is not None:
-            self._select_group(entity.id)
+    def _on_canvas_zoom_factor_changed(self, _canvas: SolarSystemCanvas, zoom_factor: float) -> None:
+        self.zoom_factor = zoom_factor
+        self._sync_zoom_controls()
 
     def _set_zoom_factor(self, zoom_factor: float) -> None:
-        self.zoom_factor = viewport.clamp_zoom_factor(zoom_factor)
+        self.canvas.set_zoom_factor(zoom_factor)
+        self.zoom_factor = self.canvas.get_zoom_factor()
+        self._sync_zoom_controls()
+        self._refresh_canvas()
+
+    def _sync_zoom_controls(self) -> None:
         self.zoom_out_button.set_sensitive(self.zoom_factor > 1.0)
         self.reset_zoom_button.set_sensitive(self.zoom_factor > 1.0)
         self.zoom_in_button.set_sensitive(self.zoom_factor < 64.0)
-        self.canvas.queue_draw()
 
     def _on_reset_clicked(self, _button) -> None:
         selected_body_id = None
@@ -1333,7 +1312,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         else:
             self._load_body_editor(self.system.bodies[self.selected_index])
         self._update_time_label()
-        self.canvas.queue_draw()
+        self._refresh_canvas()
 
     def _apply_hybrid_simulation_state(
         self,
@@ -1359,7 +1338,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         else:
             self._load_body_editor(self.system.bodies[self.selected_index])
         self._update_time_label()
-        self.canvas.queue_draw()
+        self._refresh_canvas()
 
     def _apply_overview_simulation_state(self, state: SimulationState, position_samples, start_elapsed_s: float) -> None:
         self.overview_state = state
@@ -1370,7 +1349,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         else:
             self._load_body_editor(self.system.bodies[self.selected_index])
         self._update_time_label()
-        self.canvas.queue_draw()
+        self._refresh_canvas()
 
     def _step_seconds(self) -> float:
         selected = self.time_unit_dropdown.get_selected()
@@ -1448,357 +1427,46 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _update_time_label(self) -> None:
         self.time_label.set_label(f"Simulation time: {format_elapsed_time(self.state.elapsed_s)}")
 
-    def _draw(self, _area, cr, width: int, height: int) -> None:
-        cr.set_source_rgb(0.02, 0.025, 0.032)
-        cr.paint()
-        if not self.system.bodies:
-            return
-        if self._using_system_overview():
-            self._draw_system_overview(cr, width, height)
-            return
+    def _refresh_canvas(self) -> None:
+        self.canvas.set_scene(self._canvas_scene())
 
-        center_x_m, center_y_m = self._view_center()
-        scale = self._canvas_scale(width, height, center_x_m, center_y_m)
-        origin_x = width / 2.0
-        origin_y = height / 2.0
-        active_indices = set(self._active_body_indices())
-
-        cr.set_line_width(1.0)
-        for index, trail in enumerate(self.trails):
-            if index not in active_indices:
-                continue
-            if len(trail) < 2:
-                continue
-            rgba = self._rgba(self.system.bodies[index].color)
-            cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.35)
-            first_x, first_y = self._project(trail[0][0], trail[0][1], origin_x, origin_y, scale, center_x_m, center_y_m)
-            cr.move_to(first_x, first_y)
-            for point_x, point_y in trail[1:]:
-                x, y = self._project(point_x, point_y, origin_x, origin_y, scale, center_x_m, center_y_m)
-                cr.line_to(x, y)
-            cr.stroke()
-
-        for index, body in enumerate(self.system.bodies):
-            if index not in active_indices:
-                continue
-            if not body.visible:
-                continue
-            x, y = self._project(body.position_m[0], body.position_m[1], origin_x, origin_y, scale, center_x_m, center_y_m)
-            radius = self._display_radius(body)
-            rgba = self._rgba(body.color)
-            cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.95)
-            cr.arc(x, y, radius, 0.0, math.tau)
-            cr.fill()
-            if index == self.selected_index:
-                cr.set_source_rgba(1.0, 1.0, 1.0, 0.85)
-                cr.set_line_width(2.0)
-                cr.arc(x, y, radius + 4.0, 0.0, math.tau)
-                cr.stroke()
-            self._draw_collapsed_child_indicator(cr, index, x, y, radius, active_indices)
-        barycenter = self._focused_body_barycenter_point(active_indices, origin_x, origin_y, scale, center_x_m, center_y_m)
-        if barycenter is not None:
-            self._draw_shared_barycenter(cr, barycenter[0], barycenter[1])
-        if self._using_hybrid_focus():
-            self._draw_context_entities(cr, origin_x, origin_y, scale, center_x_m, center_y_m)
-
-    def _draw_system_overview(self, cr, width: int, height: int) -> None:
-        entities = self._overview_entities()
-        positions = self._overview_positions()
-        if not entities or len(positions) == 0:
-            return
-        center_x_m, center_y_m = self._overview_view_center(entities, positions)
-        scale = self._overview_canvas_scale(width, height, positions, center_x_m, center_y_m)
-        origin_x = width / 2.0
-        origin_y = height / 2.0
-
-        cr.set_line_width(1.25)
-        for entity in entities:
-            trail = self.overview_trails.get(entity.id, [])
-            if len(trail) < 2:
-                continue
-            rgba = self._rgba(entity.color)
-            cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.45)
-            first_x, first_y = self._project(trail[0][0], trail[0][1], origin_x, origin_y, scale, center_x_m, center_y_m)
-            cr.move_to(first_x, first_y)
-            for point_x, point_y in trail[1:]:
-                x, y = self._project(point_x, point_y, origin_x, origin_y, scale, center_x_m, center_y_m)
-                cr.line_to(x, y)
-            cr.stroke()
-
-        for index, entity in enumerate(entities):
-            position = positions[index]
-            x, y = self._project(float(position[0]), float(position[1]), origin_x, origin_y, scale, center_x_m, center_y_m)
-            rgba = self._rgba(entity.color)
-            cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.95)
-            cr.arc(x, y, 7.0, 0.0, math.tau)
-            cr.fill()
-            if entity.id == self.selected_group_id:
-                cr.set_source_rgba(1.0, 1.0, 1.0, 0.85)
-                cr.set_line_width(2.0)
-                cr.arc(x, y, 12.0, 0.0, math.tau)
-                cr.stroke()
-
-        barycenter = self._shared_barycenter_point(entities, positions, origin_x, origin_y, scale, center_x_m, center_y_m)
-        if barycenter is not None:
-            self._draw_shared_barycenter(cr, barycenter[0], barycenter[1])
-
-    def _draw_context_entities(
-        self,
-        cr,
-        origin_x: float,
-        origin_y: float,
-        scale: float,
-        center_x_m: float,
-        center_y_m: float,
-    ) -> None:
-        entities = self._context_entities()
-        positions = self._context_positions()
-        if not entities or len(positions) == 0:
-            return
-
-        cr.set_line_width(1.0)
-        for entity in entities:
-            trail = self.context_trails.get(entity.id, [])
-            if len(trail) < 2:
-                continue
-            rgba = self._rgba(entity.color)
-            cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.22)
-            first_x, first_y = self._project(trail[0][0], trail[0][1], origin_x, origin_y, scale, center_x_m, center_y_m)
-            cr.move_to(first_x, first_y)
-            for point_x, point_y in trail[1:]:
-                x, y = self._project(point_x, point_y, origin_x, origin_y, scale, center_x_m, center_y_m)
-                cr.line_to(x, y)
-            cr.stroke()
-
-        for index, entity in enumerate(entities):
-            position = positions[index]
-            x, y = self._project(float(position[0]), float(position[1]), origin_x, origin_y, scale, center_x_m, center_y_m)
-            rgba = self._rgba(entity.color)
-            cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.45)
-            cr.arc(x, y, 5.0, 0.0, math.tau)
-            cr.fill()
-
-        barycenter = self._shared_barycenter_point(entities, positions, origin_x, origin_y, scale, center_x_m, center_y_m)
-        if barycenter is not None:
-            self._draw_shared_barycenter(cr, barycenter[0], barycenter[1])
-
-    def _shared_barycenter_point(
-        self,
-        entities: list[OverviewEntity],
-        positions,
-        origin_x: float,
-        origin_y: float,
-        scale: float,
-        center_x_m: float,
-        center_y_m: float,
-    ) -> tuple[float, float] | None:
-        return viewport.shared_barycenter_point(
-            entities,
-            positions,
-            origin_x,
-            origin_y,
-            scale,
-            center_x_m,
-            center_y_m,
-            self.system.settings.view_mode,
-        )
-
-    def _focused_body_barycenter_point(
-        self,
-        active_indices: set[int],
-        origin_x: float,
-        origin_y: float,
-        scale: float,
-        center_x_m: float,
-        center_y_m: float,
-    ) -> tuple[float, float] | None:
-        return viewport.focused_body_barycenter_point(
-            self.system.bodies,
-            active_indices,
-            origin_x,
-            origin_y,
-            scale,
-            center_x_m,
-            center_y_m,
-            self.system.settings.view_mode,
-        )
-
-    def _draw_shared_barycenter(self, cr, x: float, y: float) -> None:
-        cr.set_source_rgba(1.0, 0.08, 0.06, 0.95)
-        cr.arc(x, y, 3.0, 0.0, math.tau)
-        cr.fill()
-
-    def _overview_positions(self):
-        if self.overview_state is not None and self.overview_entity_ids == [entity.id for entity in self._overview_entities()]:
-            return self.overview_state.positions_m
-        return [entity.position_m for entity in self._overview_entities()]
-
-    def _overview_view_center(self, entities: list[OverviewEntity], positions) -> tuple[float, float]:
-        return viewport.overview_view_center(entities, positions)
-
-    def _overview_canvas_scale(self, width: int, height: int, positions, center_x_m: float, center_y_m: float) -> float:
-        return viewport.overview_canvas_scale(
-            width,
-            height,
-            positions,
-            center_x_m,
-            center_y_m,
-            self.zoom_factor,
-            self.system.settings.view_mode,
-        )
-
-    def _canvas_scale(self, width: int, height: int, center_x_m: float, center_y_m: float) -> float:
-        return viewport.canvas_scale(
-            width,
-            height,
-            self.system.bodies,
-            self._active_body_indices(),
-            center_x_m,
-            center_y_m,
-            self.zoom_factor,
-            self.system.settings.view_mode,
-            use_focused_bounds=self._using_hybrid_focus(),
-        )
-
-    def _body_index_at_canvas_point(self, pointer_x: float, pointer_y: float) -> int | None:
-        if not self.system.bodies or self._using_system_overview():
-            return None
-
-        width = self.canvas.get_width()
-        height = self.canvas.get_height()
-        if width <= 0 or height <= 0:
-            return None
-
-        center_x_m, center_y_m = self._view_center()
-        scale = self._canvas_scale(width, height, center_x_m, center_y_m)
-        return viewport.body_index_at_point(
-            self.system.bodies,
-            self._active_body_indices(),
-            pointer_x,
-            pointer_y,
-            width,
-            height,
-            scale,
-            center_x_m,
-            center_y_m,
-            self.system.settings.view_mode,
-            self._display_radius,
-        )
-
-    def _overview_entity_at_canvas_point(self, pointer_x: float, pointer_y: float) -> OverviewEntity | None:
-        if not self.system.bodies:
-            return None
-
-        width = self.canvas.get_width()
-        height = self.canvas.get_height()
-        if width <= 0 or height <= 0:
-            return None
-
-        if self._using_system_overview():
-            entities = self._overview_entities()
-            positions = self._overview_positions()
-            if not entities or len(positions) == 0:
-                return None
-            center_x_m, center_y_m = self._overview_view_center(entities, positions)
-            scale = self._overview_canvas_scale(width, height, positions, center_x_m, center_y_m)
-            return self._entity_at_point(
-                entities,
-                positions,
-                pointer_x,
-                pointer_y,
-                scale,
-                center_x_m,
-                center_y_m,
-                12.0,
-            )
-
-        if self._using_hybrid_focus():
-            entities = self._context_entities()
-            positions = self._context_positions()
-            if not entities or len(positions) == 0:
-                return None
-            center_x_m, center_y_m = self._view_center()
-            scale = self._canvas_scale(width, height, center_x_m, center_y_m)
-            return self._entity_at_point(
-                entities,
-                positions,
-                pointer_x,
-                pointer_y,
-                scale,
-                center_x_m,
-                center_y_m,
-                10.0,
-            )
-
-        return None
-
-    def _entity_at_point(
-        self,
-        entities: list[OverviewEntity],
-        positions,
-        pointer_x: float,
-        pointer_y: float,
-        scale: float,
-        center_x_m: float,
-        center_y_m: float,
-        hit_radius: float,
-    ) -> OverviewEntity | None:
-        return viewport.entity_at_point(
-            entities,
-            positions,
-            pointer_x,
-            pointer_y,
-            self.canvas.get_width(),
-            self.canvas.get_height(),
-            scale,
-            center_x_m,
-            center_y_m,
-            self.system.settings.view_mode,
-            hit_radius,
-        )
-
-    def _project(
-        self,
-        x_m: float,
-        y_m: float,
-        origin_x: float,
-        origin_y: float,
-        scale: float,
-        center_x_m: float,
-        center_y_m: float,
-    ) -> tuple[float, float]:
-        return viewport.project(
-            x_m,
-            y_m,
-            origin_x,
-            origin_y,
-            scale,
-            center_x_m,
-            center_y_m,
-            self.system.settings.view_mode,
-        )
-
-    def _view_distance(self, x_m: float, y_m: float, center_x_m: float, center_y_m: float) -> float:
-        return viewport.view_distance(x_m, y_m, center_x_m, center_y_m, self.system.settings.view_mode)
-
-    def _view_center(self) -> tuple[float, float]:
+    def _canvas_scene(self) -> CanvasScene:
+        active_indices = self._active_body_indices()
+        using_hybrid_focus = self._using_hybrid_focus()
         selected_group_center = (
             self._group_center(self.selected_group_id)
             if self.system.settings.view_mode == "follow_selected" and self.selected_group_id is not None
             else None
         )
         hybrid_bounds = (
-            focused_canvas_bounds(self.system.bodies, self._active_body_indices())
-            if self._using_hybrid_focus()
+            focused_canvas_bounds(self.system.bodies, active_indices)
+            if using_hybrid_focus
             else None
         )
-        return viewport.body_view_center(
-            self.system.bodies,
-            self.system.settings.view_mode,
-            self.selected_index,
-            selected_group_center,
-            hybrid_bounds,
+        return CanvasScene(
+            bodies=self.system.bodies,
+            active_indices=active_indices,
+            selected_body_index=self.selected_index,
+            selected_group_id=self.selected_group_id,
+            selectable_group_ids={group.id for group in self.system.groups},
+            view_mode=self.system.settings.view_mode,
+            using_system_overview=self._using_system_overview(),
+            using_hybrid_focus=using_hybrid_focus,
+            selected_group_center=selected_group_center,
+            hybrid_bounds=hybrid_bounds,
+            trails=list(self.trails),
+            overview_entities=self._overview_entities(),
+            overview_positions=self._overview_positions(),
+            overview_trails=dict(self.overview_trails),
+            context_entities=self._context_entities(),
+            context_positions=self._context_positions(),
+            context_trails=dict(self.context_trails),
         )
+
+    def _overview_positions(self):
+        if self.overview_state is not None and self.overview_entity_ids == [entity.id for entity in self._overview_entities()]:
+            return self.overview_state.positions_m
+        return [entity.position_m for entity in self._overview_entities()]
 
     def _active_body_indices(self) -> list[int]:
         return active_body_indices(
@@ -1865,36 +1533,6 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _merge_active_state(self, active_state: SimulationState, active_indices: list[int]) -> None:
         playback.merge_active_state(self.state, active_state, active_indices)
 
-    def _draw_collapsed_child_indicator(
-        self,
-        cr,
-        body_index: int,
-        x: float,
-        y: float,
-        radius: float,
-        active_indices: set[int],
-    ) -> None:
-        count = collapsed_child_counts(self.system.bodies, list(active_indices)).get(body_index, 0)
-        if count <= 0:
-            return
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.45)
-        cr.set_line_width(1.0)
-        cr.arc(x, y, radius + 8.0, 0.0, math.tau)
-        cr.stroke()
-        marker_count = min(4, count)
-        marker_radius = 1.5
-        orbit_radius = radius + 8.0
-        for marker_index in range(marker_count):
-            angle = math.tau * marker_index / marker_count
-            cr.arc(
-                x + math.cos(angle) * orbit_radius,
-                y + math.sin(angle) * orbit_radius,
-                marker_radius,
-                0.0,
-                math.tau,
-            )
-            cr.fill()
-
     def _distance_factor(self) -> float:
         return unit_factor(DISTANCE_UNITS, self.system.settings.distance_unit)
 
@@ -1918,11 +1556,6 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             adjustment.set_step_increment(step)
             adjustment.set_page_increment(page)
             spin.set_digits(digits)
-
-    def _display_radius(self, body: Body) -> float:
-        if body.kind == "star":
-            return 8.5
-        return max(3.0, min(7.0, math.log10(body.radius_m) - 2.0))
 
     def _draw_swatch(self, _area, cr, width: int, height: int, color: str) -> None:
         rgba = self._rgba(color)

@@ -93,7 +93,7 @@
                     <property name="hexpand">True</property>
                     <property name="vexpand">True</property>
                     <child>
-                      <object class="GtkDrawingArea" id="canvas">
+                      <object class="SolarSystemCanvas" id="canvas">
                         <property name="hexpand">True</property>
                         <property name="vexpand">True</property>
                       </object>
