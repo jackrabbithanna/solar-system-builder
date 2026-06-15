@@ -29,23 +29,15 @@ from .orbits import (
     state_vectors_from_orbit,
     target_anchor,
 )
-from .physics import SimulationState, advance_with_samples
 from .presets import load_builtin_solar_system, load_builtin_solar_systems
 from .scales import (
     DISTANCE_UNITS,
-    OverviewEntity,
-    active_body_indices,
-    derived_max_step_s,
-    derived_overview_max_step_s,
     distance_between_bodies_m,
-    effective_simulation_scope,
-    context_overview_entities,
     focused_canvas_bounds,
     focused_visible_step_s,
     focus_target_body_indices,
     format_elapsed_time,
     recommended_trail_sample_interval_s,
-    system_overview_entities,
     unit_factor,
 )
 from .sidebar import BodyHierarchyList, BodyInspectorPanel, SystemPropertiesPanel
@@ -114,7 +106,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.systems: list[SolarSystem] = []
         self.system = load_builtin_solar_system()
         self.loaded_system_snapshot = self._clone_system(self.system)
-        self.state = SimulationState.from_bodies(self.system.bodies)
+        self.simulation = playback.SimulationSession.from_bodies(self.system.bodies)
         self.selected_index = 0
         self.focus_group_id: str | None = None
         self.focus_target: str | None = None
@@ -123,17 +115,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.editing = False
         self.updating_system_dropdown = False
         self.closed = False
-        self.simulation_generation = 0
         self.simulation_future: Future | None = None
         self.simulation_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="simulation")
-        self.trails: list[list[tuple[float, float]]] = [[] for _ in self.system.bodies]
-        self.overview_trails: dict[str, list[tuple[float, float]]] = {}
-        self.overview_state: SimulationState | None = None
-        self.overview_entity_ids: list[str] = []
-        self.context_trails: dict[str, list[tuple[float, float]]] = {}
-        self.context_state: SimulationState | None = None
-        self.context_entity_ids: list[str] = []
-        self.last_trail_sample_elapsed_s = self.state.elapsed_s
         self.zoom_factor = 1.0
         self.timer_id = GLib.timeout_add(33, self._tick)
 
@@ -256,13 +239,11 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.system = self._clone_system(system)
         if refresh_snapshot:
             self.loaded_system_snapshot = self._clone_system(self.system)
-        self.state = SimulationState.from_bodies(self.system.bodies)
-        self.simulation_generation += 1
+        self.simulation.replace_bodies(self.system.bodies)
         self.selected_index = self._body_index_for_id(selected_body_id)
         self.focus_group_id = self._group_id_for_body_index(self.selected_index)
         self.focus_target = None
         self.selected_group_id = None
-        self._clear_dynamic_simulation_state()
         self._populate_body_list()
         self._select_body(self.selected_index)
         self._load_system_editor()
@@ -360,14 +341,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         return None
 
     def _clear_dynamic_simulation_state(self) -> None:
-        self.trails = [[] for _ in self.system.bodies]
-        self.overview_trails = {}
-        self.overview_state = None
-        self.overview_entity_ids = []
-        self.context_trails = {}
-        self.context_state = None
-        self.context_entity_ids = []
-        self.last_trail_sample_elapsed_s = self.state.elapsed_s
+        self.simulation.clear_dynamic(self.system.bodies)
 
     def _set_body_editor_sensitive(self, sensitive: bool) -> None:
         self.body_inspector.set_body_editor_sensitive(
@@ -515,9 +489,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         body.position_m[1] = y_m
         body.velocity_mps[0] = vx_mps
         body.velocity_mps[1] = vy_mps
-        self.state = SimulationState.from_bodies(self.system.bodies)
-        self.simulation_generation += 1
-        self._clear_dynamic_simulation_state()
+        self.simulation.replace_bodies(self.system.bodies)
         self._populate_body_list()
         self._select_body(self._body_index_for_id(selected_body_id))
         self._update_title()
@@ -593,9 +565,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         body.data_source = self._data_source_from_orbit_editor()
         body.position_m = position_m
         body.velocity_mps = velocity_mps
-        self.state = SimulationState.from_bodies(self.system.bodies)
-        self.simulation_generation += 1
-        self._clear_dynamic_simulation_state()
+        self.simulation.replace_bodies(self.system.bodies)
         self._load_body_editor(body)
         self._refresh_body_relationship_labels()
         self._update_title()
@@ -674,9 +644,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         return self.body_inspector.data_source_from_orbit_editor()
 
     def _after_orbit_generated(self) -> None:
-        self.state = SimulationState.from_bodies(self.system.bodies)
-        self.simulation_generation += 1
-        self._clear_dynamic_simulation_state()
+        self.simulation.replace_bodies(self.system.bodies)
         self._populate_body_list()
         self._refresh_body_relationship_labels()
         self._update_title()
@@ -843,16 +811,16 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _on_save_clicked(self, _button) -> None:
         if self.system.id.startswith("builtin-"):
             self.system = self.system.duplicate()
-        self.state.apply_to_bodies(self.system.bodies)
+        self.simulation.apply_to_bodies(self.system.bodies)
         self.library.save(self.system)
         self.loaded_system_snapshot = self._clone_system(self.system)
-        self.simulation_generation += 1
+        self.simulation.increment_generation()
         self._reload_system_list()
         self._load_system_editor()
         self._update_title()
 
     def _on_duplicate_clicked(self, _button) -> None:
-        self.state.apply_to_bodies(self.system.bodies)
+        self.simulation.apply_to_bodies(self.system.bodies)
         duplicate = self.system.duplicate()
         self.library.save(duplicate)
         self._reload_system_list()
@@ -867,110 +835,36 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         return True
 
     def _advance(self, dt_s: float) -> None:
-        if self._using_system_overview():
-            state, position_samples = advance_with_samples(
-                self._overview_simulation_state(),
-                dt_s,
-                "post_newtonian",
-                self._max_step_seconds(),
-            )
-            self._apply_overview_simulation_state(state, position_samples, self.state.elapsed_s)
-            return
-
-        if self._using_hybrid_focus():
-            active_indices = self._active_body_indices()
-            active_state = self._simulation_state_for_indices(active_indices)
-            context_state = self._context_simulation_state()
-            focused_result, context_result = playback.advance_hybrid_simulations(
-                active_state,
-                context_state,
-                dt_s,
-                self._focused_max_step_seconds(),
-                self._context_max_step_seconds(),
-            )
-            state, position_samples = focused_result
-            self._apply_hybrid_simulation_state(
-                state,
-                position_samples,
-                active_indices,
-                context_result,
-                self.state.elapsed_s,
-            )
-            return
-
-        active_indices = self._active_body_indices()
-        active_state = self._simulation_state_for_indices(active_indices)
-        state, position_samples = advance_with_samples(
-            active_state,
-            dt_s,
-            "post_newtonian",
-            self._max_step_seconds(),
-        )
-        self._apply_simulation_state(state, position_samples, active_indices, self.state.elapsed_s)
+        job = self._simulation_job(dt_s)
+        result = playback.run_simulation_job(job)
+        if self.simulation.apply_result(result, self.system.bodies, self.system.groups, self.system.settings):
+            self._after_simulation_applied()
 
     def _queue_simulation_job(self) -> None:
         if self.closed or self.simulation_future is not None:
             return
 
-        dt_s = self._step_seconds()
-        generation = self.simulation_generation
-        if self._using_system_overview():
-            mode = "system_overview"
-            active_indices = []
-            state = self._overview_simulation_state()
-            self.simulation_future = self.simulation_executor.submit(
-                advance_with_samples,
-                state,
-                dt_s,
-                "post_newtonian",
-                self._max_step_seconds(),
-            )
-            start_elapsed_s = state.elapsed_s
-        elif self._using_hybrid_focus():
-            mode = "hybrid_focus"
-            active_indices = self._active_body_indices()
-            state = self._simulation_state_for_indices(active_indices)
-            context_state = self._context_simulation_state()
-            self.simulation_future = self.simulation_executor.submit(
-                playback.advance_hybrid_simulations,
-                state,
-                context_state,
-                dt_s,
-                self._focused_max_step_seconds(),
-                self._context_max_step_seconds(),
-            )
-            start_elapsed_s = state.elapsed_s
-        else:
-            mode = "body_detail"
-            active_indices = self._active_body_indices()
-            state = self._simulation_state_for_indices(active_indices)
-            self.simulation_future = self.simulation_executor.submit(
-                advance_with_samples,
-                state,
-                dt_s,
-                "post_newtonian",
-                self._max_step_seconds(),
-            )
-            start_elapsed_s = state.elapsed_s
+        job = self._simulation_job(self._step_seconds())
+        self.simulation_future = self.simulation_executor.submit(playback.run_simulation_job, job)
         self.simulation_future.add_done_callback(
             lambda future: GLib.idle_add(
                 self._finish_simulation_job,
                 future,
-                generation,
-                mode,
-                active_indices,
-                start_elapsed_s,
             )
         )
 
-    def _finish_simulation_job(
-        self,
-        future: Future,
-        generation: int,
-        mode: str,
-        active_indices: list[int],
-        start_elapsed_s: float,
-    ) -> bool:
+    def _simulation_job(self, dt_s: float) -> playback.SimulationJob:
+        return self.simulation.create_job(
+            self.system.bodies,
+            self.system.groups,
+            self.system.settings,
+            self.selected_index,
+            self.focus_group_id,
+            self.focus_target,
+            dt_s,
+        )
+
+    def _finish_simulation_job(self, future: Future) -> bool:
         if future is self.simulation_future:
             self.simulation_future = None
 
@@ -985,79 +879,16 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.play_button.set_icon_name("media-playback-start-symbolic")
             return False
 
-        if generation == self.simulation_generation and mode == "system_overview":
-            state, position_samples = result
-            self._apply_overview_simulation_state(state, position_samples, start_elapsed_s)
-        elif generation == self.simulation_generation and mode == "hybrid_focus":
-            focused_result, context_result = result
-            state, position_samples = focused_result
-            self._apply_hybrid_simulation_state(
-                state,
-                position_samples,
-                active_indices,
-                context_result,
-                start_elapsed_s,
-            )
-        elif generation == self.simulation_generation:
-            state, position_samples = result
-            self._apply_simulation_state(state, position_samples, active_indices, start_elapsed_s)
+        if self.simulation.apply_result(result, self.system.bodies, self.system.groups, self.system.settings):
+            self._after_simulation_applied()
 
         if self.playing:
             self._queue_simulation_job()
 
         return False
 
-    def _apply_simulation_state(
-        self,
-        state: SimulationState,
-        position_samples,
-        active_indices: list[int],
-        start_elapsed_s: float,
-    ) -> None:
-        self._merge_active_state(state, active_indices)
-        self.overview_trails = {}
-        self.overview_state = None
-        self.overview_entity_ids = []
-        self.state.apply_to_bodies(self.system.bodies)
-        self._append_trails(position_samples, active_indices, start_elapsed_s, state.elapsed_s)
+    def _after_simulation_applied(self) -> None:
         self._refresh_body_relationship_labels()
-        if self.selected_group_id is not None:
-            self._load_group_focus(self.selected_group_id)
-        else:
-            self._load_body_editor(self.system.bodies[self.selected_index])
-        self._update_time_label()
-        self._refresh_canvas()
-
-    def _apply_hybrid_simulation_state(
-        self,
-        state: SimulationState,
-        position_samples,
-        active_indices: list[int],
-        context_result,
-        start_elapsed_s: float,
-    ) -> None:
-        self._merge_active_state(state, active_indices)
-        self.overview_trails = {}
-        self.overview_state = None
-        self.overview_entity_ids = []
-        self.state.apply_to_bodies(self.system.bodies)
-        if context_result is not None:
-            context_state, context_samples = context_result
-            self.context_state = context_state
-            self._append_context_trails(context_samples, start_elapsed_s, context_state.elapsed_s)
-        self._append_trails(position_samples, active_indices, start_elapsed_s, state.elapsed_s)
-        self._refresh_body_relationship_labels()
-        if self.selected_group_id is not None:
-            self._load_group_focus(self.selected_group_id)
-        else:
-            self._load_body_editor(self.system.bodies[self.selected_index])
-        self._update_time_label()
-        self._refresh_canvas()
-
-    def _apply_overview_simulation_state(self, state: SimulationState, position_samples, start_elapsed_s: float) -> None:
-        self.overview_state = state
-        self.state.elapsed_s = state.elapsed_s
-        self._append_overview_trails(position_samples, start_elapsed_s, state.elapsed_s)
         if self.selected_group_id is not None:
             self._load_group_focus(self.selected_group_id)
         else:
@@ -1069,65 +900,13 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         return self.system_panel.step_seconds()
 
     def _max_step_seconds(self) -> float:
-        if self._using_system_overview():
-            return derived_overview_max_step_s(self._overview_entities(), self.system.settings.accuracy_profile)
-        if self._using_hybrid_focus():
-            return self._focused_max_step_seconds()
-        active_bodies = [self.system.bodies[index] for index in self._active_body_indices()]
-        return derived_max_step_s(active_bodies, self.system.settings.accuracy_profile)
-
-    def _focused_max_step_seconds(self) -> float:
-        active_bodies = [self.system.bodies[index] for index in self._active_body_indices()]
-        return derived_max_step_s(active_bodies, self.system.settings.accuracy_profile)
-
-    def _context_max_step_seconds(self) -> float:
-        entities = self._context_entities()
-        if not entities:
-            return self._focused_max_step_seconds()
-        return derived_overview_max_step_s(entities, self.system.settings.accuracy_profile)
-
-    def _append_trails(
-        self,
-        position_samples,
-        active_indices: list[int],
-        start_elapsed_s: float,
-        end_elapsed_s: float,
-    ) -> None:
-        self.last_trail_sample_elapsed_s = playback.append_body_trails(
-            self.trails,
+        return self.simulation.max_step_seconds(
             self.system.bodies,
-            position_samples,
-            active_indices,
-            start_elapsed_s,
-            end_elapsed_s,
-            self.last_trail_sample_elapsed_s,
-            self.system.settings.trail_sample_interval_s,
-        )
-
-    def _append_overview_trails(self, position_samples, start_elapsed_s: float, end_elapsed_s: float) -> None:
-        entities = self._overview_entities()
-        self.last_trail_sample_elapsed_s = playback.append_entity_trails(
-            self.overview_trails,
-            [entity.id for entity in entities],
-            position_samples,
-            start_elapsed_s,
-            end_elapsed_s,
-            self.last_trail_sample_elapsed_s,
-            self.system.settings.trail_sample_interval_s,
-            update_last_elapsed=True,
-        )
-
-    def _append_context_trails(self, position_samples, start_elapsed_s: float, end_elapsed_s: float) -> None:
-        entities = self._context_entities()
-        playback.append_entity_trails(
-            self.context_trails,
-            [entity.id for entity in entities],
-            position_samples,
-            start_elapsed_s,
-            end_elapsed_s,
-            self.last_trail_sample_elapsed_s,
-            self.system.settings.trail_sample_interval_s,
-            update_last_elapsed=False,
+            self.system.groups,
+            self.system.settings,
+            self.selected_index,
+            self.focus_group_id,
+            self.focus_target,
         )
 
     def _update_title(self) -> None:
@@ -1137,7 +916,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.window_title.set_subtitle(f"{self.system.epoch} - {scope}, max step {max_step_days:,.2f} days")
 
     def _update_time_label(self) -> None:
-        self.time_label.set_label(f"Simulation time: {format_elapsed_time(self.state.elapsed_s)}")
+        self.time_label.set_label(f"Simulation time: {format_elapsed_time(self.simulation.state.elapsed_s)}")
 
     def _refresh_canvas(self) -> None:
         self.canvas.set_scene(self._canvas_scene())
@@ -1166,84 +945,67 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             using_hybrid_focus=using_hybrid_focus,
             selected_group_center=selected_group_center,
             hybrid_bounds=hybrid_bounds,
-            trails=list(self.trails),
+            trails=list(self.simulation.trails),
             overview_entities=self._overview_entities(),
             overview_positions=self._overview_positions(),
-            overview_trails=dict(self.overview_trails),
+            overview_trails=dict(self.simulation.overview_trails),
             context_entities=self._context_entities(),
             context_positions=self._context_positions(),
-            context_trails=dict(self.context_trails),
+            context_trails=dict(self.simulation.context_trails),
         )
 
     def _overview_positions(self):
-        if self.overview_state is not None and self.overview_entity_ids == [entity.id for entity in self._overview_entities()]:
-            return self.overview_state.positions_m
-        return [entity.position_m for entity in self._overview_entities()]
+        return self.simulation.overview_positions(self.system.bodies, self.system.groups)
 
     def _active_body_indices(self) -> list[int]:
-        return active_body_indices(
+        return self.simulation.active_body_indices(
             self.system.bodies,
-            self.system.settings.simulation_scope,
-            self.system.settings.view_mode,
-            self.selected_index,
             self.system.groups,
+            self.system.settings,
+            self.selected_index,
             self.focus_group_id,
             self.focus_target,
         )
 
     def _effective_simulation_scope(self) -> str:
-        return effective_simulation_scope(
+        return self.simulation.effective_simulation_scope(
             self.system.bodies,
-            self.system.settings.simulation_scope,
-            self.system.settings.view_mode,
-            self.selected_index,
             self.system.groups,
+            self.system.settings,
+            self.selected_index,
             self.focus_target,
         )
 
     def _using_system_overview(self) -> bool:
-        return self._effective_simulation_scope() == "system_overview" and len(self._overview_entities()) > 1
+        return self.simulation.using_system_overview(
+            self.system.bodies,
+            self.system.groups,
+            self.system.settings,
+            self.selected_index,
+            self.focus_target,
+        )
 
     def _using_hybrid_focus(self) -> bool:
-        return self._effective_simulation_scope() == "hybrid_focused_context" and bool(self._active_body_indices())
+        return self.simulation.using_hybrid_focus(
+            self.system.bodies,
+            self.system.groups,
+            self.system.settings,
+            self.selected_index,
+            self.focus_group_id,
+            self.focus_target,
+        )
 
-    def _overview_entities(self) -> list[OverviewEntity]:
-        return system_overview_entities(self.system.bodies, self.system.groups)
+    def _overview_entities(self):
+        return self.simulation.overview_entities(self.system.bodies, self.system.groups)
 
-    def _overview_simulation_state(self) -> SimulationState:
-        entities = self._overview_entities()
-        entity_ids = [entity.id for entity in entities]
-        if self.overview_state is None or self.overview_entity_ids != entity_ids:
-            self.overview_entity_ids = entity_ids
-            self.overview_state = playback.overview_simulation_state(entities, self.state.elapsed_s)
-        return self.overview_state.copy()
-
-    def _context_entities(self) -> list[OverviewEntity]:
-        return context_overview_entities(self.system.bodies, self.system.groups, self.focus_target)
-
-    def _context_simulation_state(self) -> SimulationState | None:
-        entities = self._context_entities()
-        if not entities:
-            return None
-        entity_ids = [entity.id for entity in entities]
-        if self.context_state is None or self.context_entity_ids != entity_ids:
-            self.context_entity_ids = entity_ids
-            self.context_state = playback.overview_simulation_state(entities, self.state.elapsed_s)
-        return self.context_state.copy()
+    def _context_entities(self):
+        return self.simulation.context_entities(self.system.bodies, self.system.groups, self.focus_target)
 
     def _context_positions(self):
-        if self.context_state is not None and self.context_entity_ids == [entity.id for entity in self._context_entities()]:
-            return self.context_state.positions_m
-        return [entity.position_m for entity in self._context_entities()]
+        return self.simulation.context_positions(self.system.bodies, self.system.groups, self.focus_target)
 
     def _group_center(self, group_id: str) -> tuple[float, float] | None:
         return hierarchy.group_center(self.system.bodies, self.system.groups, group_id)
-
-    def _simulation_state_for_indices(self, active_indices: list[int]) -> SimulationState:
-        return playback.simulation_state_for_indices(self.state, active_indices)
-
-    def _merge_active_state(self, active_state: SimulationState, active_indices: list[int]) -> None:
-        playback.merge_active_state(self.state, active_state, active_indices)
 
     def _distance_factor(self) -> float:
         return unit_factor(DISTANCE_UNITS, self.system.settings.distance_unit)

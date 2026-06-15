@@ -9,31 +9,31 @@ Stable playback uses `physics.advance_with_samples()`, which may run many 1-day 
 ## Threading Model
 
 - `window.py` owns a single `ThreadPoolExecutor`.
-- `playback.py` creates copied active-scope, overview, and context `SimulationState` values for worker use.
-- The worker receives a copied `SimulationState`.
-- The worker runs physics only and returns the final `SimulationState` plus copied position samples.
+- `playback.SimulationSession` owns simulation state, trails, overview/context caches, and the generation counter.
+- `playback.SimulationSession` creates `SimulationJob` records containing copied active-scope, overview, and context `SimulationState` values for worker use.
+- The worker receives a `SimulationJob`.
+- The worker runs physics only through `playback.run_simulation_job(...)` and returns a `SimulationJobResult` with final state plus copied position samples.
 - The worker must not mutate `Body` objects.
 - The worker must not call GTK APIs.
 - Completion is handed back to the main thread with `GLib.idle_add(...)`.
 
 ## Applying Results
 
-Completed active states are applied by `_apply_simulation_state(...)` on the GTK main thread. That method updates:
+Completed results are applied by `SimulationSession.apply_result(...)` on the GTK main thread. That method updates:
 
-- `self.state`
+- `SimulationSession.state`
 - body positions and velocities
 - trails from sampled physics positions for active bodies
-- selected body editor fields
-- time label
-- drawing area invalidation
+- overview/context state caches and trails
+- the session elapsed time
 
-Trails are appended on the GTK main thread from the sampled positions returned by `advance_with_samples()`. The trail selection and capping logic lives in `playback.py`, and `window.py` stores the resulting trail data.
+After a result applies, `window.py` refreshes GTK widgets: relationship labels, selected editor fields, the time label, and the canvas scene. Trails are appended on the GTK main thread from the sampled positions returned by `advance_with_samples()`. The trail selection, capping, and storage logic lives in `playback.py`.
 
 The UI may pass only an active body subset to the worker. Stellar overview mode advances root stars only, while focused subsystem mode advances a selected root body and its children. System overview mode passes temporary group barycenter entities to the worker and applies only elapsed time plus group trails. Hybrid focused context mode advances focused bodies and outside context barycenters in the same worker job; only focused body state is merged back into the model, while context barycenters remain display-only. Inactive bodies remain in the full UI state but are not updated by that worker result.
 
 ## Stale Result Guard
 
-`simulation_generation` protects user edits, resets, and system loads from stale worker results. Increment it whenever the base simulation state is replaced because of user edits, loading a different system, resetting state, or saving a new baseline.
+`SimulationSession.generation` protects user edits, resets, and system loads from stale worker results. Increment it whenever the base simulation state is replaced because of user edits, loading a different system, resetting state, or saving a new baseline.
 
 Worker results should only apply when their captured generation still matches the current generation.
 
@@ -48,4 +48,4 @@ On close:
 
 ## Reset
 
-The reset button restores the current system from the loaded-state snapshot. That snapshot is refreshed when a system is loaded, duplicated, or saved. Reset stops playback, increments `simulation_generation`, clears trails, rebuilds simulation state, and redraws on the GTK main thread.
+The reset button restores the current system from the loaded-state snapshot. That snapshot is refreshed when a system is loaded, duplicated, or saved. Reset stops playback, increments the session generation, clears trails, rebuilds simulation state, and redraws on the GTK main thread.
