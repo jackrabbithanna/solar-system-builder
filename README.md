@@ -31,9 +31,4 @@ Start with:
 
 - `docs/USER_INTERFACE.md`
 - `docs/ORBITAL_DATA.md`
-- `docs/CODEBASE_OVERVIEW.md`
 - `docs/PHYSICS.md`
-- `docs/GTK_PLAYBACK.md`
-- `docs/FLATPAK_AND_NUMPY.md`
-- `docs/DECISIONS.md`
-- `docs/NEXT_STEPS.md`
