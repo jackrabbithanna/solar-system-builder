@@ -10,6 +10,9 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 - `src/orbits.py`: pure Keplerian orbit conversion helpers for generating Cartesian simulation state from optional orbital metadata.
 - `src/physics.py`: NumPy-backed simulation state, acceleration, low-level `step()`, user-facing `advance()`, and sampled `advance_with_samples()`.
 - `src/scales.py`: pure scale helpers for time/distance units, elapsed-time formatting, adaptive internal step policy, simulation scope selection, and trail sampling cadence.
+- `src/hierarchy.py`: GTK-free body/group hierarchy helpers for sidebar ordering, depth, group membership, relationship labels, and group centers.
+- `src/viewport.py`: GTK-free canvas projection, scale, view-center, barycenter, zoom clamp, and hit-test helpers.
+- `src/playback.py`: GTK-free playback helpers for active-state copies/merges, overview simulation states, hybrid worker advancement, generation checks, and trail appending/capping.
 - `src/presets.py`: loads bundled preset data from `src/presets/`.
 - `src/storage.py`: local JSON library using GLib app data paths.
 - `src/constants.py`: SI constants used by physics and UI conversion.
@@ -18,11 +21,11 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 
 1. `load_builtin_solar_system()` or `load_builtin_solar_systems()` loads JSON preset data into `SolarSystem` objects.
 2. `SimulationState.from_bodies()` copies masses, positions, and velocities into NumPy arrays.
-3. Optional `SystemGroup` records organize flat bodies into semantic systems and subsystems for navigation.
+3. Optional `SystemGroup` records organize flat bodies into semantic systems and subsystems; `hierarchy.py` computes sidebar order, group depth, and descendant body membership.
 4. The UI chooses an active simulation scope, such as full N-body, system overview, stellar overview, focused subsystem, or hybrid focused context.
-5. Playback advances the active `SimulationState` through `physics.advance_with_samples()` so internal substep positions can be reused for dense trails.
+5. `playback.py` builds copied active/overview `SimulationState` data for workers. Playback advances those copies through `physics.advance_with_samples()` so internal substep positions can be reused for dense trails.
 6. Completed active body states are merged back into the full UI state on the GTK main thread; temporary overview/context states update elapsed time and group trails without mutating bodies.
-7. `window.py` draws active body positions/trails, system overview group positions/trails, or focused bodies with muted context markers on a `GtkDrawingArea`.
+7. `viewport.py` computes view centers, canvas scales, projected points, barycenters, and hit-test targets. `window.py` still performs Cairo drawing on the `GtkDrawingArea`.
 8. Save/duplicate writes `SolarSystem` JSON through `storage.Library`.
 
 `Body.parent_id` records local orbital/display parentage, such as planets orbiting a star. Body descendant chains can be used as focus targets, which also supports future planet-and-moon systems. Optional `Body.orbit` and `Body.data_source` records preserve user-entered orbital/source metadata for generating approximate initial state vectors, but `position_m` and `velocity_mps` remain the canonical simulation state. `SystemGroup` records larger semantic hierarchy, such as a binary subsystem or a planetary system. Physics remains a flat N-body simulation over the active body set, so groups do not constrain gravity by themselves.
@@ -40,6 +43,9 @@ Tests live in `tests/` and are registered through `tests/meson.build`.
 - `test_models.py`: model validation and preset round trips.
 - `test_orbits.py`: orbital metadata conversion into Cartesian state vectors.
 - `test_physics.py`: orbital stability, 1PN differences, invalid arrays, large-step regression coverage.
+- `test_hierarchy.py`: sidebar hierarchy ordering, depth, labels, and descendant group membership.
+- `test_viewport.py`: projection, zoom clamping, view-center, scale, and hit-test math.
+- `test_playback.py`: trail sampling/capping, generation checks, worker helper, and active-state copy/merge behavior.
 - `test_storage.py`: local library save/load/list/delete.
 - `test_update_solar_system_preset.py`: preset update script behavior.
 

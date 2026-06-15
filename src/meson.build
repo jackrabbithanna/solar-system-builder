@@ -29,13 +29,16 @@ configure_file(
 solar_system_builder_sources = [
   '__init__.py',
   'constants.py',
+  'hierarchy.py',
   'main.py',
   'models.py',
   'orbits.py',
+  'playback.py',
   'physics.py',
   'presets.py',
   'scales.py',
   'storage.py',
+  'viewport.py',
   'window.py',
 ]
 
