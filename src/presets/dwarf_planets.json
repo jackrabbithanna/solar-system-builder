@@ -1,9 +1,9 @@
 {
-  "schema_version": 5,
+  "schema_version": 7,
   "id": "builtin-dwarf-planets",
   "name": "Dwarf Planets",
   "epoch": "2026-06-14 00:00:00 TDB, JPL Horizons, solar-system barycentric",
-  "description": "Built-in Dwarf Planets preset using SI units, JPL Horizons solar-system barycentric state vectors, and curated physical metadata.",
+  "description": "Built-in Dwarf Planets preset using SI units, JPL Horizons solar-system barycentric state vectors, heliocentric osculating orbital metadata, and curated physical metadata.",
   "groups": [
     {
       "id": "dwarf-planets-group",
@@ -50,7 +50,26 @@
         -108.0629239870325
       ],
       "color": "#4d75d9",
-      "parent_id": "sun"
+      "parent_id": "sun",
+      "orbit": {
+        "semi_major_axis_m": 4499589005622.51,
+        "orbital_period_s": 5205616115.672687,
+        "eccentricity": 0.01015084248774932,
+        "inclination_deg": 1.775430091313966,
+        "longitude_of_ascending_node_deg": 131.9883115310724,
+        "argument_of_periapsis_deg": 280.2261347727232,
+        "mean_anomaly_deg": 310.6769641133678,
+        "epoch": "2026-06-14 00:00:00 TDB",
+        "reference_plane": "J2000 ecliptic",
+        "approximation_notes": "Horizons heliocentric osculating elements at the preset epoch; the committed Cartesian state remains the simulation seed."
+      },
+      "data_source": {
+        "source_name": "JPL Horizons",
+        "source_url": "https://ssd.jpl.nasa.gov/api/horizons.api?format=json&COMMAND=%27899%27&OBJ_DATA=NO&MAKE_EPHEM=YES&EPHEM_TYPE=ELEMENTS&CENTER=%27500%4010%27&TLIST=%272026-06-14+00%3A00%3A00%27&TLIST_TYPE=CAL&TIME_TYPE=TDB&OUT_UNITS=AU-D&CSV_FORMAT=YES&ELM_LABELS=NO",
+        "catalog_id": "899",
+        "retrieved_at": "2026-06-14",
+        "citation": "JPL Horizons osculating elements and state vectors."
+      }
     },
     {
       "id": "pluto",
@@ -69,7 +88,26 @@
         -1530.495986740084
       ],
       "color": "#c9b39a",
-      "parent_id": "sun"
+      "parent_id": "sun",
+      "orbit": {
+        "semi_major_axis_m": 5824126260132.851,
+        "orbital_period_s": 7666024836.451794,
+        "eccentricity": 0.2447416742495381,
+        "inclination_deg": 17.08239632223129,
+        "longitude_of_ascending_node_deg": 110.2569744693702,
+        "argument_of_periapsis_deg": 111.0856950945227,
+        "mean_anomaly_deg": 56.01116303954694,
+        "epoch": "2026-06-14 00:00:00 TDB",
+        "reference_plane": "J2000 ecliptic",
+        "approximation_notes": "Horizons heliocentric osculating elements at the preset epoch; the committed Cartesian state remains the simulation seed."
+      },
+      "data_source": {
+        "source_name": "JPL Horizons",
+        "source_url": "https://ssd.jpl.nasa.gov/api/horizons.api?format=json&COMMAND=%27999%27&OBJ_DATA=NO&MAKE_EPHEM=YES&EPHEM_TYPE=ELEMENTS&CENTER=%27500%4010%27&TLIST=%272026-06-14+00%3A00%3A00%27&TLIST_TYPE=CAL&TIME_TYPE=TDB&OUT_UNITS=AU-D&CSV_FORMAT=YES&ELM_LABELS=NO",
+        "catalog_id": "999",
+        "retrieved_at": "2026-06-14",
+        "citation": "JPL Horizons osculating elements and state vectors."
+      }
     },
     {
       "id": "eris",
@@ -88,7 +126,26 @@
         1624.5630777875879
       ],
       "color": "#d8d6cf",
-      "parent_id": "sun"
+      "parent_id": "sun",
+      "orbit": {
+        "semi_major_axis_m": 10162543046244.629,
+        "orbital_period_s": 17669637853.379814,
+        "eccentricity": 0.4382659351531148,
+        "inclination_deg": 43.92725329015045,
+        "longitude_of_ascending_node_deg": 36.00421290052992,
+        "argument_of_periapsis_deg": 150.7972430074441,
+        "mean_anomaly_deg": 211.7806498454532,
+        "epoch": "2026-06-14 00:00:00 TDB",
+        "reference_plane": "J2000 ecliptic",
+        "approximation_notes": "Horizons heliocentric osculating elements at the preset epoch; the committed Cartesian state remains the simulation seed."
+      },
+      "data_source": {
+        "source_name": "JPL Horizons",
+        "source_url": "https://ssd.jpl.nasa.gov/api/horizons.api?format=json&COMMAND=%27136199%3B%27&OBJ_DATA=NO&MAKE_EPHEM=YES&EPHEM_TYPE=ELEMENTS&CENTER=%27500%4010%27&TLIST=%272026-06-14+00%3A00%3A00%27&TLIST_TYPE=CAL&TIME_TYPE=TDB&OUT_UNITS=AU-D&CSV_FORMAT=YES&ELM_LABELS=NO",
+        "catalog_id": "136199;",
+        "retrieved_at": "2026-06-14",
+        "citation": "JPL Horizons osculating elements and state vectors."
+      }
     },
     {
       "id": "haumea",
@@ -107,7 +164,26 @@
         -249.2476468587499
       ],
       "color": "#e5e0d0",
-      "parent_id": "sun"
+      "parent_id": "sun",
+      "orbit": {
+        "semi_major_axis_m": 6441939156031.911,
+        "orbital_period_s": 8917620350.057848,
+        "eccentricity": 0.1944127290354019,
+        "inclination_deg": 28.20847297824014,
+        "longitude_of_ascending_node_deg": 121.786164792562,
+        "argument_of_periapsis_deg": 240.6838234239625,
+        "mean_anomaly_deg": 223.23460670227,
+        "epoch": "2026-06-14 00:00:00 TDB",
+        "reference_plane": "J2000 ecliptic",
+        "approximation_notes": "Horizons heliocentric osculating elements at the preset epoch; the committed Cartesian state remains the simulation seed."
+      },
+      "data_source": {
+        "source_name": "JPL Horizons",
+        "source_url": "https://ssd.jpl.nasa.gov/api/horizons.api?format=json&COMMAND=%27136108%3B%27&OBJ_DATA=NO&MAKE_EPHEM=YES&EPHEM_TYPE=ELEMENTS&CENTER=%27500%4010%27&TLIST=%272026-06-14+00%3A00%3A00%27&TLIST_TYPE=CAL&TIME_TYPE=TDB&OUT_UNITS=AU-D&CSV_FORMAT=YES&ELM_LABELS=NO",
+        "catalog_id": "136108;",
+        "retrieved_at": "2026-06-14",
+        "citation": "JPL Horizons osculating elements and state vectors."
+      }
     },
     {
       "id": "makemake",
@@ -126,7 +202,26 @@
         -574.2810905937164
       ],
       "color": "#b88a68",
-      "parent_id": "sun"
+      "parent_id": "sun",
+      "orbit": {
+        "semi_major_axis_m": 6817506166991.381,
+        "orbital_period_s": 9708728590.913866,
+        "eccentricity": 0.1588553578224549,
+        "inclination_deg": 29.02769838479805,
+        "longitude_of_ascending_node_deg": 79.29574157902312,
+        "argument_of_periapsis_deg": 297.0902369140387,
+        "mean_anomaly_deg": 169.9563362599231,
+        "epoch": "2026-06-14 00:00:00 TDB",
+        "reference_plane": "J2000 ecliptic",
+        "approximation_notes": "Horizons heliocentric osculating elements at the preset epoch; the committed Cartesian state remains the simulation seed."
+      },
+      "data_source": {
+        "source_name": "JPL Horizons",
+        "source_url": "https://ssd.jpl.nasa.gov/api/horizons.api?format=json&COMMAND=%27136472%3B%27&OBJ_DATA=NO&MAKE_EPHEM=YES&EPHEM_TYPE=ELEMENTS&CENTER=%27500%4010%27&TLIST=%272026-06-14+00%3A00%3A00%27&TLIST_TYPE=CAL&TIME_TYPE=TDB&OUT_UNITS=AU-D&CSV_FORMAT=YES&ELM_LABELS=NO",
+        "catalog_id": "136472;",
+        "retrieved_at": "2026-06-14",
+        "citation": "JPL Horizons osculating elements and state vectors."
+      }
     },
     {
       "id": "gonggong",
@@ -145,7 +240,26 @@
         1188.6245856844312
       ],
       "color": "#a84d3f",
-      "parent_id": "sun"
+      "parent_id": "sun",
+      "orbit": {
+        "semi_major_axis_m": 10003097000261.941,
+        "orbital_period_s": 17255429416.65951,
+        "eccentricity": 0.5042719977833178,
+        "inclination_deg": 30.89956439643503,
+        "longitude_of_ascending_node_deg": 336.8382905485527,
+        "argument_of_periapsis_deg": 206.6238050558804,
+        "mean_anomaly_deg": 111.6700412638307,
+        "epoch": "2026-06-14 00:00:00 TDB",
+        "reference_plane": "J2000 ecliptic",
+        "approximation_notes": "Horizons heliocentric osculating elements at the preset epoch; the committed Cartesian state remains the simulation seed."
+      },
+      "data_source": {
+        "source_name": "JPL Horizons",
+        "source_url": "https://ssd.jpl.nasa.gov/api/horizons.api?format=json&COMMAND=%27225088%3B%27&OBJ_DATA=NO&MAKE_EPHEM=YES&EPHEM_TYPE=ELEMENTS&CENTER=%27500%4010%27&TLIST=%272026-06-14+00%3A00%3A00%27&TLIST_TYPE=CAL&TIME_TYPE=TDB&OUT_UNITS=AU-D&CSV_FORMAT=YES&ELM_LABELS=NO",
+        "catalog_id": "225088;",
+        "retrieved_at": "2026-06-14",
+        "citation": "JPL Horizons osculating elements and state vectors."
+      }
     },
     {
       "id": "quaoar",
@@ -164,7 +278,26 @@
         -46.7651809233216
       ],
       "color": "#bca18a",
-      "parent_id": "sun"
+      "parent_id": "sun",
+      "orbit": {
+        "semi_major_axis_m": 6456179046617.2,
+        "orbital_period_s": 8947205250.97395,
+        "eccentricity": 0.03519052499784354,
+        "inclination_deg": 7.991581691992865,
+        "longitude_of_ascending_node_deg": 188.9180647313013,
+        "argument_of_periapsis_deg": 163.1745712651313,
+        "mean_anomaly_deg": 292.8997673069669,
+        "epoch": "2026-06-14 00:00:00 TDB",
+        "reference_plane": "J2000 ecliptic",
+        "approximation_notes": "Horizons heliocentric osculating elements at the preset epoch; the committed Cartesian state remains the simulation seed."
+      },
+      "data_source": {
+        "source_name": "JPL Horizons",
+        "source_url": "https://ssd.jpl.nasa.gov/api/horizons.api?format=json&COMMAND=%2750000%3B%27&OBJ_DATA=NO&MAKE_EPHEM=YES&EPHEM_TYPE=ELEMENTS&CENTER=%27500%4010%27&TLIST=%272026-06-14+00%3A00%3A00%27&TLIST_TYPE=CAL&TIME_TYPE=TDB&OUT_UNITS=AU-D&CSV_FORMAT=YES&ELM_LABELS=NO",
+        "catalog_id": "50000;",
+        "retrieved_at": "2026-06-14",
+        "citation": "JPL Horizons osculating elements and state vectors."
+      }
     },
     {
       "id": "orcus",
@@ -183,7 +316,26 @@
         -203.7391287076662
       ],
       "color": "#a9b0b6",
-      "parent_id": "sun"
+      "parent_id": "sun",
+      "orbit": {
+        "semi_major_axis_m": 5890811193108.131,
+        "orbital_period_s": 7798062403.963317,
+        "eccentricity": 0.2205023914273854,
+        "inclination_deg": 20.55686695172571,
+        "longitude_of_ascending_node_deg": 268.4062272203838,
+        "argument_of_periapsis_deg": 73.56352233560804,
+        "mean_anomaly_deg": 189.123176774634,
+        "epoch": "2026-06-14 00:00:00 TDB",
+        "reference_plane": "J2000 ecliptic",
+        "approximation_notes": "Horizons heliocentric osculating elements at the preset epoch; the committed Cartesian state remains the simulation seed."
+      },
+      "data_source": {
+        "source_name": "JPL Horizons",
+        "source_url": "https://ssd.jpl.nasa.gov/api/horizons.api?format=json&COMMAND=%2790482%3B%27&OBJ_DATA=NO&MAKE_EPHEM=YES&EPHEM_TYPE=ELEMENTS&CENTER=%27500%4010%27&TLIST=%272026-06-14+00%3A00%3A00%27&TLIST_TYPE=CAL&TIME_TYPE=TDB&OUT_UNITS=AU-D&CSV_FORMAT=YES&ELM_LABELS=NO",
+        "catalog_id": "90482;",
+        "retrieved_at": "2026-06-14",
+        "citation": "JPL Horizons osculating elements and state vectors."
+      }
     }
   ]
 }

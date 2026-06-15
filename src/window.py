@@ -712,49 +712,26 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._set_orbit_editor_sensitive(body is not None and parent is not None)
         self.generate_orbit_button.set_sensitive(body is not None and parent is not None)
         if body is None or parent is None:
-            self.orbit_axis_spin.set_value(0.0)
-            self.orbit_period_spin.set_value(0.0)
-            self.orbit_eccentricity_spin.set_value(0.0)
-            self.orbit_inclination_spin.set_value(0.0)
-            self.orbit_node_spin.set_value(0.0)
-            self.orbit_periapsis_spin.set_value(0.0)
-            self.orbit_anomaly_spin.set_value(0.0)
-            self.orbit_epoch_entry.set_text("")
-            self.orbit_source_entry.set_text("")
-            self.orbit_source_url_entry.set_text("")
-            self.orbit_notes_entry.set_text("")
             if body is None:
+                self._load_orbit_values(None, None, 0.0)
                 self.orbit_status_label.set_label("")
+            elif binary_group := self._direct_binary_group_for_body(body):
+                self._load_orbit_values(binary_group.orbit, binary_group.data_source, 0.0)
+                self._set_orbit_editor_sensitive(True)
+                self.generate_orbit_button.set_sensitive(False)
+                self.generate_binary_orbit_button.set_visible(True)
+                self.generate_binary_orbit_button.set_sensitive(True)
+                self.orbit_status_label.set_label(
+                    f"{body.name} is a member of {binary_group.name}. "
+                    "Edit these fields to generate the binary pair around the shared barycenter."
+                )
             else:
+                self._load_orbit_values(None, None, 0.0)
                 self.orbit_status_label.set_label("Orbital generation requires a parent body.")
             return
 
         orbit = body.orbit
-        if orbit is not None and orbit.semi_major_axis_m is not None:
-            self.orbit_axis_spin.set_value(orbit.semi_major_axis_m / AU)
-        else:
-            self.orbit_axis_spin.set_value(distance_between_bodies_m(body, parent) / AU)
-        self.orbit_period_spin.set_value((orbit.orbital_period_s / DAY) if orbit and orbit.orbital_period_s else 0.0)
-        self.orbit_eccentricity_spin.set_value(orbit.eccentricity if orbit and orbit.eccentricity is not None else 0.0)
-        self.orbit_inclination_spin.set_value(
-            orbit.inclination_deg if orbit and orbit.inclination_deg is not None else 0.0
-        )
-        self.orbit_node_spin.set_value(
-            orbit.longitude_of_ascending_node_deg
-            if orbit and orbit.longitude_of_ascending_node_deg is not None
-            else 0.0
-        )
-        self.orbit_periapsis_spin.set_value(
-            orbit.argument_of_periapsis_deg
-            if orbit and orbit.argument_of_periapsis_deg is not None
-            else 0.0
-        )
-        self.orbit_anomaly_spin.set_value(orbit.mean_anomaly_deg if orbit and orbit.mean_anomaly_deg is not None else 0.0)
-        self.orbit_epoch_entry.set_text(orbit.epoch if orbit and orbit.epoch else self.system.epoch)
-        source = body.data_source
-        self.orbit_source_entry.set_text(source.source_name if source else "")
-        self.orbit_source_url_entry.set_text(source.source_url if source else "")
-        self.orbit_notes_entry.set_text(orbit.approximation_notes if orbit else "")
+        self._load_orbit_values(orbit, body.data_source, distance_between_bodies_m(body, parent) / AU)
         self.orbit_status_label.set_label(f"Generate an approximate state vector around {parent.name}.")
 
     def _load_group_orbit_editor(self, group: SystemGroup) -> None:
@@ -794,6 +771,32 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.orbit_status_label.set_label("Generate an approximate group barycenter orbit around the selected target.")
         else:
             self.orbit_status_label.set_label("Group barycenter generation requires an eligible body or group target.")
+
+    def _load_orbit_values(self, orbit: OrbitData | None, source: DataSource | None, default_axis_au: float) -> None:
+        if orbit is not None and orbit.semi_major_axis_m is not None:
+            self.orbit_axis_spin.set_value(orbit.semi_major_axis_m / AU)
+        else:
+            self.orbit_axis_spin.set_value(default_axis_au)
+        self.orbit_period_spin.set_value((orbit.orbital_period_s / DAY) if orbit and orbit.orbital_period_s else 0.0)
+        self.orbit_eccentricity_spin.set_value(orbit.eccentricity if orbit and orbit.eccentricity is not None else 0.0)
+        self.orbit_inclination_spin.set_value(
+            orbit.inclination_deg if orbit and orbit.inclination_deg is not None else 0.0
+        )
+        self.orbit_node_spin.set_value(
+            orbit.longitude_of_ascending_node_deg
+            if orbit and orbit.longitude_of_ascending_node_deg is not None
+            else 0.0
+        )
+        self.orbit_periapsis_spin.set_value(
+            orbit.argument_of_periapsis_deg
+            if orbit and orbit.argument_of_periapsis_deg is not None
+            else 0.0
+        )
+        self.orbit_anomaly_spin.set_value(orbit.mean_anomaly_deg if orbit and orbit.mean_anomaly_deg is not None else 0.0)
+        self.orbit_epoch_entry.set_text(orbit.epoch if orbit and orbit.epoch else self.system.epoch)
+        self.orbit_source_entry.set_text(source.source_name if source else "")
+        self.orbit_source_url_entry.set_text(source.source_url if source else "")
+        self.orbit_notes_entry.set_text(orbit.approximation_notes if orbit else "")
 
     def _show_group_orbit_controls(self, visible: bool) -> None:
         for widget in (
@@ -860,6 +863,12 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         if any(index is None for index in indices):
             return None
         return int(indices[0]), int(indices[1])
+
+    def _direct_binary_group_for_body(self, body: Body) -> SystemGroup | None:
+        for group in self.system.groups:
+            if body.id in group.body_ids and self._group_direct_body_indices(group) is not None:
+                return group
+        return None
 
     def _populate_selected_distance_list(self, body: Body) -> None:
         while child := self.selected_distance_list.get_first_child():
@@ -1114,9 +1123,11 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._load_group_focus(group.id)
 
     def _on_generate_binary_orbit_clicked(self, _button) -> None:
-        if self.editing or self.selected_group_id is None:
+        if self.editing:
             return
         group = self._group_by_id(self.selected_group_id)
+        if group is None and self.system.bodies:
+            group = self._direct_binary_group_for_body(self.system.bodies[self.selected_index])
         if group is None:
             return
         indices = self._group_direct_body_indices(group)
@@ -1144,6 +1155,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         second.position_m, second.velocity_mps = second_state
         group.orbit = orbit
         group.data_source = self._data_source_from_orbit_editor()
+        self.selected_group_id = group.id
         self._after_orbit_generated()
         self._load_group_focus(group.id)
 

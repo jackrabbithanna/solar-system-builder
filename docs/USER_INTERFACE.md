@@ -146,6 +146,7 @@ Bodies and groups show an Orbital Data section. Use it to enter published orbita
 - For groups, Target selects the body or group the selected group barycenter should orbit.
 - Generate Group Barycenter moves all bodies in the selected group so the group barycenter follows the entered orbit.
 - Generate Binary Pair places two direct body members around their shared barycenter according to their masses.
+- If a selected root star belongs to a two-star group, edit the orbital fields there and use Generate Binary Pair; the single-body Generate State Vector action remains disabled because the star has no parent body.
 
 If a published exoplanet record does not include orientation or phase, leave those fields at their defaults. The resulting system is an approximate simulation seed, not a precise ephemeris.
 
