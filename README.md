@@ -8,6 +8,20 @@ Use the canvas to inspect bodies, select objects, view trails, and zoom into the
 
 For a full guide to the canvas controls and simulation settings, see `docs/USER_INTERFACE.md`.
 
+## TODO
+
+The current simulator comes with 3 preset systems. The Solar System with the official 8 planets, the Solar System largest Dwarf Planets, and the Alpha Centauri System.
+
+In the future I will add the user interface to add your own complex systems. 
+
+## Screenshots
+
+<img src="./screenshots/dwarf-planets-simulation.png" alt="gnollama" align="left"/>
+
+<img src="./screenshots/alpha-centauri-system.png" alt="gnollama" align="left"/>
+
+
+
 ## Development
 
 Configure and test with Meson:
