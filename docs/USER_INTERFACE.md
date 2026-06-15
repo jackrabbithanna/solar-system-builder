@@ -133,6 +133,22 @@ Changing mass, position, or velocity rebuilds the simulation state and clears ex
 
 When a body has a parent, the distance panel shows its distance to that parent. For root stars in multi-star systems, it shows distances to the other stars.
 
+## Orbital Data
+
+Bodies and groups show an Orbital Data section. Use it to enter published orbital parameters and generate the raw position and velocity fields used by the simulator.
+
+- Semi-major Axis (AU) sets the orbit size directly.
+- Period (days) can be used instead of semi-major axis; the app derives the orbit size from the parent and body masses.
+- Eccentricity sets the ellipse shape.
+- Inclination, Node, Periapsis, and Mean Anomaly set the 3D orientation and orbital phase.
+- Epoch, Source, Source URL, and Notes preserve provenance and assumptions.
+- Generate State Vector writes the derived position and velocity into the selected body, rebuilds the simulation state, and clears trails.
+- For groups, Target selects the body or group the selected group barycenter should orbit.
+- Generate Group Barycenter moves all bodies in the selected group so the group barycenter follows the entered orbit.
+- Generate Binary Pair places two direct body members around their shared barycenter according to their masses.
+
+If a published exoplanet record does not include orientation or phase, leave those fields at their defaults. The resulting system is an approximate simulation seed, not a precise ephemeris.
+
 ## App Menu
 
 The main menu contains Preferences, Keyboard Shortcuts, and About Solar System Builder. The current shortcuts dialog lists shortcuts for showing keyboard shortcuts and quitting the app.

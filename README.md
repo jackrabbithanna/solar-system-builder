@@ -30,6 +30,7 @@ GNOME Builder runs the app inside the Flatpak sandbox described by `io.github.ja
 Start with:
 
 - `docs/USER_INTERFACE.md`
+- `docs/ORBITAL_DATA.md`
 - `docs/CODEBASE_OVERVIEW.md`
 - `docs/PHYSICS.md`
 - `docs/GTK_PLAYBACK.md`

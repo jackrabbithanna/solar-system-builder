@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from src.constants import DAY
-from src.models import Body, ModelError, SCHEMA_VERSION, SolarSystem
+from src.models import Body, DataSource, ModelError, OrbitData, SCHEMA_VERSION, SolarSystem
 from src.presets import load_builtin_solar_system, load_builtin_solar_systems
 
 ALPHA_CENTAURI_GENERATOR_PATH = (
@@ -112,6 +112,15 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(system.groups[0].kind, "planetary_system")
         self.assertEqual(system.groups[0].body_ids, ["sun"])
 
+    def test_v5_data_migrates_without_orbit_metadata(self):
+        data = _sample_system_data(schema_version=5)
+
+        system = SolarSystem.from_dict(data)
+
+        self.assertEqual(system.schema_version, SCHEMA_VERSION)
+        self.assertIsNone(system.bodies[1].orbit)
+        self.assertIsNone(system.bodies[1].data_source)
+
     def test_dwarf_planets_preset_gets_large_step_default(self):
         system = next(
             item
@@ -201,6 +210,54 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(clone.settings.simulation_scope, "stellar_overview")
         self.assertEqual(clone.settings.trail_sample_interval_s, 5.0 * DAY)
 
+    def test_orbit_metadata_round_trip(self):
+        data = _sample_system_data()
+        data["bodies"][1]["orbit"] = {
+            "semi_major_axis_m": 149_597_870_700.0,
+            "orbital_period_s": 365.25 * DAY,
+            "eccentricity": 0.0167,
+            "inclination_deg": 1.2,
+            "longitude_of_ascending_node_deg": 2.3,
+            "argument_of_periapsis_deg": 3.4,
+            "mean_anomaly_deg": 4.5,
+            "epoch": "J2000",
+            "reference_plane": "app-local XY",
+            "approximation_notes": "Approximate seed",
+        }
+        data["bodies"][1]["data_source"] = {
+            "source_name": "NASA Exoplanet Archive",
+            "source_url": "https://example.test",
+            "catalog_id": "Example b",
+            "retrieved_at": "2026-06-14",
+            "citation": "Example citation",
+        }
+
+        clone = SolarSystem.from_dict(SolarSystem.from_dict(data).to_dict())
+        planet = clone.bodies[1]
+
+        self.assertIsInstance(planet.orbit, OrbitData)
+        self.assertEqual(planet.orbit.semi_major_axis_m, 149_597_870_700.0)
+        self.assertEqual(planet.orbit.reference_plane, "app-local XY")
+        self.assertIsInstance(planet.data_source, DataSource)
+        self.assertEqual(planet.data_source.source_name, "NASA Exoplanet Archive")
+
+    def test_orbit_requires_axis_or_period(self):
+        data = _sample_system_data()
+        data["bodies"][1]["orbit"] = {"eccentricity": 0.0}
+
+        with self.assertRaisesRegex(ModelError, "semi_major_axis_m or orbital_period_s"):
+            SolarSystem.from_dict(data)
+
+    def test_invalid_orbit_eccentricity_fails(self):
+        data = _sample_system_data()
+        data["bodies"][1]["orbit"] = {
+            "semi_major_axis_m": 1.0,
+            "eccentricity": 1.0,
+        }
+
+        with self.assertRaisesRegex(ModelError, "eccentricity"):
+            SolarSystem.from_dict(data)
+
     def test_invalid_simulation_scope_fails(self):
         data = _sample_system_data()
         data["settings"] = {"simulation_scope": "nearby_only"}
@@ -231,6 +288,122 @@ class ModelTests(unittest.TestCase):
         self.assertEqual([group.id for group in clone.groups], ["sample-root", "sample-inner"])
         self.assertEqual(clone.groups[1].parent_group_id, "sample-root")
         self.assertEqual(clone.groups[1].body_ids, ["sun"])
+
+    def test_group_orbit_metadata_round_trip(self):
+        data = _sample_system_data()
+        data["bodies"].append(
+            {
+                "id": "other-star",
+                "name": "Other Star",
+                "kind": "star",
+                "mass_kg": 1.0,
+                "radius_m": 1.0,
+                "position_m": [10.0, 0.0, 0.0],
+                "velocity_mps": [0.0, 0.0, 0.0],
+                "color": "#ffff00",
+            }
+        )
+        data["groups"] = [
+            {
+                "id": "sample-root",
+                "name": "Sample Root",
+                "kind": "system",
+                "body_ids": ["other-star"],
+            },
+            {
+                "id": "sample-inner",
+                "name": "Sample Inner",
+                "kind": "planetary_system",
+                "body_ids": ["earth"],
+                "orbit_target_type": "group",
+                "orbit_target_id": "sample-root",
+                "orbit": {
+                    "semi_major_axis_m": 10.0,
+                    "eccentricity": 0.1,
+                    "reference_plane": "app-local XY",
+                },
+                "data_source": {
+                    "source_name": "Example",
+                    "source_url": "https://example.test",
+                },
+            },
+        ]
+
+        clone = SolarSystem.from_dict(SolarSystem.from_dict(data).to_dict())
+        inner = next(group for group in clone.groups if group.id == "sample-inner")
+
+        self.assertIsInstance(inner.orbit, OrbitData)
+        self.assertEqual(inner.orbit_target_type, "group")
+        self.assertEqual(inner.orbit_target_id, "sample-root")
+        self.assertIsInstance(inner.data_source, DataSource)
+        self.assertEqual(inner.data_source.source_name, "Example")
+
+    def test_invalid_group_orbit_target_type_fails(self):
+        data = _sample_system_data()
+        data["groups"] = [
+            {
+                "id": "sample-root",
+                "name": "Sample Root",
+                "kind": "system",
+                "body_ids": ["sun"],
+                "orbit_target_type": "cluster",
+                "orbit_target_id": "earth",
+            },
+        ]
+
+        with self.assertRaisesRegex(ModelError, "unsupported orbit_target_type"):
+            SolarSystem.from_dict(data)
+
+    def test_group_cannot_orbit_own_body(self):
+        data = _sample_system_data()
+        data["groups"] = [
+            {
+                "id": "sample-root",
+                "name": "Sample Root",
+                "kind": "system",
+                "body_ids": ["sun"],
+                "orbit_target_type": "body",
+                "orbit_target_id": "sun",
+            },
+        ]
+
+        with self.assertRaisesRegex(ModelError, "cannot orbit a body inside itself"):
+            SolarSystem.from_dict(data)
+
+    def test_group_cannot_orbit_overlapping_group(self):
+        data = _sample_system_data()
+        data["bodies"].append(
+            {
+                "id": "other-star",
+                "name": "Other Star",
+                "kind": "star",
+                "mass_kg": 1.0,
+                "radius_m": 1.0,
+                "position_m": [10.0, 0.0, 0.0],
+                "velocity_mps": [0.0, 0.0, 0.0],
+                "color": "#ffff00",
+            }
+        )
+        data["groups"] = [
+            {
+                "id": "sample-root",
+                "name": "Sample Root",
+                "kind": "system",
+                "body_ids": ["other-star"],
+            },
+            {
+                "id": "sample-inner",
+                "name": "Sample Inner",
+                "kind": "planetary_system",
+                "parent_group_id": "sample-root",
+                "body_ids": ["earth"],
+                "orbit_target_type": "group",
+                "orbit_target_id": "sample-root",
+            },
+        ]
+
+        with self.assertRaisesRegex(ModelError, "overlapping group"):
+            SolarSystem.from_dict(data)
 
     def test_group_missing_body_fails(self):
         data = _sample_system_data()
@@ -305,7 +478,36 @@ class ModelTests(unittest.TestCase):
             SolarSystem.from_dict(data)
 
     def test_duplicate_remaps_parent_ids(self):
-        system = SolarSystem.from_dict(_sample_system_data())
+        data = _sample_system_data()
+        data["bodies"].append(
+            {
+                "id": "other-star",
+                "name": "Other Star",
+                "kind": "star",
+                "mass_kg": 1.0,
+                "radius_m": 1.0,
+                "position_m": [10.0, 0.0, 0.0],
+                "velocity_mps": [0.0, 0.0, 0.0],
+                "color": "#ffff00",
+            }
+        )
+        data["groups"] = [
+            {
+                "id": "sample-root",
+                "name": "Sample Root",
+                "kind": "system",
+                "body_ids": ["other-star"],
+            },
+            {
+                "id": "sample-inner",
+                "name": "Sample Inner",
+                "kind": "planetary_system",
+                "body_ids": ["earth"],
+                "orbit_target_type": "group",
+                "orbit_target_id": "sample-root",
+            },
+        ]
+        system = SolarSystem.from_dict(data)
 
         duplicate = system.duplicate("Copy")
 
@@ -317,7 +519,13 @@ class ModelTests(unittest.TestCase):
         planet = next(body for body in duplicate.bodies if body.kind == "planet")
         self.assertEqual(planet.parent_id, star.id)
         self.assertNotEqual(system.groups[0].id, duplicate.groups[0].id)
-        self.assertEqual(duplicate.groups[0].body_ids, [star.id])
+        other_star = next(body for body in duplicate.bodies if body.name == "Other Star")
+        self.assertEqual(duplicate.groups[0].body_ids, [other_star.id])
+        duplicate_groups_by_name = {group.name: group for group in duplicate.groups}
+        self.assertEqual(
+            duplicate_groups_by_name["Sample Inner"].orbit_target_id,
+            duplicate_groups_by_name["Sample Root"].id,
+        )
 
 
 def _sample_system_data(schema_version: int = SCHEMA_VERSION):

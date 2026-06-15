@@ -1,0 +1,73 @@
+# Orbital Data
+
+Solar System Builder simulates Cartesian state vectors. Every body still needs:
+
+- mass in kilograms
+- radius in meters
+- position in meters
+- velocity in meters per second
+
+Orbital data is optional metadata used to generate those state vectors. This is useful for exoplanet systems and hierarchical star systems, where published catalogs often provide orbital period, semi-major axis, eccentricity, and physical properties instead of a complete position and velocity at a known epoch.
+
+## Canonical Simulation State
+
+`Body.position_m` and `Body.velocity_mps` remain the canonical simulation state. `physics.py` reads those vectors through `SimulationState.from_bodies()` and does not read orbital metadata.
+
+When a user generates a body state vector from orbital data, the app:
+
+1. reads the selected body's parent body;
+2. converts the orbital metadata into a relative Cartesian position and velocity;
+3. adds the parent body's current position and velocity;
+4. writes the result back to `position_m` and `velocity_mps`;
+5. rebuilds the simulation state and clears trails.
+
+Playback then advances the generated vectors directly.
+
+When a user generates group orbital state, the app computes the selected group's barycenter from its member bodies, generates a desired barycenter state around the selected target body or target group, and applies the same position/velocity delta to every body in the group. This preserves the group's internal layout while moving the whole subsystem.
+
+Binary pair generation is different: for a group with exactly two direct bodies, the app generates both bodies around their shared barycenter and splits positions and velocities by mass so total momentum remains centered on the original group barycenter.
+
+## Stored Metadata
+
+Schema v7 stores optional orbital metadata on both bodies and groups:
+
+- `orbit`: source orbital parameters used to generate a simulation seed.
+- `data_source`: source name, URL, catalog id, retrieval date, and citation metadata.
+- `orbit_target_type` and `orbit_target_id` on groups: the body or group that a group barycenter orbits.
+
+Old systems migrate without orbital metadata. Existing preset and saved-system vectors remain valid.
+
+## Supported Orbital Inputs
+
+The first implementation supports bound Keplerian ellipses around a selected parent body or around a selected group/body target.
+
+- Semi-major axis may be entered directly.
+- Orbital period may be entered instead; the app derives semi-major axis from the parent and body masses.
+- Eccentricity defaults to `0`.
+- Inclination, longitude of ascending node, argument of periapsis, and mean anomaly default to `0`.
+- The reference plane is the app-local XY plane.
+
+The converter preserves 3D vectors internally, but the current canvas is still a top-down X/Y view.
+
+## Body Orbits
+
+Body orbital data is for a concrete body orbiting a concrete parent body. It is appropriate for planets, moons, and any star that has been intentionally modeled as orbiting a parent body. Root bodies can still expand the Orbital Data section, but generation is disabled until they have a parent.
+
+## Group Orbits
+
+Group orbital data is for barycenter-based systems, such as binary stars or a distant subsystem orbiting another subsystem. Groups can generate:
+
+- a group barycenter orbit around a selected body or group target;
+- a binary pair state for groups with exactly two direct bodies.
+
+This is the preferred way to model Alpha Centauri A and B orbiting a common barycenter. It also supports moving a subsystem such as `Proxima Centauri System` around a target such as `Alpha Centauri AB`.
+
+Groups still do not constrain runtime gravity. They store metadata and generate initial state vectors; playback remains a flat N-body simulation.
+
+## Exoplanet Limits
+
+Generated exoplanet systems are approximate simulation seeds, not authoritative ephemerides.
+
+Common exoplanet catalogs often lack enough information to know the true 3D orientation and current orbital phase. Transit and radial-velocity discoveries can provide period, radius, mass or minimum mass, semi-major axis, eccentricity, inclination, transit time, or argument of periastron, but not always all of them. When users leave fields at defaults, the generated system is deterministic and useful for exploration, but it should be labeled as approximate.
+
+Live import from JPL Horizons or NASA Exoplanet Archive is intentionally out of scope for this first pass. The app stores source links so manually entered data remains traceable.

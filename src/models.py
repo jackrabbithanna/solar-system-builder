@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .constants import DAY
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 7
 
 ACCURACY_PROFILES = {"high", "balanced", "fast"}
 DISTANCE_UNITS = {"km", "AU", "kAU", "ly"}
@@ -31,6 +31,24 @@ class ModelError(ValueError):
     """Raised when serialized model data is invalid."""
 
 
+def _optional_positive_float(data: dict[str, Any], field_name: str) -> float | None:
+    if data.get(field_name) is None:
+        return None
+    value = float(data[field_name])
+    if value <= 0.0:
+        raise ModelError(f"{field_name} must be positive")
+    return value
+
+
+def _optional_float(data: dict[str, Any], field_name: str) -> float | None:
+    if data.get(field_name) is None:
+        return None
+    value = float(data[field_name])
+    if value != value:
+        raise ModelError(f"{field_name} cannot contain NaN")
+    return value
+
+
 def _vector3(value: Any, field_name: str) -> list[float]:
     if not isinstance(value, (list, tuple)) or len(value) != 3:
         raise ModelError(f"{field_name} must be a 3-value vector")
@@ -38,6 +56,112 @@ def _vector3(value: Any, field_name: str) -> list[float]:
     if not all(component == component for component in vector):
         raise ModelError(f"{field_name} cannot contain NaN")
     return vector
+
+
+@dataclass
+class OrbitData:
+    semi_major_axis_m: float | None = None
+    orbital_period_s: float | None = None
+    eccentricity: float | None = None
+    inclination_deg: float | None = None
+    longitude_of_ascending_node_deg: float | None = None
+    argument_of_periapsis_deg: float | None = None
+    mean_anomaly_deg: float | None = None
+    epoch: str = ""
+    reference_plane: str = "app-local XY"
+    approximation_notes: str = ""
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "OrbitData | None":
+        if data is None:
+            return None
+        orbit = cls(
+            semi_major_axis_m=_optional_positive_float(data, "semi_major_axis_m"),
+            orbital_period_s=_optional_positive_float(data, "orbital_period_s"),
+            eccentricity=_optional_float(data, "eccentricity"),
+            inclination_deg=_optional_float(data, "inclination_deg"),
+            longitude_of_ascending_node_deg=_optional_float(
+                data,
+                "longitude_of_ascending_node_deg",
+            ),
+            argument_of_periapsis_deg=_optional_float(data, "argument_of_periapsis_deg"),
+            mean_anomaly_deg=_optional_float(data, "mean_anomaly_deg"),
+            epoch=str(data.get("epoch", "")),
+            reference_plane=str(data.get("reference_plane", "app-local XY")),
+            approximation_notes=str(data.get("approximation_notes", "")),
+        )
+        orbit.validate()
+        return orbit
+
+    def validate(self) -> None:
+        if self.semi_major_axis_m is None and self.orbital_period_s is None:
+            raise ModelError("orbit requires semi_major_axis_m or orbital_period_s")
+        if self.eccentricity is not None and not 0.0 <= self.eccentricity < 1.0:
+            raise ModelError("eccentricity must be at least 0 and less than 1")
+        for field_name in (
+            "inclination_deg",
+            "longitude_of_ascending_node_deg",
+            "argument_of_periapsis_deg",
+            "mean_anomaly_deg",
+        ):
+            value = getattr(self, field_name)
+            if value is not None and value != value:
+                raise ModelError(f"{field_name} cannot contain NaN")
+        if not self.reference_plane.strip():
+            raise ModelError("reference_plane is required")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        data: dict[str, Any] = {
+            "reference_plane": self.reference_plane,
+        }
+        for field_name in (
+            "semi_major_axis_m",
+            "orbital_period_s",
+            "eccentricity",
+            "inclination_deg",
+            "longitude_of_ascending_node_deg",
+            "argument_of_periapsis_deg",
+            "mean_anomaly_deg",
+        ):
+            value = getattr(self, field_name)
+            if value is not None:
+                data[field_name] = value
+        if self.epoch:
+            data["epoch"] = self.epoch
+        if self.approximation_notes:
+            data["approximation_notes"] = self.approximation_notes
+        return data
+
+
+@dataclass
+class DataSource:
+    source_name: str = ""
+    source_url: str = ""
+    catalog_id: str = ""
+    retrieved_at: str = ""
+    citation: str = ""
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "DataSource | None":
+        if data is None:
+            return None
+        source = cls(
+            source_name=str(data.get("source_name", "")),
+            source_url=str(data.get("source_url", "")),
+            catalog_id=str(data.get("catalog_id", "")),
+            retrieved_at=str(data.get("retrieved_at", "")),
+            citation=str(data.get("citation", "")),
+        )
+        return source if source.to_dict() else None
+
+    def to_dict(self) -> dict[str, Any]:
+        data = {}
+        for field_name in ("source_name", "source_url", "catalog_id", "retrieved_at", "citation"):
+            value = getattr(self, field_name).strip()
+            if value:
+                data[field_name] = value
+        return data
 
 
 @dataclass
@@ -53,6 +177,8 @@ class Body:
     parent_id: str | None = None
     visible: bool = True
     trail_enabled: bool = True
+    orbit: OrbitData | None = None
+    data_source: DataSource | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Body":
@@ -68,6 +194,8 @@ class Body:
             parent_id=str(data["parent_id"]) if data.get("parent_id") is not None else None,
             visible=bool(data.get("visible", True)),
             trail_enabled=bool(data.get("trail_enabled", True)),
+            orbit=OrbitData.from_dict(data.get("orbit")),
+            data_source=DataSource.from_dict(data.get("data_source")),
         )
         body.validate()
         return body
@@ -83,6 +211,8 @@ class Body:
             raise ModelError(f"{self.name} radius must be positive")
         self.position_m = _vector3(self.position_m, "position_m")
         self.velocity_mps = _vector3(self.velocity_mps, "velocity_mps")
+        if self.orbit is not None:
+            self.orbit.validate()
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -100,6 +230,12 @@ class Body:
         }
         if self.parent_id is not None:
             data["parent_id"] = self.parent_id
+        if self.orbit is not None:
+            data["orbit"] = self.orbit.to_dict()
+        if self.data_source is not None:
+            source_data = self.data_source.to_dict()
+            if source_data:
+                data["data_source"] = source_data
         return data
 
 
@@ -110,6 +246,10 @@ class SystemGroup:
     body_ids: list[str] = field(default_factory=list)
     id: str = field(default_factory=lambda: str(uuid4()))
     parent_group_id: str | None = None
+    orbit: OrbitData | None = None
+    data_source: DataSource | None = None
+    orbit_target_type: str | None = None
+    orbit_target_id: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SystemGroup":
@@ -119,6 +259,10 @@ class SystemGroup:
             kind=str(data.get("kind", "system")),
             body_ids=[str(body_id) for body_id in data.get("body_ids", [])],
             parent_group_id=str(data["parent_group_id"]) if data.get("parent_group_id") is not None else None,
+            orbit=OrbitData.from_dict(data.get("orbit")),
+            data_source=DataSource.from_dict(data.get("data_source")),
+            orbit_target_type=str(data["orbit_target_type"]) if data.get("orbit_target_type") is not None else None,
+            orbit_target_id=str(data["orbit_target_id"]) if data.get("orbit_target_id") is not None else None,
         )
         group.validate()
         return group
@@ -130,6 +274,12 @@ class SystemGroup:
             raise ModelError("group name is required")
         if not self.kind.strip():
             raise ModelError(f"{self.name} group kind is required")
+        if self.orbit is not None:
+            self.orbit.validate()
+        if self.orbit_target_type is not None and self.orbit_target_type not in {"body", "group"}:
+            raise ModelError(f"{self.name} unsupported orbit_target_type {self.orbit_target_type}")
+        if (self.orbit_target_type is None) != (self.orbit_target_id is None):
+            raise ModelError(f"{self.name} group orbit target requires type and id")
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -141,6 +291,15 @@ class SystemGroup:
         }
         if self.parent_group_id is not None:
             data["parent_group_id"] = self.parent_group_id
+        if self.orbit is not None:
+            data["orbit"] = self.orbit.to_dict()
+        if self.data_source is not None:
+            source_data = self.data_source.to_dict()
+            if source_data:
+                data["data_source"] = source_data
+        if self.orbit_target_type is not None and self.orbit_target_id is not None:
+            data["orbit_target_type"] = self.orbit_target_type
+            data["orbit_target_id"] = self.orbit_target_id
         return data
 
 
@@ -217,7 +376,7 @@ class SolarSystem:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SolarSystem":
         version = int(data.get("schema_version", 0))
-        if version not in (1, 2, 3, 4, SCHEMA_VERSION):
+        if version not in (1, 2, 3, 4, 5, 6, SCHEMA_VERSION):
             raise ModelError(f"unsupported schema version {version}")
         system_id = str(data.get("id") or uuid4())
         bodies = [Body.from_dict(item) for item in data.get("bodies", [])]
@@ -296,6 +455,7 @@ class SolarSystem:
                 raise ModelError(f"{body.name} parent_id {body.parent_id} does not exist")
         self._validate_parent_cycles()
         self._validate_groups(seen_ids)
+        self._validate_group_orbit_targets(seen_ids)
 
     def _validate_parent_cycles(self) -> None:
         bodies_by_id = {body.id: body for body in self.bodies}
@@ -344,6 +504,58 @@ class SolarSystem:
                 parent = groups_by_id[parent_group_id]
                 parent_group_id = parent.parent_group_id
 
+    def _validate_group_orbit_targets(self, body_ids: set[str]) -> None:
+        group_ids = {group.id for group in self.groups}
+        descendant_group_ids_by_id = {
+            group.id: self._descendant_group_ids(group.id)
+            for group in self.groups
+        }
+        for group in self.groups:
+            if group.orbit_target_type is None and group.orbit_target_id is None:
+                continue
+            if group.orbit_target_type == "body":
+                if group.orbit_target_id not in body_ids:
+                    raise ModelError(f"{group.name} orbit_target_id {group.orbit_target_id} does not exist")
+                if group.orbit_target_id in self._body_ids_for_group(group.id):
+                    raise ModelError(f"{group.name} cannot orbit a body inside itself")
+            elif group.orbit_target_type == "group":
+                if group.orbit_target_id not in group_ids:
+                    raise ModelError(f"{group.name} orbit_target_id {group.orbit_target_id} does not exist")
+                if group.orbit_target_id == group.id:
+                    raise ModelError(f"{group.name} cannot orbit itself")
+                if group.orbit_target_id in descendant_group_ids_by_id[group.id]:
+                    raise ModelError(f"{group.name} cannot orbit a descendant group")
+                if self._body_ids_for_group(group.id) & self._body_ids_for_group(group.orbit_target_id):
+                    raise ModelError(f"{group.name} cannot orbit an overlapping group")
+
+    def _descendant_group_ids(self, group_id: str) -> set[str]:
+        descendants: set[str] = set()
+        changed = True
+        while changed:
+            changed = False
+            for group in self.groups:
+                if group.parent_group_id in descendants | {group_id} and group.id not in descendants:
+                    descendants.add(group.id)
+                    changed = True
+        return descendants
+
+    def _body_ids_for_group(self, group_id: str) -> set[str]:
+        group_ids = self._descendant_group_ids(group_id) | {group_id}
+        body_ids = {
+            body_id
+            for group in self.groups
+            if group.id in group_ids
+            for body_id in group.body_ids
+        }
+        changed = True
+        while changed:
+            changed = False
+            for body in self.bodies:
+                if body.parent_id in body_ids and body.id not in body_ids:
+                    body_ids.add(body.id)
+                    changed = True
+        return body_ids
+
     def to_dict(self) -> dict[str, Any]:
         self.validate()
         return {
@@ -379,6 +591,10 @@ class SolarSystem:
             group["id"] = group_id_map[old_id]
             if group.get("parent_group_id") is not None:
                 group["parent_group_id"] = group_id_map[group["parent_group_id"]]
+            if group.get("orbit_target_type") == "body" and group.get("orbit_target_id") is not None:
+                group["orbit_target_id"] = body_id_map[group["orbit_target_id"]]
+            if group.get("orbit_target_type") == "group" and group.get("orbit_target_id") is not None:
+                group["orbit_target_id"] = group_id_map[group["orbit_target_id"]]
             group["body_ids"] = [
                 body_id_map[body_id]
                 for body_id in group.get("body_ids", [])

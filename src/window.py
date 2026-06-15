@@ -19,7 +19,16 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, Gtk
 
 from .constants import AU, DAY
-from .models import Body, SolarSystem, SystemGroup
+from .models import Body, DataSource, ModelError, OrbitData, SolarSystem, SystemGroup
+from .orbits import (
+    binary_pair_state_vectors,
+    body_indices_for_group,
+    desired_barycenter_from_orbit,
+    group_barycenter,
+    shift_group_to_barycenter,
+    state_vectors_from_orbit,
+    target_anchor,
+)
 from .physics import SimulationState, advance_with_samples
 from .presets import load_builtin_solar_system, load_builtin_solar_systems
 from .scales import (
@@ -104,6 +113,24 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     selected_name_label = Gtk.Template.Child()
     focus_button = Gtk.Template.Child()
     selected_distance_list = Gtk.Template.Child()
+    orbit_expander = Gtk.Template.Child()
+    orbit_axis_spin = Gtk.Template.Child()
+    orbit_period_spin = Gtk.Template.Child()
+    orbit_eccentricity_spin = Gtk.Template.Child()
+    orbit_inclination_spin = Gtk.Template.Child()
+    orbit_node_spin = Gtk.Template.Child()
+    orbit_periapsis_spin = Gtk.Template.Child()
+    orbit_anomaly_spin = Gtk.Template.Child()
+    orbit_epoch_entry = Gtk.Template.Child()
+    orbit_source_entry = Gtk.Template.Child()
+    orbit_source_url_entry = Gtk.Template.Child()
+    orbit_notes_entry = Gtk.Template.Child()
+    orbit_target_label = Gtk.Template.Child()
+    orbit_target_dropdown = Gtk.Template.Child()
+    generate_orbit_button = Gtk.Template.Child()
+    generate_group_orbit_button = Gtk.Template.Child()
+    generate_binary_orbit_button = Gtk.Template.Child()
+    orbit_status_label = Gtk.Template.Child()
     distance_unit_dropdown = Gtk.Template.Child()
     mass_entry = Gtk.Template.Child()
     x_label = Gtk.Template.Child()
@@ -133,6 +160,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.updating_system_dropdown = False
         self.closed = False
         self.simulation_generation = 0
+        self.orbit_target_options: list[tuple[str, str]] = []
         self.simulation_future: Future | None = None
         self.simulation_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="simulation")
         self.trails: list[list[tuple[float, float]]] = [[] for _ in self.system.bodies]
@@ -171,6 +199,9 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.save_button.connect("clicked", self._on_save_clicked)
         self.duplicate_button.connect("clicked", self._on_duplicate_clicked)
         self.focus_button.connect("clicked", self._on_focus_clicked)
+        self.generate_orbit_button.connect("clicked", self._on_generate_orbit_clicked)
+        self.generate_group_orbit_button.connect("clicked", self._on_generate_group_orbit_clicked)
+        self.generate_binary_orbit_button.connect("clicked", self._on_generate_binary_orbit_clicked)
         self.system_dropdown.connect("notify::selected", self._on_system_selected)
         self.body_list.connect("row-selected", self._on_body_selected)
         self.speed_spin.connect("value-changed", self._on_time_step_changed)
@@ -592,6 +623,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.selected_name_label.set_label(body.name)
         self._configure_focus_button(self._body_focus_target(body))
         self._populate_selected_distance_list(body)
+        self._load_orbit_editor(body)
         self.mass_entry.set_text(f"{body.mass_kg:.12g}")
         self._configure_position_spins()
         self.x_spin.set_value(body.position_m[0] / distance_factor)
@@ -612,6 +644,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         while child := self.selected_distance_list.get_first_child():
             self.selected_distance_list.remove(child)
         self.selected_distance_list.set_visible(False)
+        self._load_group_orbit_editor(group)
         self.mass_entry.set_text("")
         self.x_spin.set_value(0.0)
         self.y_spin.set_value(0.0)
@@ -644,6 +677,189 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _set_body_editor_sensitive(self, sensitive: bool) -> None:
         for widget in (self.mass_entry, self.x_spin, self.y_spin, self.vx_spin, self.vy_spin):
             widget.set_sensitive(sensitive)
+        self._set_orbit_editor_sensitive(sensitive and self.selected_group_id is None)
+
+    def _orbit_editor_widgets(self):
+        return (
+            self.orbit_axis_spin,
+            self.orbit_period_spin,
+            self.orbit_eccentricity_spin,
+            self.orbit_inclination_spin,
+            self.orbit_node_spin,
+            self.orbit_periapsis_spin,
+            self.orbit_anomaly_spin,
+            self.orbit_epoch_entry,
+            self.orbit_source_entry,
+            self.orbit_source_url_entry,
+            self.orbit_notes_entry,
+            self.generate_orbit_button,
+            self.orbit_target_dropdown,
+            self.generate_group_orbit_button,
+            self.generate_binary_orbit_button,
+        )
+
+    def _set_orbit_editor_sensitive(self, sensitive: bool) -> None:
+        for widget in self._orbit_editor_widgets():
+            widget.set_sensitive(sensitive)
+
+    def _load_orbit_editor(self, body: Body | None) -> None:
+        parent = None
+        if body is not None and body.parent_id is not None:
+            parent = next((item for item in self.system.bodies if item.id == body.parent_id), None)
+
+        self._show_group_orbit_controls(False)
+        self.orbit_expander.set_sensitive(body is not None)
+        self._set_orbit_editor_sensitive(body is not None and parent is not None)
+        self.generate_orbit_button.set_sensitive(body is not None and parent is not None)
+        if body is None or parent is None:
+            self.orbit_axis_spin.set_value(0.0)
+            self.orbit_period_spin.set_value(0.0)
+            self.orbit_eccentricity_spin.set_value(0.0)
+            self.orbit_inclination_spin.set_value(0.0)
+            self.orbit_node_spin.set_value(0.0)
+            self.orbit_periapsis_spin.set_value(0.0)
+            self.orbit_anomaly_spin.set_value(0.0)
+            self.orbit_epoch_entry.set_text("")
+            self.orbit_source_entry.set_text("")
+            self.orbit_source_url_entry.set_text("")
+            self.orbit_notes_entry.set_text("")
+            if body is None:
+                self.orbit_status_label.set_label("")
+            else:
+                self.orbit_status_label.set_label("Orbital generation requires a parent body.")
+            return
+
+        orbit = body.orbit
+        if orbit is not None and orbit.semi_major_axis_m is not None:
+            self.orbit_axis_spin.set_value(orbit.semi_major_axis_m / AU)
+        else:
+            self.orbit_axis_spin.set_value(distance_between_bodies_m(body, parent) / AU)
+        self.orbit_period_spin.set_value((orbit.orbital_period_s / DAY) if orbit and orbit.orbital_period_s else 0.0)
+        self.orbit_eccentricity_spin.set_value(orbit.eccentricity if orbit and orbit.eccentricity is not None else 0.0)
+        self.orbit_inclination_spin.set_value(
+            orbit.inclination_deg if orbit and orbit.inclination_deg is not None else 0.0
+        )
+        self.orbit_node_spin.set_value(
+            orbit.longitude_of_ascending_node_deg
+            if orbit and orbit.longitude_of_ascending_node_deg is not None
+            else 0.0
+        )
+        self.orbit_periapsis_spin.set_value(
+            orbit.argument_of_periapsis_deg
+            if orbit and orbit.argument_of_periapsis_deg is not None
+            else 0.0
+        )
+        self.orbit_anomaly_spin.set_value(orbit.mean_anomaly_deg if orbit and orbit.mean_anomaly_deg is not None else 0.0)
+        self.orbit_epoch_entry.set_text(orbit.epoch if orbit and orbit.epoch else self.system.epoch)
+        source = body.data_source
+        self.orbit_source_entry.set_text(source.source_name if source else "")
+        self.orbit_source_url_entry.set_text(source.source_url if source else "")
+        self.orbit_notes_entry.set_text(orbit.approximation_notes if orbit else "")
+        self.orbit_status_label.set_label(f"Generate an approximate state vector around {parent.name}.")
+
+    def _load_group_orbit_editor(self, group: SystemGroup) -> None:
+        self.orbit_expander.set_sensitive(True)
+        self._show_group_orbit_controls(True)
+        self._set_orbit_editor_sensitive(True)
+        self.generate_orbit_button.set_sensitive(False)
+        self._populate_orbit_target_dropdown(group)
+        orbit = group.orbit
+        self.orbit_axis_spin.set_value((orbit.semi_major_axis_m / AU) if orbit and orbit.semi_major_axis_m else 0.0)
+        self.orbit_period_spin.set_value((orbit.orbital_period_s / DAY) if orbit and orbit.orbital_period_s else 0.0)
+        self.orbit_eccentricity_spin.set_value(orbit.eccentricity if orbit and orbit.eccentricity is not None else 0.0)
+        self.orbit_inclination_spin.set_value(
+            orbit.inclination_deg if orbit and orbit.inclination_deg is not None else 0.0
+        )
+        self.orbit_node_spin.set_value(
+            orbit.longitude_of_ascending_node_deg
+            if orbit and orbit.longitude_of_ascending_node_deg is not None
+            else 0.0
+        )
+        self.orbit_periapsis_spin.set_value(
+            orbit.argument_of_periapsis_deg
+            if orbit and orbit.argument_of_periapsis_deg is not None
+            else 0.0
+        )
+        self.orbit_anomaly_spin.set_value(orbit.mean_anomaly_deg if orbit and orbit.mean_anomaly_deg is not None else 0.0)
+        self.orbit_epoch_entry.set_text(orbit.epoch if orbit and orbit.epoch else self.system.epoch)
+        source = group.data_source
+        self.orbit_source_entry.set_text(source.source_name if source else "")
+        self.orbit_source_url_entry.set_text(source.source_url if source else "")
+        self.orbit_notes_entry.set_text(orbit.approximation_notes if orbit else "")
+        has_target = bool(self.orbit_target_options)
+        self.orbit_target_dropdown.set_sensitive(has_target)
+        self.generate_group_orbit_button.set_sensitive(has_target)
+        self.generate_binary_orbit_button.set_sensitive(self._group_direct_body_indices(group) is not None)
+        if has_target:
+            self.orbit_status_label.set_label("Generate an approximate group barycenter orbit around the selected target.")
+        else:
+            self.orbit_status_label.set_label("Group barycenter generation requires an eligible body or group target.")
+
+    def _show_group_orbit_controls(self, visible: bool) -> None:
+        for widget in (
+            self.orbit_target_label,
+            self.orbit_target_dropdown,
+            self.generate_group_orbit_button,
+            self.generate_binary_orbit_button,
+        ):
+            widget.set_visible(visible)
+
+    def _populate_orbit_target_dropdown(self, group: SystemGroup) -> None:
+        options: list[tuple[str, str, str]] = []
+        group_body_ids = {self.system.bodies[index].id for index in body_indices_for_group(self.system.bodies, self.system.groups, group.id)}
+        descendant_group_ids = self._descendant_group_ids(group.id)
+        for candidate in self.system.groups:
+            if candidate.id == group.id or candidate.id in descendant_group_ids:
+                continue
+            candidate_body_ids = {
+                self.system.bodies[index].id
+                for index in body_indices_for_group(self.system.bodies, self.system.groups, candidate.id)
+            }
+            if group_body_ids & candidate_body_ids:
+                continue
+            try:
+                group_barycenter(self.system.bodies, self.system.groups, candidate.id)
+            except ModelError:
+                continue
+            options.append(("group", candidate.id, f"{candidate.name} (group)"))
+        for body in self.system.bodies:
+            if body.id in group_body_ids:
+                continue
+            options.append(("body", body.id, f"{body.name} (body)"))
+        self.orbit_target_options = [(target_type, target_id) for target_type, target_id, _label in options]
+        self.orbit_target_dropdown.set_model(Gtk.StringList.new([label for _target_type, _target_id, label in options]))
+        selected = 0
+        if group.orbit_target_type is not None and group.orbit_target_id is not None:
+            selected = next(
+                (
+                    index
+                    for index, (target_type, target_id) in enumerate(self.orbit_target_options)
+                    if target_type == group.orbit_target_type and target_id == group.orbit_target_id
+                ),
+                0,
+            )
+        if self.orbit_target_options:
+            self.orbit_target_dropdown.set_selected(selected)
+
+    def _descendant_group_ids(self, group_id: str) -> set[str]:
+        group_ids: set[str] = set()
+        changed = True
+        while changed:
+            changed = False
+            for group in self.system.groups:
+                if group.parent_group_id in group_ids | {group_id} and group.id not in group_ids:
+                    group_ids.add(group.id)
+                    changed = True
+        return group_ids
+
+    def _group_direct_body_indices(self, group: SystemGroup) -> tuple[int, int] | None:
+        if len(group.body_ids) != 2:
+            return None
+        body_indices_by_id = {body.id: index for index, body in enumerate(self.system.bodies)}
+        indices = [body_indices_by_id.get(body_id) for body_id in group.body_ids]
+        if any(index is None for index in indices):
+            return None
+        return int(indices[0]), int(indices[1])
 
     def _populate_selected_distance_list(self, body: Body) -> None:
         while child := self.selected_distance_list.get_first_child():
@@ -834,6 +1050,152 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.system.settings.distance_unit = DISTANCE_UNITS[selected][1]
             if self.system.bodies:
                 self._load_body_editor(self.system.bodies[self.selected_index])
+
+    def _on_generate_orbit_clicked(self, _button) -> None:
+        if self.editing or not self.system.bodies or self.selected_group_id is not None:
+            return
+        body = self.system.bodies[self.selected_index]
+        if body.parent_id is None:
+            return
+        parent = next((item for item in self.system.bodies if item.id == body.parent_id), None)
+        if parent is None:
+            return
+
+        try:
+            orbit = self._orbit_from_editor()
+            position_m, velocity_mps = state_vectors_from_orbit(parent, body, orbit)
+        except ModelError as error:
+            self._show_error_dialog("Cannot Generate Orbit", str(error))
+            return
+
+        body.orbit = orbit
+        source_name = self.orbit_source_entry.get_text().strip()
+        source_url = self.orbit_source_url_entry.get_text().strip()
+        body.data_source = DataSource(source_name=source_name, source_url=source_url)
+        if body.data_source.to_dict() == {}:
+            body.data_source = None
+        body.position_m = position_m
+        body.velocity_mps = velocity_mps
+        self.state = SimulationState.from_bodies(self.system.bodies)
+        self.simulation_generation += 1
+        self._clear_dynamic_simulation_state()
+        self._load_body_editor(body)
+        self._refresh_body_relationship_labels()
+        self._update_title()
+        self.canvas.queue_draw()
+
+    def _on_generate_group_orbit_clicked(self, _button) -> None:
+        if self.editing or self.selected_group_id is None:
+            return
+        group = self._group_by_id(self.selected_group_id)
+        if group is None:
+            return
+        selected = self.orbit_target_dropdown.get_selected()
+        if selected == Gtk.INVALID_LIST_POSITION or selected >= len(self.orbit_target_options):
+            self._show_error_dialog("Cannot Generate Group Orbit", "Select a target body or group.")
+            return
+        target_type, target_id = self.orbit_target_options[selected]
+
+        try:
+            orbit = self._orbit_from_editor()
+            current = group_barycenter(self.system.bodies, self.system.groups, group.id)
+            target = target_anchor(self.system.bodies, self.system.groups, target_type, target_id)
+            desired = desired_barycenter_from_orbit(target, current.mass_kg, orbit)
+            shift_group_to_barycenter(self.system.bodies, self.system.groups, group.id, desired)
+        except ModelError as error:
+            self._show_error_dialog("Cannot Generate Group Orbit", str(error))
+            return
+
+        group.orbit = orbit
+        group.orbit_target_type = target_type
+        group.orbit_target_id = target_id
+        group.data_source = self._data_source_from_orbit_editor()
+        self._after_orbit_generated()
+        self._load_group_focus(group.id)
+
+    def _on_generate_binary_orbit_clicked(self, _button) -> None:
+        if self.editing or self.selected_group_id is None:
+            return
+        group = self._group_by_id(self.selected_group_id)
+        if group is None:
+            return
+        indices = self._group_direct_body_indices(group)
+        if indices is None:
+            self._show_error_dialog("Cannot Generate Binary Pair", "Binary generation requires exactly two direct bodies.")
+            return
+
+        first = self.system.bodies[indices[0]]
+        second = self.system.bodies[indices[1]]
+        try:
+            orbit = self._orbit_from_editor()
+            center = group_barycenter(self.system.bodies, self.system.groups, group.id)
+            first_state, second_state = binary_pair_state_vectors(
+                first,
+                second,
+                orbit,
+                center.position_m,
+                center.velocity_mps,
+            )
+        except ModelError as error:
+            self._show_error_dialog("Cannot Generate Binary Pair", str(error))
+            return
+
+        first.position_m, first.velocity_mps = first_state
+        second.position_m, second.velocity_mps = second_state
+        group.orbit = orbit
+        group.data_source = self._data_source_from_orbit_editor()
+        self._after_orbit_generated()
+        self._load_group_focus(group.id)
+
+    def _orbit_from_editor(self) -> OrbitData:
+        semi_major_axis_m = self.orbit_axis_spin.get_value() * AU
+        orbital_period_s = self.orbit_period_spin.get_value() * DAY
+        notes = self.orbit_notes_entry.get_text().strip()
+        if semi_major_axis_m <= 0.0:
+            semi_major_axis_m = None
+        if orbital_period_s <= 0.0:
+            orbital_period_s = None
+        if semi_major_axis_m is None and orbital_period_s is None:
+            raise ModelError("enter a semi-major axis or orbital period")
+        if notes == "":
+            notes = "Approximate orbital seed; unknown fields use app defaults."
+        orbit = OrbitData(
+            semi_major_axis_m=semi_major_axis_m,
+            orbital_period_s=orbital_period_s,
+            eccentricity=self.orbit_eccentricity_spin.get_value(),
+            inclination_deg=self.orbit_inclination_spin.get_value(),
+            longitude_of_ascending_node_deg=self.orbit_node_spin.get_value(),
+            argument_of_periapsis_deg=self.orbit_periapsis_spin.get_value(),
+            mean_anomaly_deg=self.orbit_anomaly_spin.get_value(),
+            epoch=self.orbit_epoch_entry.get_text().strip() or self.system.epoch,
+            reference_plane="app-local XY",
+            approximation_notes=notes,
+        )
+        orbit.validate()
+        return orbit
+
+    def _data_source_from_orbit_editor(self) -> DataSource | None:
+        source = DataSource(
+            source_name=self.orbit_source_entry.get_text().strip(),
+            source_url=self.orbit_source_url_entry.get_text().strip(),
+        )
+        return source if source.to_dict() else None
+
+    def _after_orbit_generated(self) -> None:
+        self.state = SimulationState.from_bodies(self.system.bodies)
+        self.simulation_generation += 1
+        self._clear_dynamic_simulation_state()
+        self._populate_body_list()
+        self._refresh_body_relationship_labels()
+        self._update_title()
+        self.canvas.queue_draw()
+
+    def _show_error_dialog(self, title: str, message: str) -> None:
+        dialog = Adw.AlertDialog.new(title, message)
+        dialog.add_response("ok", "OK")
+        dialog.set_default_response("ok")
+        dialog.set_close_response("ok")
+        dialog.present(self)
 
     def _on_focus_clicked(self, _button) -> None:
         target = f"group:{self.selected_group_id}" if self.selected_group_id is not None else None

@@ -30,7 +30,7 @@ simulated the same way.
 
 ## System Groups
 
-The preset uses schema v5 `SystemGroup` records to describe the hierarchical
+The preset uses `SystemGroup` records to describe the hierarchical
 stellar architecture without nesting bodies:
 
 - `Alpha Centauri`, kind `triple_system`, is the top-level container.
@@ -40,6 +40,12 @@ stellar architecture without nesting bodies:
 The child planets remain parented to their local stars through `Body.parent_id`.
 This lets the UI focus the AB binary or the Proxima subsystem while keeping all
 body state vectors in one flat coordinate system.
+
+Newer saved systems can also store orbital metadata on groups. That is the
+right representation for barycenter relationships such as Alpha Centauri A/B as
+a binary pair and the Proxima Centauri System orbiting the Alpha Centauri AB
+barycenter. The bundled preset still stores generated state vectors directly;
+the generator remains the source of truth for those approximate values.
 
 ## Construction
 

@@ -7,6 +7,7 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 - `src/main.py`: application object, app actions, About dialog, shortcuts dialog.
 - `src/window.py`: main GTK window controller, drawing, playback controls, body inspector, local-library actions.
 - `src/models.py`: schema-versioned `Body`, `SystemGroup`, and `SolarSystem` dataclasses with validation, parent-body relationships, group hierarchy, migration, and JSON conversion.
+- `src/orbits.py`: pure Keplerian orbit conversion helpers for generating Cartesian simulation state from optional orbital metadata.
 - `src/physics.py`: NumPy-backed simulation state, acceleration, low-level `step()`, user-facing `advance()`, and sampled `advance_with_samples()`.
 - `src/scales.py`: pure scale helpers for time/distance units, elapsed-time formatting, adaptive internal step policy, simulation scope selection, and trail sampling cadence.
 - `src/presets.py`: loads bundled preset data from `src/presets/`.
@@ -24,7 +25,7 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 7. `window.py` draws active body positions/trails, system overview group positions/trails, or focused bodies with muted context markers on a `GtkDrawingArea`.
 8. Save/duplicate writes `SolarSystem` JSON through `storage.Library`.
 
-`Body.parent_id` records local orbital/display parentage, such as planets orbiting a star. Body descendant chains can be used as focus targets, which also supports future planet-and-moon systems. `SystemGroup` records larger semantic hierarchy, such as a binary subsystem or a planetary system. Physics remains a flat N-body simulation over the active body set, so groups do not constrain gravity by themselves.
+`Body.parent_id` records local orbital/display parentage, such as planets orbiting a star. Body descendant chains can be used as focus targets, which also supports future planet-and-moon systems. Optional `Body.orbit` and `Body.data_source` records preserve user-entered orbital/source metadata for generating approximate initial state vectors, but `position_m` and `velocity_mps` remain the canonical simulation state. `SystemGroup` records larger semantic hierarchy, such as a binary subsystem or a planetary system. Physics remains a flat N-body simulation over the active body set, so groups do not constrain gravity by themselves.
 
 `SolarSystem.settings` stores per-system playback and view preferences. The UI exposes the visible time step, time unit, accuracy profile, view mode, simulation scope, and distance editor unit, while the physics layer still receives SI values only.
 
@@ -37,6 +38,7 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 Tests live in `tests/` and are registered through `tests/meson.build`.
 
 - `test_models.py`: model validation and preset round trips.
+- `test_orbits.py`: orbital metadata conversion into Cartesian state vectors.
 - `test_physics.py`: orbital stability, 1PN differences, invalid arrays, large-step regression coverage.
 - `test_storage.py`: local library save/load/list/delete.
 - `test_update_solar_system_preset.py`: preset update script behavior.
