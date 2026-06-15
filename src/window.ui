@@ -249,7 +249,7 @@
                       </object>
                     </child>
                     <child>
-                      <object class="GtkListBox" id="body_list">
+                      <object class="BodyHierarchyList" id="body_list">
                         <property name="selection-mode">single</property>
                         <style>
                           <class name="boxed-list"/>

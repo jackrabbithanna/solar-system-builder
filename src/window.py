@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import math
 import traceback
 from concurrent.futures import Future, ThreadPoolExecutor
 
@@ -15,7 +14,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
-from gi.repository import Adw, Gdk, GLib, Gtk
+from gi.repository import Adw, GLib, Gtk
 
 from . import hierarchy, playback
 from .canvas import CanvasScene, SolarSystemCanvas
@@ -33,11 +32,7 @@ from .orbits import (
 from .physics import SimulationState, advance_with_samples
 from .presets import load_builtin_solar_system, load_builtin_solar_systems
 from .scales import (
-    ACCURACY_LABELS,
     DISTANCE_UNITS,
-    TIME_UNITS,
-    VIEW_MODE_LABELS,
-    SIMULATION_SCOPE_LABELS,
     OverviewEntity,
     active_body_indices,
     derived_max_step_s,
@@ -51,10 +46,9 @@ from .scales import (
     format_elapsed_time,
     recommended_trail_sample_interval_s,
     system_overview_entities,
-    time_unit_for_seconds,
     unit_factor,
-    unit_index,
 )
+from .sidebar import BodyHierarchyList, BodyInspectorPanel, SystemPropertiesPanel
 from .storage import Library
 
 
@@ -125,15 +119,11 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.focus_group_id: str | None = None
         self.focus_target: str | None = None
         self.selected_group_id: str | None = None
-        self.body_list_indices: list[int] = []
-        self.body_list_rows: list[tuple[str, str | int]] = []
-        self.body_relationship_labels: dict[int, Gtk.Label] = {}
         self.playing = False
         self.editing = False
         self.updating_system_dropdown = False
         self.closed = False
         self.simulation_generation = 0
-        self.orbit_target_options: list[tuple[str, str]] = []
         self.simulation_future: Future | None = None
         self.simulation_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="simulation")
         self.trails: list[list[tuple[float, float]]] = [[] for _ in self.system.bodies]
@@ -147,11 +137,46 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.zoom_factor = 1.0
         self.timer_id = GLib.timeout_add(33, self._tick)
 
-        self._setup_dropdown(self.time_unit_dropdown, TIME_UNITS)
-        self._setup_dropdown(self.accuracy_dropdown, ACCURACY_LABELS)
-        self._setup_dropdown(self.view_mode_dropdown, VIEW_MODE_LABELS)
-        self._setup_dropdown(self.simulation_scope_dropdown, SIMULATION_SCOPE_LABELS)
-        self._setup_dropdown(self.distance_unit_dropdown, DISTANCE_UNITS)
+        self.system_panel = SystemPropertiesPanel(
+            self.system_name_entry,
+            self.delete_system_button,
+            self.speed_spin,
+            self.time_unit_dropdown,
+            self.accuracy_dropdown,
+            self.view_mode_dropdown,
+            self.simulation_scope_dropdown,
+            self.distance_unit_dropdown,
+        )
+        self.body_inspector = BodyInspectorPanel(
+            self.selected_name_label,
+            self.focus_button,
+            self.selected_distance_list,
+            self.orbit_expander,
+            self.orbit_axis_spin,
+            self.orbit_period_spin,
+            self.orbit_eccentricity_spin,
+            self.orbit_inclination_spin,
+            self.orbit_node_spin,
+            self.orbit_periapsis_spin,
+            self.orbit_anomaly_spin,
+            self.orbit_epoch_entry,
+            self.orbit_source_entry,
+            self.orbit_source_url_entry,
+            self.orbit_notes_entry,
+            self.orbit_target_label,
+            self.orbit_target_dropdown,
+            self.generate_orbit_button,
+            self.generate_group_orbit_button,
+            self.generate_binary_orbit_button,
+            self.orbit_status_label,
+            self.mass_entry,
+            self.x_label,
+            self.x_spin,
+            self.y_label,
+            self.y_spin,
+            self.vx_spin,
+            self.vy_spin,
+        )
 
         self.canvas.connect("body-selected", self._on_canvas_body_selected)
         self.canvas.connect("group-selected", self._on_canvas_group_selected)
@@ -165,26 +190,21 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.zoom_in_button.connect("clicked", self._on_zoom_in_clicked)
         self.save_button.connect("clicked", self._on_save_clicked)
         self.duplicate_button.connect("clicked", self._on_duplicate_clicked)
-        self.focus_button.connect("clicked", self._on_focus_clicked)
-        self.generate_orbit_button.connect("clicked", self._on_generate_orbit_clicked)
-        self.generate_group_orbit_button.connect("clicked", self._on_generate_group_orbit_clicked)
-        self.generate_binary_orbit_button.connect("clicked", self._on_generate_binary_orbit_clicked)
         self.system_dropdown.connect("notify::selected", self._on_system_selected)
-        self.body_list.connect("row-selected", self._on_body_selected)
-        self.speed_spin.connect("value-changed", self._on_time_step_changed)
-        self.time_unit_dropdown.connect("notify::selected", self._on_time_step_changed)
-        self.accuracy_dropdown.connect("notify::selected", self._on_accuracy_changed)
-        self.view_mode_dropdown.connect("notify::selected", self._on_view_mode_changed)
-        self.simulation_scope_dropdown.connect("notify::selected", self._on_simulation_scope_changed)
-        self.distance_unit_dropdown.connect("notify::selected", self._on_distance_unit_changed)
-
-        self.system_name_entry.connect("activate", self._on_system_name_edit)
-        self.system_name_entry.connect("notify::has-focus", self._on_system_name_focus_changed)
-        self.delete_system_button.connect("clicked", self._on_delete_system_clicked)
-        self.mass_entry.connect("activate", self._on_body_edit)
-        self.mass_entry.connect("notify::has-focus", self._on_mass_focus_changed)
-        for spin in (self.x_spin, self.y_spin, self.vx_spin, self.vy_spin):
-            spin.connect("value-changed", self._on_body_edit)
+        self.body_list.connect("body-selected", self._on_hierarchy_body_selected)
+        self.body_list.connect("group-selected", self._on_hierarchy_group_selected)
+        self.system_panel.connect("system-name-edited", self._on_system_name_edited)
+        self.system_panel.connect("delete-requested", self._on_delete_system_requested)
+        self.system_panel.connect("time-step-changed", self._on_time_step_changed)
+        self.system_panel.connect("accuracy-changed", self._on_accuracy_changed)
+        self.system_panel.connect("view-mode-changed", self._on_view_mode_changed)
+        self.system_panel.connect("simulation-scope-changed", self._on_simulation_scope_changed)
+        self.system_panel.connect("distance-unit-changed", self._on_distance_unit_changed)
+        self.body_inspector.connect("body-edited", self._on_body_edit)
+        self.body_inspector.connect("focus-requested", self._on_focus_clicked)
+        self.body_inspector.connect("generate-body-orbit", self._on_generate_orbit_clicked)
+        self.body_inspector.connect("generate-group-orbit", self._on_generate_group_orbit_clicked)
+        self.body_inspector.connect("generate-binary-orbit", self._on_generate_binary_orbit_clicked)
 
         self._reload_system_list()
         self._load_system_editor()
@@ -221,9 +241,6 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             for system in self.systems
         ]
         self.system_dropdown.set_model(Gtk.StringList.new(names))
-
-    def _setup_dropdown(self, dropdown, items) -> None:
-        dropdown.set_model(Gtk.StringList.new([item[0] for item in items]))
 
     def _load_system(self, system: SolarSystem) -> None:
         self.playing = False
@@ -263,95 +280,10 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         )
 
     def _populate_body_list(self) -> None:
-        while child := self.body_list.get_first_child():
-            self.body_list.remove(child)
-        self.body_relationship_labels = {}
-        self.body_list_rows = self._body_list_rows()
-        self.body_list_indices = [
-            int(row_id)
-            for row_type, row_id in self.body_list_rows
-            if row_type == "body"
-        ]
-        for row_type, row_id in self.body_list_rows:
-            if row_type == "group":
-                self._append_group_row(str(row_id))
-                continue
-            body_index = int(row_id)
-            body = self.system.bodies[body_index]
-            self._append_body_row(body_index, self._body_row_depth(body_index))
-
-    def _append_group_row(self, group_id: str) -> None:
-        group = self._group_by_id(group_id)
-        if group is None:
-            return
-        row = Gtk.ListBoxRow()
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        box.set_margin_top(8)
-        box.set_margin_bottom(8)
-        box.set_margin_start(10 + self._group_depth(group) * 18)
-        box.set_margin_end(10)
-        name = Gtk.Label(label=group.name, xalign=0)
-        name.set_hexpand(True)
-        name.add_css_class("heading")
-        kind = Gtk.Label(label=self._group_label(group))
-        kind.add_css_class("dim-label")
-        box.append(name)
-        box.append(kind)
-        row.set_child(box)
-        self.body_list.append(row)
-
-    def _append_body_row(self, body_index: int, depth: int) -> None:
-        body = self.system.bodies[body_index]
-        row = Gtk.ListBoxRow()
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        box.set_margin_top(8)
-        box.set_margin_bottom(8)
-        box.set_margin_start(10 + depth * 18)
-        box.set_margin_end(10)
-        swatch = Gtk.DrawingArea()
-        swatch.set_content_width(14)
-        swatch.set_content_height(14)
-        swatch.set_draw_func(self._draw_swatch, body.color)
-        name = Gtk.Label(label=body.name, xalign=0)
-        name.set_hexpand(True)
-        kind = Gtk.Label(label=self._body_relationship_label(body))
-        kind.add_css_class("dim-label")
-        self.body_relationship_labels[body_index] = kind
-        box.append(swatch)
-        box.append(name)
-        box.append(kind)
-        row.set_child(box)
-        self.body_list.append(row)
-
-    def _body_list_rows(self) -> list[tuple[str, str | int]]:
-        return hierarchy.body_list_rows(self.system.bodies, self.system.groups)
-
-    def _body_subtree_order(self, body_index: int) -> list[int]:
-        return hierarchy.body_subtree_order(self.system.bodies, body_index)
-
-    def _body_sort_key(self, parent_index: int | None, child_index: int) -> tuple[int, float, str]:
-        return hierarchy.body_sort_key(self.system.bodies, parent_index, child_index)
-
-    def _body_list_order(self) -> list[int]:
-        return hierarchy.body_list_order(self.system.bodies)
-
-    def _body_row_depth(self, body_index: int) -> int:
-        return hierarchy.body_row_depth(self.system.bodies, self.system.groups, body_index)
-
-    def _body_depth(self, body: Body) -> int:
-        return hierarchy.body_depth(self.system.bodies, body)
-
-    def _body_relationship_label(self, body: Body) -> str:
-        return hierarchy.body_relationship_label(self.system.bodies, body)
-
-    def _group_label(self, group: SystemGroup) -> str:
-        return hierarchy.group_label(self.system.bodies, self.system.groups, group)
+        self.body_list.set_system(self.system.bodies, self.system.groups)
 
     def _group_by_id(self, group_id: str | None) -> SystemGroup | None:
         return hierarchy.group_by_id(self.system.groups, group_id)
-
-    def _group_depth(self, group: SystemGroup | None) -> int:
-        return hierarchy.group_depth(self.system.groups, group)
 
     def _group_for_body_id(self, body_id: str) -> SystemGroup | None:
         return hierarchy.group_for_body_id(self.system.bodies, self.system.groups, body_id)
@@ -365,13 +297,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _descendant_group_ids(self, group_id: str) -> set[str]:
         return hierarchy.descendant_group_ids(self.system.groups, group_id)
 
-    def _nearest_other_star(self, body: Body) -> Body | None:
-        return hierarchy.nearest_other_star(self.system.bodies, body)
-
     def _refresh_body_relationship_labels(self) -> None:
-        for body_index, label in self.body_relationship_labels.items():
-            if body_index < len(self.system.bodies):
-                label.set_label(self._body_relationship_label(self.system.bodies[body_index]))
+        self.body_list.refresh_relationship_labels()
 
     def _select_body(self, index: int) -> None:
         if not self.system.bodies:
@@ -379,34 +306,13 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.selected_index = max(0, min(index, len(self.system.bodies) - 1))
         self.focus_group_id = self._group_id_for_body_index(self.selected_index)
         self.selected_group_id = None
-        row_index = next(
-            (
-                list_index
-                for list_index, (row_type, row_id) in enumerate(self.body_list_rows)
-                if row_type == "body" and int(row_id) == self.selected_index
-            ),
-            self.selected_index,
-        )
-        row = self.body_list.get_row_at_index(row_index)
-        if row:
-            self.body_list.select_row(row)
+        self.body_list.select_body(self.selected_index)
         self._load_body_editor(self.system.bodies[self.selected_index])
 
     def _select_group(self, group_id: str) -> None:
         if self._group_by_id(group_id) is None:
             return
-        row_index = next(
-            (
-                list_index
-                for list_index, (row_type, row_id) in enumerate(self.body_list_rows)
-                if row_type == "group" and str(row_id) == group_id
-            ),
-            None,
-        )
-        if row_index is not None:
-            row = self.body_list.get_row_at_index(row_index)
-            if row:
-                self.body_list.select_row(row)
+        self.body_list.select_group(group_id)
         if self.selected_group_id != group_id:
             self.focus_target = None
             self.selected_group_id = group_id
@@ -415,48 +321,38 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._refresh_canvas()
 
     def _load_body_editor(self, body: Body) -> None:
-        self.editing = True
+        self.body_inspector.set_editing(True)
         distance_factor = self._distance_factor()
         self._set_body_editor_sensitive(True)
         self.selected_group_id = None
-        self.selected_name_label.set_label(body.name)
+        self.body_inspector.set_selected_name(body.name)
         self._configure_focus_button(self._body_focus_target(body))
         self._populate_selected_distance_list(body)
         self._load_orbit_editor(body)
-        self.mass_entry.set_text(f"{body.mass_kg:.12g}")
         self._configure_position_spins()
-        self.x_spin.set_value(body.position_m[0] / distance_factor)
-        self.y_spin.set_value(body.position_m[1] / distance_factor)
-        self.vx_spin.set_value(body.velocity_mps[0])
-        self.vy_spin.set_value(body.velocity_mps[1])
-        self.editing = False
+        self.body_inspector.set_body_values(body, distance_factor)
+        self.body_inspector.set_editing(False)
 
     def _load_group_focus(self, group_id: str) -> None:
         group = self._group_by_id(group_id)
         if group is None:
             return
         self.focus_group_id = group.id
-        self.editing = True
+        self.body_inspector.set_editing(True)
         self._set_body_editor_sensitive(False)
-        self.selected_name_label.set_label(group.name)
+        self.body_inspector.set_selected_name(group.name)
         self._configure_focus_button(f"group:{group.id}")
-        while child := self.selected_distance_list.get_first_child():
-            self.selected_distance_list.remove(child)
-        self.selected_distance_list.set_visible(False)
+        self.body_inspector.hide_distance_list()
         self._load_group_orbit_editor(group)
-        self.mass_entry.set_text("")
-        self.x_spin.set_value(0.0)
-        self.y_spin.set_value(0.0)
-        self.vx_spin.set_value(0.0)
-        self.vy_spin.set_value(0.0)
-        self.editing = False
+        self.body_inspector.clear_body_values()
+        self.body_inspector.set_editing(False)
 
     def _configure_focus_button(self, target: str | None) -> None:
         if target is None:
-            self.focus_button.set_visible(False)
+            self.body_inspector.configure_focus_button(False)
             return
         active_indices = focus_target_body_indices(self.system.bodies, self.system.groups, target)
-        self.focus_button.set_visible(bool(active_indices))
+        self.body_inspector.configure_focus_button(bool(active_indices))
 
     def _body_focus_target(self, body: Body) -> str | None:
         if any(candidate.parent_id == body.id for candidate in self.system.bodies):
@@ -474,32 +370,16 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.last_trail_sample_elapsed_s = self.state.elapsed_s
 
     def _set_body_editor_sensitive(self, sensitive: bool) -> None:
-        for widget in (self.mass_entry, self.x_spin, self.y_spin, self.vx_spin, self.vy_spin):
-            widget.set_sensitive(sensitive)
-        self._set_orbit_editor_sensitive(sensitive and self.selected_group_id is None)
-
-    def _orbit_editor_widgets(self):
-        return (
-            self.orbit_axis_spin,
-            self.orbit_period_spin,
-            self.orbit_eccentricity_spin,
-            self.orbit_inclination_spin,
-            self.orbit_node_spin,
-            self.orbit_periapsis_spin,
-            self.orbit_anomaly_spin,
-            self.orbit_epoch_entry,
-            self.orbit_source_entry,
-            self.orbit_source_url_entry,
-            self.orbit_notes_entry,
-            self.generate_orbit_button,
-            self.orbit_target_dropdown,
-            self.generate_group_orbit_button,
-            self.generate_binary_orbit_button,
+        self.body_inspector.set_body_editor_sensitive(
+            sensitive,
+            sensitive and self.selected_group_id is None,
         )
 
+    def _orbit_editor_widgets(self):
+        return self.body_inspector.orbit_editor_widgets()
+
     def _set_orbit_editor_sensitive(self, sensitive: bool) -> None:
-        for widget in self._orbit_editor_widgets():
-            widget.set_sensitive(sensitive)
+        self.body_inspector.set_orbit_editor_sensitive(sensitive)
 
     def _load_orbit_editor(self, body: Body | None) -> None:
         parent = None
@@ -507,104 +387,53 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             parent = next((item for item in self.system.bodies if item.id == body.parent_id), None)
 
         self._show_group_orbit_controls(False)
-        self.orbit_expander.set_sensitive(body is not None)
+        self.body_inspector.set_orbit_expander_sensitive(body is not None)
         self._set_orbit_editor_sensitive(body is not None and parent is not None)
-        self.generate_orbit_button.set_sensitive(body is not None and parent is not None)
+        self.body_inspector.set_generate_body_orbit_sensitive(body is not None and parent is not None)
         if body is None or parent is None:
             if body is None:
                 self._load_orbit_values(None, None, 0.0)
-                self.orbit_status_label.set_label("")
+                self.body_inspector.set_orbit_status("")
             elif binary_group := self._direct_binary_group_for_body(body):
                 self._load_orbit_values(binary_group.orbit, binary_group.data_source, 0.0)
                 self._set_orbit_editor_sensitive(True)
-                self.generate_orbit_button.set_sensitive(False)
-                self.generate_binary_orbit_button.set_visible(True)
-                self.generate_binary_orbit_button.set_sensitive(True)
-                self.orbit_status_label.set_label(
+                self.body_inspector.set_generate_body_orbit_sensitive(False)
+                self.body_inspector.configure_binary_orbit_button(True, True)
+                self.body_inspector.set_orbit_status(
                     f"{body.name} is a member of {binary_group.name}. "
                     "Edit these fields to generate the binary pair around the shared barycenter."
                 )
             else:
                 self._load_orbit_values(None, None, 0.0)
-                self.orbit_status_label.set_label("Orbital generation requires a parent body.")
+                self.body_inspector.set_orbit_status("Orbital generation requires a parent body.")
             return
 
         orbit = body.orbit
         self._load_orbit_values(orbit, body.data_source, distance_between_bodies_m(body, parent) / AU)
-        self.orbit_status_label.set_label(f"Generate an approximate state vector around {parent.name}.")
+        self.body_inspector.set_orbit_status(f"Generate an approximate state vector around {parent.name}.")
 
     def _load_group_orbit_editor(self, group: SystemGroup) -> None:
-        self.orbit_expander.set_sensitive(True)
+        self.body_inspector.set_orbit_expander_sensitive(True)
         self._show_group_orbit_controls(True)
         self._set_orbit_editor_sensitive(True)
-        self.generate_orbit_button.set_sensitive(False)
+        self.body_inspector.set_generate_body_orbit_sensitive(False)
         self._populate_orbit_target_dropdown(group)
-        orbit = group.orbit
-        self.orbit_axis_spin.set_value((orbit.semi_major_axis_m / AU) if orbit and orbit.semi_major_axis_m else 0.0)
-        self.orbit_period_spin.set_value((orbit.orbital_period_s / DAY) if orbit and orbit.orbital_period_s else 0.0)
-        self.orbit_eccentricity_spin.set_value(orbit.eccentricity if orbit and orbit.eccentricity is not None else 0.0)
-        self.orbit_inclination_spin.set_value(
-            orbit.inclination_deg if orbit and orbit.inclination_deg is not None else 0.0
+        self._load_orbit_values(group.orbit, group.data_source, 0.0)
+        has_target = bool(self.body_inspector.orbit_target_options)
+        self.body_inspector.set_group_orbit_target_sensitive(
+            has_target,
+            self._group_direct_body_indices(group) is not None,
         )
-        self.orbit_node_spin.set_value(
-            orbit.longitude_of_ascending_node_deg
-            if orbit and orbit.longitude_of_ascending_node_deg is not None
-            else 0.0
-        )
-        self.orbit_periapsis_spin.set_value(
-            orbit.argument_of_periapsis_deg
-            if orbit and orbit.argument_of_periapsis_deg is not None
-            else 0.0
-        )
-        self.orbit_anomaly_spin.set_value(orbit.mean_anomaly_deg if orbit and orbit.mean_anomaly_deg is not None else 0.0)
-        self.orbit_epoch_entry.set_text(orbit.epoch if orbit and orbit.epoch else self.system.epoch)
-        source = group.data_source
-        self.orbit_source_entry.set_text(source.source_name if source else "")
-        self.orbit_source_url_entry.set_text(source.source_url if source else "")
-        self.orbit_notes_entry.set_text(orbit.approximation_notes if orbit else "")
-        has_target = bool(self.orbit_target_options)
-        self.orbit_target_dropdown.set_sensitive(has_target)
-        self.generate_group_orbit_button.set_sensitive(has_target)
-        self.generate_binary_orbit_button.set_sensitive(self._group_direct_body_indices(group) is not None)
         if has_target:
-            self.orbit_status_label.set_label("Generate an approximate group barycenter orbit around the selected target.")
+            self.body_inspector.set_orbit_status("Generate an approximate group barycenter orbit around the selected target.")
         else:
-            self.orbit_status_label.set_label("Group barycenter generation requires an eligible body or group target.")
+            self.body_inspector.set_orbit_status("Group barycenter generation requires an eligible body or group target.")
 
     def _load_orbit_values(self, orbit: OrbitData | None, source: DataSource | None, default_axis_au: float) -> None:
-        if orbit is not None and orbit.semi_major_axis_m is not None:
-            self.orbit_axis_spin.set_value(orbit.semi_major_axis_m / AU)
-        else:
-            self.orbit_axis_spin.set_value(default_axis_au)
-        self.orbit_period_spin.set_value((orbit.orbital_period_s / DAY) if orbit and orbit.orbital_period_s else 0.0)
-        self.orbit_eccentricity_spin.set_value(orbit.eccentricity if orbit and orbit.eccentricity is not None else 0.0)
-        self.orbit_inclination_spin.set_value(
-            orbit.inclination_deg if orbit and orbit.inclination_deg is not None else 0.0
-        )
-        self.orbit_node_spin.set_value(
-            orbit.longitude_of_ascending_node_deg
-            if orbit and orbit.longitude_of_ascending_node_deg is not None
-            else 0.0
-        )
-        self.orbit_periapsis_spin.set_value(
-            orbit.argument_of_periapsis_deg
-            if orbit and orbit.argument_of_periapsis_deg is not None
-            else 0.0
-        )
-        self.orbit_anomaly_spin.set_value(orbit.mean_anomaly_deg if orbit and orbit.mean_anomaly_deg is not None else 0.0)
-        self.orbit_epoch_entry.set_text(orbit.epoch if orbit and orbit.epoch else self.system.epoch)
-        self.orbit_source_entry.set_text(source.source_name if source else "")
-        self.orbit_source_url_entry.set_text(source.source_url if source else "")
-        self.orbit_notes_entry.set_text(orbit.approximation_notes if orbit else "")
+        self.body_inspector.load_orbit_values(orbit, source, default_axis_au, self.system.epoch)
 
     def _show_group_orbit_controls(self, visible: bool) -> None:
-        for widget in (
-            self.orbit_target_label,
-            self.orbit_target_dropdown,
-            self.generate_group_orbit_button,
-            self.generate_binary_orbit_button,
-        ):
-            widget.set_visible(visible)
+        self.body_inspector.show_group_orbit_controls(visible)
 
     def _populate_orbit_target_dropdown(self, group: SystemGroup) -> None:
         options: list[tuple[str, str, str]] = []
@@ -628,20 +457,17 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             if body.id in group_body_ids:
                 continue
             options.append(("body", body.id, f"{body.name} (body)"))
-        self.orbit_target_options = [(target_type, target_id) for target_type, target_id, _label in options]
-        self.orbit_target_dropdown.set_model(Gtk.StringList.new([label for _target_type, _target_id, label in options]))
         selected = 0
         if group.orbit_target_type is not None and group.orbit_target_id is not None:
             selected = next(
                 (
                     index
-                    for index, (target_type, target_id) in enumerate(self.orbit_target_options)
+                    for index, (target_type, target_id, _label) in enumerate(options)
                     if target_type == group.orbit_target_type and target_id == group.orbit_target_id
                 ),
                 0,
             )
-        if self.orbit_target_options:
-            self.orbit_target_dropdown.set_selected(selected)
+        self.body_inspector.set_orbit_target_options(options, selected)
 
     def _group_direct_body_indices(self, group: SystemGroup) -> tuple[int, int] | None:
         if len(group.body_ids) != 2:
@@ -659,81 +485,36 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         return None
 
     def _populate_selected_distance_list(self, body: Body) -> None:
-        while child := self.selected_distance_list.get_first_child():
-            self.selected_distance_list.remove(child)
-
-        rows = self._selected_distance_rows(body)
-        self.selected_distance_list.set_visible(bool(rows))
-        for label, value in rows:
-            row = Gtk.ListBoxRow()
-            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            box.set_margin_top(8)
-            box.set_margin_bottom(8)
-            box.set_margin_start(10)
-            box.set_margin_end(10)
-            name = Gtk.Label(label=label, xalign=0)
-            name.set_hexpand(True)
-            name.add_css_class("dim-label")
-            distance = Gtk.Label(label=value, xalign=1)
-            box.append(name)
-            box.append(distance)
-            row.set_child(box)
-            self.selected_distance_list.append(row)
+        self.body_inspector.populate_distance_list(self._selected_distance_rows(body))
 
     def _selected_distance_rows(self, body: Body) -> list[tuple[str, str]]:
         return hierarchy.selected_distance_rows(self.system.bodies, body)
 
     def _load_system_editor(self) -> None:
-        self.editing = True
-        self.system_name_entry.set_text(self.system.name)
-        editable = self._system_is_user_saved()
-        self.system_name_entry.set_sensitive(editable)
-        self.delete_system_button.set_sensitive(editable)
-        self.editing = False
+        self.system_panel.load_system(self.system, self._system_is_user_saved())
 
     def _load_settings_editor(self) -> None:
-        self.editing = True
-        try:
-            time_unit = time_unit_for_seconds(self.system.settings.visible_step_s)
-            time_factor = unit_factor(TIME_UNITS, time_unit)
-            self.speed_spin.set_value(self.system.settings.visible_step_s / time_factor)
-            self.time_unit_dropdown.set_selected(unit_index(TIME_UNITS, time_unit))
-            self.accuracy_dropdown.set_selected(
-                unit_index(ACCURACY_LABELS, self.system.settings.accuracy_profile)
-            )
-            self.view_mode_dropdown.set_selected(
-                unit_index(VIEW_MODE_LABELS, self.system.settings.view_mode)
-            )
-            self.simulation_scope_dropdown.set_selected(
-                unit_index(SIMULATION_SCOPE_LABELS, self.system.settings.simulation_scope)
-            )
-            self.distance_unit_dropdown.set_selected(
-                unit_index(DISTANCE_UNITS, self.system.settings.distance_unit)
-            )
-            self._configure_position_spins()
-        finally:
-            self.editing = False
+        self.system_panel.load_settings(self.system.settings)
+        self._configure_position_spins()
 
     def _system_is_user_saved(self) -> bool:
         return not self.system.id.startswith("builtin-")
 
     def _on_body_edit(self, *_args) -> None:
-        if self.editing or not self.system.bodies:
+        if not self.system.bodies:
             return
         selected_body_id = self.system.bodies[self.selected_index].id
         body = self.system.bodies[self.selected_index]
-        try:
-            mass = float(self.mass_entry.get_text())
-        except ValueError:
-            return
-        if mass <= 0.0:
-            return
         distance_factor = self._distance_factor()
+        values = self.body_inspector.edited_body_values(distance_factor)
+        if values is None:
+            return
+        mass, x_m, y_m, vx_mps, vy_mps = values
         body.mass_kg = mass
-        body.position_m[0] = self.x_spin.get_value() * distance_factor
-        body.position_m[1] = self.y_spin.get_value() * distance_factor
-        body.velocity_mps[0] = self.vx_spin.get_value()
-        body.velocity_mps[1] = self.vy_spin.get_value()
+        body.position_m[0] = x_m
+        body.position_m[1] = y_m
+        body.velocity_mps[0] = vx_mps
+        body.velocity_mps[1] = vy_mps
         self.state = SimulationState.from_bodies(self.system.bodies)
         self.simulation_generation += 1
         self._clear_dynamic_simulation_state()
@@ -742,21 +523,10 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._update_title()
         self._refresh_canvas()
 
-    def _on_mass_focus_changed(self, entry, _param) -> None:
-        if not entry.has_focus():
-            self._on_body_edit()
-
-    def _on_system_name_focus_changed(self, entry, _param) -> None:
-        if not entry.has_focus():
-            self._on_system_name_edit()
-
-    def _on_system_name_edit(self, *_args) -> None:
-        if self.editing:
-            return
+    def _on_system_name_edited(self, _panel, name: str) -> None:
         if not self._system_is_user_saved():
             self._load_system_editor()
             return
-        name = self.system_name_entry.get_text().strip()
         if not name:
             self._load_system_editor()
             return
@@ -773,52 +543,34 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         finally:
             self.updating_system_dropdown = False
 
-    def _on_time_step_changed(self, *_args) -> None:
-        if self.editing:
-            return
-        self.system.settings.visible_step_s = self._step_seconds()
+    def _on_time_step_changed(self, _panel, visible_step_s: float) -> None:
+        self.system.settings.visible_step_s = visible_step_s
         self.system.settings.trail_sample_interval_s = recommended_trail_sample_interval_s(
             self.system.settings.visible_step_s
         )
         self._update_title()
 
-    def _on_accuracy_changed(self, dropdown, _param) -> None:
-        if self.editing:
-            return
-        selected = dropdown.get_selected()
-        if selected < len(ACCURACY_LABELS):
-            self.system.settings.accuracy_profile = ACCURACY_LABELS[selected][1]
-            self._update_title()
+    def _on_accuracy_changed(self, _panel, accuracy_profile: str) -> None:
+        self.system.settings.accuracy_profile = accuracy_profile
+        self._update_title()
 
-    def _on_view_mode_changed(self, dropdown, _param) -> None:
-        if self.editing:
-            return
-        selected = dropdown.get_selected()
-        if selected < len(VIEW_MODE_LABELS):
-            self.system.settings.view_mode = VIEW_MODE_LABELS[selected][1]
-            self.focus_target = None
-            self._clear_dynamic_simulation_state()
-            self._update_title()
-            self._refresh_canvas()
+    def _on_view_mode_changed(self, _panel, view_mode: str) -> None:
+        self.system.settings.view_mode = view_mode
+        self.focus_target = None
+        self._clear_dynamic_simulation_state()
+        self._update_title()
+        self._refresh_canvas()
 
-    def _on_simulation_scope_changed(self, dropdown, _param) -> None:
-        if self.editing:
-            return
-        selected = dropdown.get_selected()
-        if selected < len(SIMULATION_SCOPE_LABELS):
-            self.system.settings.simulation_scope = SIMULATION_SCOPE_LABELS[selected][1]
-            self._clear_dynamic_simulation_state()
-            self._update_title()
-            self._refresh_canvas()
+    def _on_simulation_scope_changed(self, _panel, simulation_scope: str) -> None:
+        self.system.settings.simulation_scope = simulation_scope
+        self._clear_dynamic_simulation_state()
+        self._update_title()
+        self._refresh_canvas()
 
-    def _on_distance_unit_changed(self, dropdown, _param) -> None:
-        if self.editing:
-            return
-        selected = dropdown.get_selected()
-        if selected < len(DISTANCE_UNITS):
-            self.system.settings.distance_unit = DISTANCE_UNITS[selected][1]
-            if self.system.bodies:
-                self._load_body_editor(self.system.bodies[self.selected_index])
+    def _on_distance_unit_changed(self, _panel, distance_unit: str) -> None:
+        self.system.settings.distance_unit = distance_unit
+        if self.system.bodies:
+            self._load_body_editor(self.system.bodies[self.selected_index])
 
     def _on_generate_orbit_clicked(self, _button) -> None:
         if self.editing or not self.system.bodies or self.selected_group_id is not None:
@@ -838,11 +590,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             return
 
         body.orbit = orbit
-        source_name = self.orbit_source_entry.get_text().strip()
-        source_url = self.orbit_source_url_entry.get_text().strip()
-        body.data_source = DataSource(source_name=source_name, source_url=source_url)
-        if body.data_source.to_dict() == {}:
-            body.data_source = None
+        body.data_source = self._data_source_from_orbit_editor()
         body.position_m = position_m
         body.velocity_mps = velocity_mps
         self.state = SimulationState.from_bodies(self.system.bodies)
@@ -859,11 +607,11 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         group = self._group_by_id(self.selected_group_id)
         if group is None:
             return
-        selected = self.orbit_target_dropdown.get_selected()
-        if selected == Gtk.INVALID_LIST_POSITION or selected >= len(self.orbit_target_options):
+        selected_target = self.body_inspector.selected_orbit_target()
+        if selected_target is None:
             self._show_error_dialog("Cannot Generate Group Orbit", "Select a target body or group.")
             return
-        target_type, target_id = self.orbit_target_options[selected]
+        target_type, target_id = selected_target
 
         try:
             orbit = self._orbit_from_editor()
@@ -920,38 +668,10 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._load_group_focus(group.id)
 
     def _orbit_from_editor(self) -> OrbitData:
-        semi_major_axis_m = self.orbit_axis_spin.get_value() * AU
-        orbital_period_s = self.orbit_period_spin.get_value() * DAY
-        notes = self.orbit_notes_entry.get_text().strip()
-        if semi_major_axis_m <= 0.0:
-            semi_major_axis_m = None
-        if orbital_period_s <= 0.0:
-            orbital_period_s = None
-        if semi_major_axis_m is None and orbital_period_s is None:
-            raise ModelError("enter a semi-major axis or orbital period")
-        if notes == "":
-            notes = "Approximate orbital seed; unknown fields use app defaults."
-        orbit = OrbitData(
-            semi_major_axis_m=semi_major_axis_m,
-            orbital_period_s=orbital_period_s,
-            eccentricity=self.orbit_eccentricity_spin.get_value(),
-            inclination_deg=self.orbit_inclination_spin.get_value(),
-            longitude_of_ascending_node_deg=self.orbit_node_spin.get_value(),
-            argument_of_periapsis_deg=self.orbit_periapsis_spin.get_value(),
-            mean_anomaly_deg=self.orbit_anomaly_spin.get_value(),
-            epoch=self.orbit_epoch_entry.get_text().strip() or self.system.epoch,
-            reference_plane="app-local XY",
-            approximation_notes=notes,
-        )
-        orbit.validate()
-        return orbit
+        return self.body_inspector.orbit_from_editor(self.system.epoch)
 
     def _data_source_from_orbit_editor(self) -> DataSource | None:
-        source = DataSource(
-            source_name=self.orbit_source_entry.get_text().strip(),
-            source_url=self.orbit_source_url_entry.get_text().strip(),
-        )
-        return source if source.to_dict() else None
+        return self.body_inspector.data_source_from_orbit_editor()
 
     def _after_orbit_generated(self) -> None:
         self.state = SimulationState.from_bodies(self.system.bodies)
@@ -1001,6 +721,9 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._update_title()
         self._refresh_canvas()
 
+    def _on_delete_system_requested(self, *_args) -> None:
+        self._on_delete_system_clicked(None)
+
     def _on_delete_system_clicked(self, _button) -> None:
         if not self._system_is_user_saved():
             return
@@ -1033,30 +756,21 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._reload_system_list()
         self._load_system(load_builtin_solar_system())
 
-    def _on_body_selected(self, _list_box, row) -> None:
-        if row is None:
-            return
-        row_index = row.get_index()
-        if row_index < 0 or row_index >= len(self.body_list_rows):
-            return
-        row_type, row_id = self.body_list_rows[row_index]
-        if row_type == "group":
-            group_id = str(row_id)
-            if group_id != self.selected_group_id:
-                self.focus_target = None
-                self.selected_group_id = group_id
-                self._load_group_focus(group_id)
-                self._update_title()
-                self._refresh_canvas()
-            return
-
-        body_index = int(row_id)
+    def _on_hierarchy_body_selected(self, _list_box: BodyHierarchyList, body_index: int) -> None:
         if body_index != self.selected_index or self.selected_group_id is not None:
             self.focus_target = None
             self.selected_group_id = None
             self.selected_index = body_index
             self.focus_group_id = self._group_id_for_body_index(body_index)
             self._load_body_editor(self.system.bodies[body_index])
+            self._update_title()
+            self._refresh_canvas()
+
+    def _on_hierarchy_group_selected(self, _list_box: BodyHierarchyList, group_id: str) -> None:
+        if group_id != self.selected_group_id:
+            self.focus_target = None
+            self.selected_group_id = group_id
+            self._load_group_focus(group_id)
             self._update_title()
             self._refresh_canvas()
 
@@ -1352,9 +1066,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._refresh_canvas()
 
     def _step_seconds(self) -> float:
-        selected = self.time_unit_dropdown.get_selected()
-        unit = TIME_UNITS[selected][1] if selected < len(TIME_UNITS) else "days"
-        return self.speed_spin.get_value() * unit_factor(TIME_UNITS, unit)
+        return self.system_panel.step_seconds()
 
     def _max_step_seconds(self) -> float:
         if self._using_system_overview():
@@ -1539,32 +1251,4 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _configure_position_spins(self) -> None:
         unit = self.system.settings.distance_unit
         factor = self._distance_factor()
-        self.x_label.set_label(f"X ({unit})")
-        self.y_label.set_label(f"Y ({unit})")
-        max_distance_m = max(
-            max(abs(body.position_m[0]), abs(body.position_m[1]))
-            for body in self.system.bodies
-        )
-        limit = max(100.0, 10.0 * max_distance_m / factor)
-        step = max(0.0001, limit / 10000.0)
-        page = max(step * 10.0, limit / 100.0)
-        digits = 6 if unit in {"ly", "kAU"} else 4
-        for spin in (self.x_spin, self.y_spin):
-            adjustment = spin.get_adjustment()
-            adjustment.set_lower(-limit)
-            adjustment.set_upper(limit)
-            adjustment.set_step_increment(step)
-            adjustment.set_page_increment(page)
-            spin.set_digits(digits)
-
-    def _draw_swatch(self, _area, cr, width: int, height: int, color: str) -> None:
-        rgba = self._rgba(color)
-        cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, rgba.alpha)
-        cr.arc(width / 2.0, height / 2.0, min(width, height) / 2.5, 0.0, math.tau)
-        cr.fill()
-
-    def _rgba(self, color: str) -> Gdk.RGBA:
-        rgba = Gdk.RGBA()
-        if not rgba.parse(color):
-            rgba.parse("#ffffff")
-        return rgba
+        self.body_inspector.configure_position_spins(self.system.bodies, unit, factor)

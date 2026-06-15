@@ -7,6 +7,7 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 - `src/main.py`: application object, app actions, About dialog, shortcuts dialog.
 - `src/window.py`: main GTK window coordinator, playback controls, body inspector, local-library actions, and main-thread state application.
 - `src/canvas.py`: `SolarSystemCanvas` GTK drawing widget, canvas gestures/tooltips, zoom state, and body/group selection signals.
+- `src/sidebar.py`: sidebar hierarchy widget and panel controllers for system settings and body/orbit inspector state.
 - `src/models.py`: schema-versioned `Body`, `SystemGroup`, and `SolarSystem` dataclasses with validation, parent-body relationships, group hierarchy, migration, and JSON conversion.
 - `src/orbits.py`: pure Keplerian orbit conversion helpers for generating Cartesian simulation state from optional orbital metadata.
 - `src/physics.py`: NumPy-backed simulation state, acceleration, low-level `step()`, user-facing `advance()`, and sampled `advance_with_samples()`.
@@ -22,13 +23,14 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 
 1. `load_builtin_solar_system()` or `load_builtin_solar_systems()` loads JSON preset data into `SolarSystem` objects.
 2. `SimulationState.from_bodies()` copies masses, positions, and velocities into NumPy arrays.
-3. Optional `SystemGroup` records organize flat bodies into semantic systems and subsystems; `hierarchy.py` computes sidebar order, group depth, and descendant body membership.
+3. Optional `SystemGroup` records organize flat bodies into semantic systems and subsystems; `hierarchy.py` computes sidebar order, group depth, and descendant body membership, while `sidebar.py` renders the hierarchy list.
 4. The UI chooses an active simulation scope, such as full N-body, system overview, stellar overview, focused subsystem, or hybrid focused context.
 5. `playback.py` builds copied active/overview `SimulationState` data for workers. Playback advances those copies through `physics.advance_with_samples()` so internal substep positions can be reused for dense trails.
 6. Completed active body states are merged back into the full UI state on the GTK main thread; temporary overview/context states update elapsed time and group trails without mutating bodies.
 7. `window.py` builds a `CanvasScene` snapshot from main-thread state and passes it to `SolarSystemCanvas`.
 8. `canvas.py` draws body positions/trails, system overview group positions/trails, or focused bodies with muted context markers, while delegating coordinate math and hit tests to `viewport.py`.
-9. Save/duplicate writes `SolarSystem` JSON through `storage.Library`.
+9. Sidebar panel controllers emit edit/generate/settings intents; `window.py` applies model changes and refreshes simulation/canvas state on the GTK main thread.
+10. Save/duplicate writes `SolarSystem` JSON through `storage.Library`.
 
 `Body.parent_id` records local orbital/display parentage, such as planets orbiting a star. Body descendant chains can be used as focus targets, which also supports future planet-and-moon systems. Optional `Body.orbit` and `Body.data_source` records preserve user-entered orbital/source metadata for generating approximate initial state vectors, but `position_m` and `velocity_mps` remain the canonical simulation state. `SystemGroup` records larger semantic hierarchy, such as a binary subsystem or a planetary system. Physics remains a flat N-body simulation over the active body set, so groups do not constrain gravity by themselves.
 
