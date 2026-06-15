@@ -6,7 +6,7 @@ Solar System Builder is a Python GNOME  / GTK4 / Libadwaita application for conf
 
 Use the canvas to inspect bodies, select objects, view trails, and zoom into the active simulation. The controls below the canvas set the visible time step, accuracy profile, view mode, and simulation scope. The right sidebar switches systems, saves or duplicates them, and edits the selected body's mass, position, and velocity.
 
-For a full guide to the canvas controls and simulation settings, see `docs/USER_INTERFACE.md`.
+For a full guide to the canvas controls and simulation settings, see [User Interface Documenation](./docs/USER_INTERFACE.md).
 
 ## TODO
 
@@ -43,6 +43,6 @@ GNOME Builder runs the app inside the Flatpak sandbox described by `io.github.ja
 
 Start with:
 
-- `docs/USER_INTERFACE.md`
-- `docs/ORBITAL_DATA.md`
-- `docs/PHYSICS.md`
+- [User Interface](./docs/USER_INTERFACE.md)
+- [Orbital Data](./docs/ORBITAL_DATA.md)
+- [Physics](./docs/PHYSICS.md)
