@@ -39,6 +39,7 @@ from .scales import (
 )
 from .sidebar import BodyHierarchyList, BodyInspectorPanel, SystemPropertiesPanel
 from .storage import Library
+from .system_library import SystemLibraryController
 
 
 @Gtk.Template(resource_path="/io/github/jackrabbithanna/solarsystembuilder/window.ui")
@@ -99,8 +100,6 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-        self.library = Library()
-        self.systems: list[SolarSystem] = []
         self.system = load_builtin_solar_system()
         self.loaded_system_snapshot = self._clone_system(self.system)
         self.simulation = playback.SimulationSession.from_bodies(self.system.bodies)
@@ -110,7 +109,6 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.selected_group_id: str | None = None
         self.playing = False
         self.editing = False
-        self.updating_system_dropdown = False
         self.closed = False
         self.simulation_future: Future | None = None
         self.simulation_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="simulation")
@@ -157,6 +155,21 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.vx_spin,
             self.vy_spin,
         )
+        self.system_library = SystemLibraryController(
+            self,
+            self.system_dropdown,
+            self.save_button,
+            self.duplicate_button,
+            self.system_panel,
+            Library(),
+            load_builtin_solar_systems,
+            load_builtin_solar_system,
+            lambda: self.system,
+            self._prepare_system_for_save,
+            self._load_system,
+            self._on_system_saved,
+            self._update_title,
+        )
 
         self.canvas.connect("body-selected", self._on_canvas_body_selected)
         self.canvas.connect("group-selected", self._on_canvas_group_selected)
@@ -168,13 +181,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.zoom_out_button.connect("clicked", self._on_zoom_out_clicked)
         self.reset_zoom_button.connect("clicked", self._on_reset_zoom_clicked)
         self.zoom_in_button.connect("clicked", self._on_zoom_in_clicked)
-        self.save_button.connect("clicked", self._on_save_clicked)
-        self.duplicate_button.connect("clicked", self._on_duplicate_clicked)
-        self.system_dropdown.connect("notify::selected", self._on_system_selected)
         self.body_list.connect("body-selected", self._on_hierarchy_body_selected)
         self.body_list.connect("group-selected", self._on_hierarchy_group_selected)
-        self.system_panel.connect("system-name-edited", self._on_system_name_edited)
-        self.system_panel.connect("delete-requested", self._on_delete_system_requested)
         self.system_panel.connect("time-step-changed", self._on_time_step_changed)
         self.system_panel.connect("accuracy-changed", self._on_accuracy_changed)
         self.system_panel.connect("view-mode-changed", self._on_view_mode_changed)
@@ -186,7 +194,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.body_inspector.connect("generate-group-orbit", self._on_generate_group_orbit_clicked)
         self.body_inspector.connect("generate-binary-orbit", self._on_generate_binary_orbit_clicked)
 
-        self._reload_system_list()
+        self.system_library.refresh()
         self._load_system_editor()
         self._load_settings_editor()
         self._populate_body_list()
@@ -203,24 +211,6 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.timer_id = 0
         self.simulation_executor.shutdown(wait=False, cancel_futures=True)
         return False
-
-    def _reload_system_list(self) -> None:
-        saved = self.library.list_systems()
-        self.systems = [*load_builtin_solar_systems(), *saved]
-        active = next((index for index, system in enumerate(self.systems) if system.id == self.system.id), 0)
-        self.updating_system_dropdown = True
-        try:
-            self._refresh_system_dropdown_labels()
-            self.system_dropdown.set_selected(active)
-        finally:
-            self.updating_system_dropdown = False
-
-    def _refresh_system_dropdown_labels(self) -> None:
-        names = [
-            self.system.name if system.id == self.system.id else system.name
-            for system in self.systems
-        ]
-        self.system_dropdown.set_model(Gtk.StringList.new(names))
 
     def _load_system(self, system: SolarSystem) -> None:
         self.playing = False
@@ -462,14 +452,11 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         return hierarchy.selected_distance_rows(self.system.bodies, body)
 
     def _load_system_editor(self) -> None:
-        self.system_panel.load_system(self.system, self._system_is_user_saved())
+        self.system_library.load_editor()
 
     def _load_settings_editor(self) -> None:
         self.system_panel.load_settings(self.system.settings)
         self._configure_position_spins()
-
-    def _system_is_user_saved(self) -> bool:
-        return not self.system.id.startswith("builtin-")
 
     def _on_body_edit(self, *_args) -> None:
         if not self.system.bodies:
@@ -491,26 +478,6 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._select_body(self._body_index_for_id(selected_body_id))
         self._update_title()
         self._refresh_canvas()
-
-    def _on_system_name_edited(self, _panel, name: str) -> None:
-        if not self._system_is_user_saved():
-            self._load_system_editor()
-            return
-        if not name:
-            self._load_system_editor()
-            return
-        if name == self.system.name:
-            return
-        selected = self.system_dropdown.get_selected()
-        self.system.name = name
-        self._update_title()
-        self.updating_system_dropdown = True
-        try:
-            self._refresh_system_dropdown_labels()
-            if selected != Gtk.INVALID_LIST_POSITION:
-                self.system_dropdown.set_selected(selected)
-        finally:
-            self.updating_system_dropdown = False
 
     def _on_time_step_changed(self, _panel, visible_step_s: float) -> None:
         self.system.settings.visible_step_s = visible_step_s
@@ -670,41 +637,6 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._update_title()
         self._refresh_canvas()
 
-    def _on_delete_system_requested(self, *_args) -> None:
-        self._on_delete_system_clicked(None)
-
-    def _on_delete_system_clicked(self, _button) -> None:
-        if not self._system_is_user_saved():
-            return
-
-        system_id = self.system.id
-        dialog = Adw.AlertDialog.new(
-            "Delete Saved System?",
-            f"'{self.system.name}' will be permanently deleted.",
-        )
-        dialog.add_response("cancel", "Cancel")
-        dialog.add_response("delete", "Delete")
-        dialog.set_close_response("cancel")
-        dialog.set_default_response("cancel")
-        dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
-        dialog.choose(
-            self,
-            None,
-            lambda dialog, result, *_args: self._on_delete_system_response(dialog, result, system_id),
-        )
-
-    def _on_delete_system_response(self, dialog, result, system_id: str) -> None:
-        if dialog.choose_finish(result) != "delete":
-            return
-        if system_id.startswith("builtin-"):
-            return
-
-        self.playing = False
-        self.play_button.set_icon_name("media-playback-start-symbolic")
-        self.library.delete(system_id)
-        self._reload_system_list()
-        self._load_system(load_builtin_solar_system())
-
     def _on_hierarchy_body_selected(self, _list_box: BodyHierarchyList, body_index: int) -> None:
         if body_index != self.selected_index or self.selected_group_id is not None:
             self.focus_target = None
@@ -722,16 +654,6 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self._load_group_focus(group_id)
             self._update_title()
             self._refresh_canvas()
-
-    def _on_system_selected(self, dropdown, _param) -> None:
-        if self.updating_system_dropdown:
-            return
-        selected = dropdown.get_selected()
-        if selected == Gtk.INVALID_LIST_POSITION or selected >= len(self.systems):
-            return
-        chosen = self.systems[selected]
-        if chosen.id != self.system.id:
-            self._load_system(chosen)
 
     def _on_play_clicked(self, _button) -> None:
         self.playing = not self.playing
@@ -789,23 +711,14 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             selected_body_id=selected_body_id,
         )
 
-    def _on_save_clicked(self, _button) -> None:
-        if self.system.id.startswith("builtin-"):
-            self.system = self.system.duplicate()
-        self.simulation.apply_to_bodies(self.system.bodies)
-        self.library.save(self.system)
+    def _prepare_system_for_save(self, system: SolarSystem) -> None:
+        self.simulation.apply_to_bodies(system.bodies)
+
+    def _on_system_saved(self, system: SolarSystem) -> None:
+        self.system = system
         self.loaded_system_snapshot = self._clone_system(self.system)
         self.simulation.increment_generation()
-        self._reload_system_list()
-        self._load_system_editor()
         self._update_title()
-
-    def _on_duplicate_clicked(self, _button) -> None:
-        self.simulation.apply_to_bodies(self.system.bodies)
-        duplicate = self.system.duplicate()
-        self.library.save(duplicate)
-        self._reload_system_list()
-        self._load_system(duplicate)
 
     def _clone_system(self, system: SolarSystem) -> SolarSystem:
         return SolarSystem.from_dict(system.to_dict())

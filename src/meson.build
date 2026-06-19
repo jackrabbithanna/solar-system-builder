@@ -41,6 +41,7 @@ solar_system_builder_sources = [
   'scales.py',
   'sidebar.py',
   'storage.py',
+  'system_library.py',
   'viewport.py',
   'window.py',
 ]
