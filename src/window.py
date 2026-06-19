@@ -20,15 +20,12 @@ from . import hierarchy, playback
 from .canvas import CanvasScene, SolarSystemCanvas
 from .constants import AU, DAY
 from .models import Body, DataSource, ModelError, OrbitData, SolarSystem, SystemGroup
-from .orbits import (
-    binary_pair_state_vectors,
-    body_indices_for_group,
-    desired_barycenter_from_orbit,
-    group_barycenter,
-    shift_group_to_barycenter,
-    state_vectors_from_orbit,
-    target_anchor,
+from .orbit_editing import (
+    generate_binary_pair_orbit,
+    generate_body_orbit,
+    generate_group_barycenter_orbit,
 )
+from .orbits import body_indices_for_group, group_barycenter
 from .presets import load_builtin_solar_system, load_builtin_solar_systems
 from .scales import (
     DISTANCE_UNITS,
@@ -548,24 +545,20 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         if self.editing or not self.system.bodies or self.selected_group_id is not None:
             return
         body = self.system.bodies[self.selected_index]
-        if body.parent_id is None:
-            return
-        parent = next((item for item in self.system.bodies if item.id == body.parent_id), None)
-        if parent is None:
-            return
 
         try:
             orbit = self._orbit_from_editor()
-            position_m, velocity_mps = state_vectors_from_orbit(parent, body, orbit)
+            body = generate_body_orbit(
+                self.system,
+                self.simulation,
+                body.id,
+                orbit,
+                self._data_source_from_orbit_editor(),
+            )
         except ModelError as error:
             self._show_error_dialog("Cannot Generate Orbit", str(error))
             return
 
-        body.orbit = orbit
-        body.data_source = self._data_source_from_orbit_editor()
-        body.position_m = position_m
-        body.velocity_mps = velocity_mps
-        self.simulation.replace_bodies(self.system.bodies)
         self._load_body_editor(body)
         self._refresh_body_relationship_labels()
         self._update_title()
@@ -585,18 +578,19 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
 
         try:
             orbit = self._orbit_from_editor()
-            current = group_barycenter(self.system.bodies, self.system.groups, group.id)
-            target = target_anchor(self.system.bodies, self.system.groups, target_type, target_id)
-            desired = desired_barycenter_from_orbit(target, current.mass_kg, orbit)
-            shift_group_to_barycenter(self.system.bodies, self.system.groups, group.id, desired)
+            group = generate_group_barycenter_orbit(
+                self.system,
+                self.simulation,
+                group.id,
+                target_type,
+                target_id,
+                orbit,
+                self._data_source_from_orbit_editor(),
+            )
         except ModelError as error:
             self._show_error_dialog("Cannot Generate Group Orbit", str(error))
             return
 
-        group.orbit = orbit
-        group.orbit_target_type = target_type
-        group.orbit_target_id = target_id
-        group.data_source = self._data_source_from_orbit_editor()
         self._after_orbit_generated()
         self._load_group_focus(group.id)
 
@@ -608,31 +602,19 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             group = self._direct_binary_group_for_body(self.system.bodies[self.selected_index])
         if group is None:
             return
-        indices = self._group_direct_body_indices(group)
-        if indices is None:
-            self._show_error_dialog("Cannot Generate Binary Pair", "Binary generation requires exactly two direct bodies.")
-            return
-
-        first = self.system.bodies[indices[0]]
-        second = self.system.bodies[indices[1]]
         try:
             orbit = self._orbit_from_editor()
-            center = group_barycenter(self.system.bodies, self.system.groups, group.id)
-            first_state, second_state = binary_pair_state_vectors(
-                first,
-                second,
+            group = generate_binary_pair_orbit(
+                self.system,
+                self.simulation,
+                group.id,
                 orbit,
-                center.position_m,
-                center.velocity_mps,
+                self._data_source_from_orbit_editor(),
             )
         except ModelError as error:
             self._show_error_dialog("Cannot Generate Binary Pair", str(error))
             return
 
-        first.position_m, first.velocity_mps = first_state
-        second.position_m, second.velocity_mps = second_state
-        group.orbit = orbit
-        group.data_source = self._data_source_from_orbit_editor()
         self.selected_group_id = group.id
         self._after_orbit_generated()
         self._load_group_focus(group.id)
@@ -644,7 +626,6 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         return self.body_inspector.data_source_from_orbit_editor()
 
     def _after_orbit_generated(self) -> None:
-        self.simulation.replace_bodies(self.system.bodies)
         self._populate_body_list()
         self._refresh_body_relationship_labels()
         self._update_title()

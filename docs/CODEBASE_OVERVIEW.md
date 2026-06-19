@@ -9,6 +9,7 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 - `src/canvas.py`: `SolarSystemCanvas` GTK drawing widget, canvas gestures/tooltips, zoom state, and body/group selection signals.
 - `src/sidebar.py`: sidebar hierarchy widget and panel controllers for system settings and body/orbit inspector state.
 - `src/models.py`: schema-versioned `Body`, `SystemGroup`, and `SolarSystem` dataclasses with validation, parent-body relationships, group hierarchy, migration, and JSON conversion.
+- `src/orbit_editing.py`: GTK-free body, group-barycenter, and binary-pair orbit mutations with playback-state rebuilding.
 - `src/orbits.py`: pure Keplerian orbit conversion helpers for generating Cartesian simulation state from optional orbital metadata.
 - `src/physics.py`: NumPy-backed simulation state, acceleration, low-level `step()`, user-facing `advance()`, and sampled `advance_with_samples()`.
 - `src/scales.py`: pure scale helpers for time/distance units, elapsed-time formatting, adaptive internal step policy, simulation scope selection, and trail sampling cadence.
@@ -29,7 +30,7 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 6. Completed `SimulationJobResult` values are applied by `SimulationSession` on the GTK main thread; active body states are merged back into the full UI state, while temporary overview/context states update elapsed time and group trails without mutating bodies.
 7. `window.py` builds a `CanvasScene` snapshot from main-thread state and passes it to `SolarSystemCanvas`.
 8. `canvas.py` draws body positions/trails, system overview group positions/trails, or focused bodies with muted context markers, while delegating coordinate math and hit tests to `viewport.py`.
-9. Sidebar panel controllers emit edit/generate/settings intents; `window.py` applies model changes and refreshes simulation/canvas state on the GTK main thread.
+9. Sidebar panel controllers emit edit/generate/settings intents; `window.py` collects editor input while GTK-free orbit editing helpers apply orbital model changes and rebuild simulation state on the GTK main thread.
 10. Save/duplicate writes `SolarSystem` JSON through `storage.Library`.
 
 `Body.parent_id` records local orbital/display parentage, such as planets orbiting a star. Body descendant chains can be used as focus targets, which also supports future planet-and-moon systems. Optional `Body.orbit` and `Body.data_source` records preserve user-entered orbital/source metadata for generating approximate initial state vectors, but `position_m` and `velocity_mps` remain the canonical simulation state. `SystemGroup` records larger semantic hierarchy, such as a binary subsystem or a planetary system. Physics remains a flat N-body simulation over the active body set, so groups do not constrain gravity by themselves.

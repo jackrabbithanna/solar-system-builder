@@ -33,6 +33,7 @@ solar_system_builder_sources = [
   'hierarchy.py',
   'main.py',
   'models.py',
+  'orbit_editing.py',
   'orbits.py',
   'playback.py',
   'physics.py',
