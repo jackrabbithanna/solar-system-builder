@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import math
 import traceback
 from concurrent.futures import Future, ThreadPoolExecutor
 
@@ -41,12 +42,17 @@ from .sidebar import BodyHierarchyList, BodyInspectorPanel, SystemPropertiesPane
 from .storage import Library
 from .system_library import SystemLibraryController
 
+MAX_AUTOMATIC_SIDEBAR_WIDTH = 520
+SIDEBAR_HORIZONTAL_MARGINS = 24
+WINDOW_MONITOR_MARGIN = 32
+
 
 @Gtk.Template(resource_path="/io/github/jackrabbithanna/solarsystembuilder/window.ui")
 class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     __gtype_name__ = "SolarSystemBuilderWindow"
 
     canvas = Gtk.Template.Child()
+    main_paned = Gtk.Template.Child()
     play_button = Gtk.Template.Child()
     step_back_button = Gtk.Template.Child()
     reset_button = Gtk.Template.Child()
@@ -114,6 +120,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.simulation_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="simulation")
         self.zoom_factor = 1.0
         self.timer_id = GLib.timeout_add(33, self._tick)
+        self.sidebar_resize_id = 0
 
         self.system_panel = SystemPropertiesPanel(
             self.system_name_entry,
@@ -209,6 +216,9 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         if self.timer_id:
             GLib.source_remove(self.timer_id)
             self.timer_id = 0
+        if self.sidebar_resize_id:
+            GLib.source_remove(self.sidebar_resize_id)
+            self.sidebar_resize_id = 0
         self.simulation_executor.shutdown(wait=False, cancel_futures=True)
         return False
 
@@ -238,6 +248,53 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._update_title()
         self._update_time_label()
         self._refresh_canvas()
+        self._schedule_sidebar_expansion()
+
+    def _schedule_sidebar_expansion(self) -> None:
+        if self.sidebar_resize_id:
+            GLib.source_remove(self.sidebar_resize_id)
+        self.sidebar_resize_id = GLib.idle_add(self._expand_sidebar_for_content)
+
+    def _expand_sidebar_for_content(self) -> bool:
+        self.sidebar_resize_id = 0
+        if self.closed or self.is_maximized() or self.is_fullscreen():
+            return GLib.SOURCE_REMOVE
+
+        paned_width = self.main_paned.get_width()
+        left_pane_width = self.main_paned.get_position()
+        window_width = self.get_width()
+        window_height = self.get_height()
+        if paned_width <= 0 or left_pane_width <= 0 or window_width <= 0:
+            return GLib.SOURCE_REMOVE
+
+        _minimum, natural_width, _minimum_baseline, _natural_baseline = self.body_list.measure(
+            Gtk.Orientation.HORIZONTAL,
+            -1,
+        )
+        desired_sidebar_width = min(
+            natural_width + SIDEBAR_HORIZONTAL_MARGINS,
+            MAX_AUTOMATIC_SIDEBAR_WIDTH,
+        )
+        current_sidebar_width = paned_width - left_pane_width
+        additional_width = math.ceil(desired_sidebar_width - current_sidebar_width)
+        if additional_width <= 0:
+            return GLib.SOURCE_REMOVE
+
+        maximum_window_width = self._maximum_window_width()
+        target_window_width = min(window_width + additional_width, maximum_window_width)
+        if target_window_width > window_width:
+            self.set_default_size(target_window_width, window_height)
+            self.main_paned.set_position(left_pane_width)
+        return GLib.SOURCE_REMOVE
+
+    def _maximum_window_width(self) -> int:
+        surface = self.get_surface()
+        if surface is None:
+            return self.get_width()
+        monitor = self.get_display().get_monitor_at_surface(surface)
+        if monitor is None:
+            return self.get_width()
+        return max(self.get_width(), monitor.get_geometry().width - WINDOW_MONITOR_MARGIN)
 
     def _body_index_for_id(self, body_id: str | None) -> int:
         if body_id is None:

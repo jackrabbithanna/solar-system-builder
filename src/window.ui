@@ -80,7 +80,7 @@
           </object>
         </child>
         <property name="content">
-          <object class="GtkPaned">
+          <object class="GtkPaned" id="main_paned">
             <property name="orientation">horizontal</property>
             <property name="position">790</property>
             <child type="start">
@@ -146,8 +146,8 @@
                 </child>
                 <child>
                   <object class="GtkBox">
-                    <property name="orientation">horizontal</property>
-                    <property name="spacing">12</property>
+                    <property name="orientation">vertical</property>
+                    <property name="spacing">6</property>
                     <property name="margin-start">12</property>
                     <property name="margin-end">12</property>
                     <property name="margin-top">8</property>
@@ -155,47 +155,109 @@
                     <child>
                       <object class="GtkLabel" id="time_label">
                         <property name="xalign">0</property>
-                        <property name="hexpand">True</property>
                       </object>
                     </child>
                     <child>
-                      <object class="GtkLabel">
-                        <property name="label" translatable="yes">Time / step</property>
-                      </object>
-                    </child>
-                    <child>
-                      <object class="GtkSpinButton" id="speed_spin">
-                        <property name="adjustment">
-                          <object class="GtkAdjustment">
-                            <property name="lower">0.001</property>
-                            <property name="upper">10000</property>
-                            <property name="step-increment">1</property>
-                            <property name="page-increment">1</property>
-                            <property name="value">1</property>
+                      <object class="GtkBox">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">12</property>
+                        <child>
+                          <object class="GtkBox">
+                            <property name="orientation">vertical</property>
+                            <property name="spacing">4</property>
+                            <child>
+                              <object class="GtkLabel">
+                                <property name="label" translatable="yes">_Time / step</property>
+                                <property name="use-underline">True</property>
+                                <property name="mnemonic-widget">speed_spin</property>
+                                <property name="xalign">0</property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkBox">
+                                <property name="orientation">horizontal</property>
+                                <property name="spacing">6</property>
+                                <child>
+                                  <object class="GtkSpinButton" id="speed_spin">
+                                    <property name="adjustment">
+                                      <object class="GtkAdjustment">
+                                        <property name="lower">0.001</property>
+                                        <property name="upper">10000</property>
+                                        <property name="step-increment">1</property>
+                                        <property name="page-increment">1</property>
+                                        <property name="value">1</property>
+                                      </object>
+                                    </property>
+                                    <property name="digits">2</property>
+                                    <property name="width-chars">8</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkDropDown" id="time_unit_dropdown">
+                                    <property name="tooltip-text" translatable="yes">Time step unit</property>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
                           </object>
-                        </property>
-                        <property name="digits">2</property>
-                        <property name="width-chars">8</property>
-                      </object>
-                    </child>
-                    <child>
-                      <object class="GtkDropDown" id="time_unit_dropdown">
-                        <property name="tooltip-text" translatable="yes">Time step unit</property>
-                      </object>
-                    </child>
-                    <child>
-                      <object class="GtkDropDown" id="accuracy_dropdown">
-                        <property name="tooltip-text" translatable="yes">Simulation accuracy</property>
-                      </object>
-                    </child>
-                    <child>
-                      <object class="GtkDropDown" id="view_mode_dropdown">
-                        <property name="tooltip-text" translatable="yes">View scale mode</property>
-                      </object>
-                    </child>
-                    <child>
-                      <object class="GtkDropDown" id="simulation_scope_dropdown">
-                        <property name="tooltip-text" translatable="yes">Simulation scope</property>
+                        </child>
+                        <child>
+                          <object class="GtkBox">
+                            <property name="orientation">vertical</property>
+                            <property name="spacing">4</property>
+                            <child>
+                              <object class="GtkLabel">
+                                <property name="label" translatable="yes">Simulation _Accuracy</property>
+                                <property name="use-underline">True</property>
+                                <property name="mnemonic-widget">accuracy_dropdown</property>
+                                <property name="xalign">0</property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkDropDown" id="accuracy_dropdown">
+                                <property name="tooltip-text" translatable="yes">Simulation accuracy</property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkBox">
+                            <property name="orientation">vertical</property>
+                            <property name="spacing">4</property>
+                            <child>
+                              <object class="GtkLabel">
+                                <property name="label" translatable="yes">_View Scale Mode</property>
+                                <property name="use-underline">True</property>
+                                <property name="mnemonic-widget">view_mode_dropdown</property>
+                                <property name="xalign">0</property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkDropDown" id="view_mode_dropdown">
+                                <property name="tooltip-text" translatable="yes">View scale mode</property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkBox">
+                            <property name="orientation">vertical</property>
+                            <property name="spacing">4</property>
+                            <child>
+                              <object class="GtkLabel">
+                                <property name="label" translatable="yes">Simulation _Scope</property>
+                                <property name="use-underline">True</property>
+                                <property name="mnemonic-widget">simulation_scope_dropdown</property>
+                                <property name="xalign">0</property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkDropDown" id="simulation_scope_dropdown">
+                                <property name="tooltip-text" translatable="yes">Simulation scope</property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
                       </object>
                     </child>
                   </object>
