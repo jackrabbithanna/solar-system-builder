@@ -289,25 +289,6 @@ def focused_visible_step_s(bodies: list[Body], accuracy_profile: str) -> float:
     return max(_MIN_STEP_S, min(upper, shortest_period * fraction))
 
 
-def focused_canvas_bounds(
-    bodies: list[Body],
-    active_indices: list[int],
-) -> CanvasBounds | None:
-    if not active_indices:
-        return None
-    active_bodies = [bodies[index] for index in active_indices]
-    min_x = min(body.position_m[0] for body in active_bodies)
-    max_x = max(body.position_m[0] for body in active_bodies)
-    min_y = min(body.position_m[1] for body in active_bodies)
-    max_y = max(body.position_m[1] for body in active_bodies)
-    fallback_extent = max(max(body.radius_m for body in active_bodies), 1.0)
-    return CanvasBounds(
-        center=((min_x + max_x) / 2.0, (min_y + max_y) / 2.0),
-        half_width_m=max((max_x - min_x) / 2.0, fallback_extent),
-        half_height_m=max((max_y - min_y) / 2.0, fallback_extent),
-    )
-
-
 def system_overview_entities(bodies: list[Body], groups: list[SystemGroup]) -> list[OverviewEntity]:
     if not bodies or not groups:
         return []

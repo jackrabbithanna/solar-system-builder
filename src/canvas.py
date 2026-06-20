@@ -36,8 +36,8 @@ class CanvasScene:
     using_system_overview: bool = False
     using_hybrid_focus: bool = False
     using_focused_fit: bool = False
+    focused_fit_session: int = 0
     selected_group_center: tuple[float, float] | None = None
-    focused_bounds: CanvasBounds | None = None
     trails: list[Trail] = field(default_factory=list)
     overview_entities: list[OverviewEntity] = field(default_factory=list)
     overview_positions: Positions = field(default_factory=list)
@@ -66,6 +66,8 @@ class SolarSystemCanvas(Gtk.DrawingArea):
         super().__init__(**kwargs)
         self._scene = CanvasScene()
         self._zoom_factor = 1.0
+        self._focused_fit_key: tuple[int, tuple[int, ...]] | None = None
+        self._focused_fit_bounds: CanvasBounds | None = None
         self.set_draw_func(self._draw)
         self.set_has_tooltip(True)
         self.connect("query-tooltip", self._on_query_tooltip)
@@ -78,7 +80,28 @@ class SolarSystemCanvas(Gtk.DrawingArea):
 
     def set_scene(self, scene: CanvasScene) -> None:
         self._scene = scene
+        self._update_focused_fit()
         self.queue_draw()
+
+    def _update_focused_fit(self) -> None:
+        if not self._scene.using_focused_fit:
+            self._focused_fit_key = None
+            self._focused_fit_bounds = None
+            return
+
+        key = (self._scene.focused_fit_session, tuple(self._scene.active_indices))
+        required_bounds = viewport.focused_fit_bounds(self._scene.bodies, self._scene.active_indices)
+        if required_bounds is None:
+            self._focused_fit_key = key
+            self._focused_fit_bounds = None
+            return
+
+        previous_extent = None
+        if key == self._focused_fit_key and self._focused_fit_bounds is not None:
+            previous_extent = self._focused_fit_bounds.half_width_m
+        extent = viewport.stabilize_focused_extent(previous_extent, required_bounds.half_width_m)
+        self._focused_fit_key = key
+        self._focused_fit_bounds = CanvasBounds(required_bounds.center, extent, extent)
 
     def set_zoom_factor(self, zoom_factor: float) -> None:
         clamped = viewport.clamp_zoom_factor(zoom_factor)
@@ -435,7 +458,7 @@ class SolarSystemCanvas(Gtk.DrawingArea):
             self._scene.view_mode,
             self._scene.selected_body_index,
             self._scene.selected_group_center,
-            self._scene.focused_bounds if self._scene.using_focused_fit else None,
+            self._focused_fit_bounds if self._scene.using_focused_fit else None,
         )
 
     def _canvas_scale(self, width: int, height: int, center_x_m: float, center_y_m: float) -> float:
@@ -449,6 +472,7 @@ class SolarSystemCanvas(Gtk.DrawingArea):
             self._zoom_factor,
             self._scene.view_mode,
             use_focused_bounds=self._scene.using_focused_fit,
+            focused_bounds=self._focused_fit_bounds,
         )
 
     def _project(

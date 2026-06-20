@@ -12,9 +12,13 @@ from collections.abc import Callable, Sequence
 
 from .constants import AU
 from .models import Body
-from .scales import CanvasBounds, OverviewEntity, focused_canvas_bounds
+from .scales import CanvasBounds, OverviewEntity
 
 Position2D = Sequence[float]
+
+FOCUSED_FIT_HEADROOM = 0.15
+FOCUSED_FIT_CONTRACTION_THRESHOLD = 0.15
+FOCUSED_FIT_CONTRACTION_RATE = 0.05
 
 
 @dataclass(frozen=True)
@@ -37,6 +41,43 @@ def point_in_rect(x: float, y: float, rect: InsetRect) -> bool:
 
 def clamp_zoom_factor(zoom_factor: float, minimum: float = 1.0, maximum: float = 64.0) -> float:
     return max(minimum, min(maximum, zoom_factor))
+
+
+def focused_fit_bounds(bodies: list[Body], active_indices: list[int]) -> CanvasBounds | None:
+    indices = [index for index in active_indices if 0 <= index < len(bodies)]
+    if not indices:
+        return None
+
+    total_mass = sum(bodies[index].mass_kg for index in indices)
+    if total_mass > 0.0:
+        center_x_m = sum(bodies[index].mass_kg * bodies[index].position_m[0] for index in indices) / total_mass
+        center_y_m = sum(bodies[index].mass_kg * bodies[index].position_m[1] for index in indices) / total_mass
+    else:
+        center_x_m = sum(bodies[index].position_m[0] for index in indices) / len(indices)
+        center_y_m = sum(bodies[index].position_m[1] for index in indices) / len(indices)
+
+    radius_m = max(
+        math.hypot(
+            bodies[index].position_m[0] - center_x_m,
+            bodies[index].position_m[1] - center_y_m,
+        )
+        for index in indices
+    )
+    fallback_extent = max(max(bodies[index].radius_m for index in indices), 1.0)
+    padded_extent = max(radius_m, fallback_extent) / (1.0 - FOCUSED_FIT_HEADROOM)
+    return CanvasBounds(
+        center=(center_x_m, center_y_m),
+        half_width_m=padded_extent,
+        half_height_m=padded_extent,
+    )
+
+
+def stabilize_focused_extent(previous_extent_m: float | None, required_extent_m: float) -> float:
+    if previous_extent_m is None or required_extent_m >= previous_extent_m:
+        return required_extent_m
+    if required_extent_m >= previous_extent_m * (1.0 - FOCUSED_FIT_CONTRACTION_THRESHOLD):
+        return previous_extent_m
+    return previous_extent_m + (required_extent_m - previous_extent_m) * FOCUSED_FIT_CONTRACTION_RATE
 
 
 def project(
@@ -140,9 +181,10 @@ def canvas_scale(
     view_mode: str,
     *,
     use_focused_bounds: bool = False,
+    focused_bounds: CanvasBounds | None = None,
 ) -> float:
     if use_focused_bounds:
-        bounds = focused_canvas_bounds(bodies, active_indices)
+        bounds = focused_bounds or focused_fit_bounds(bodies, active_indices)
         if bounds is not None:
             horizontal_scale = width * 0.45 / bounds.half_width_m
             vertical_scale = height * 0.45 / bounds.half_height_m

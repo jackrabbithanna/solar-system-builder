@@ -33,7 +33,6 @@ from .scales import (
     FocusState,
     distance_between_bodies_m,
     effective_focus_settings,
-    focused_canvas_bounds,
     focused_visible_step_s,
     focus_overview_entity,
     focus_target_body_indices,
@@ -116,6 +115,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.focus_group_id: str | None = None
         self.focus_target: str | None = None
         self.focus_state: FocusState | None = None
+        self.focus_fit_session = 0
         self.selected_group_id: str | None = None
         self.playing = False
         self.editing = False
@@ -773,6 +773,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             visible_step_s=visible_step_s,
             trail_sample_interval_s=recommended_trail_sample_interval_s(visible_step_s),
         )
+        self.focus_fit_session += 1
         self.zoom_factor = 1.0
         self.canvas.set_zoom_factor(1.0)
         self._clear_dynamic_simulation_state()
@@ -1006,11 +1007,6 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             if settings.view_mode == "follow_selected" and self.selected_group_id is not None
             else None
         )
-        focused_bounds = (
-            focused_canvas_bounds(self.system.bodies, active_indices)
-            if self.focus_state is not None
-            else None
-        )
         inset_entities, inset_positions, inset_targets, focused_inset_id = self._inset_overview_data()
         return CanvasScene(
             bodies=self.system.bodies,
@@ -1022,8 +1018,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             using_system_overview=self._using_system_overview(),
             using_hybrid_focus=using_hybrid_focus,
             using_focused_fit=self.focus_state is not None,
+            focused_fit_session=self.focus_fit_session,
             selected_group_center=selected_group_center,
-            focused_bounds=focused_bounds,
             trails=list(self.simulation.trails),
             overview_entities=self._overview_entities(),
             overview_positions=self._overview_positions(),

@@ -3,7 +3,7 @@ import unittest
 from src import viewport
 from src.constants import AU
 from src.models import Body
-from src.scales import OverviewEntity, focused_canvas_bounds
+from src.scales import OverviewEntity
 
 
 class ViewportTests(unittest.TestCase):
@@ -39,11 +39,11 @@ class ViewportTests(unittest.TestCase):
         self.assertAlmostEqual(center[0], AU)
         self.assertGreater(scale, 0.0)
 
-    def test_focused_bounds_fit_compact_asymmetric_system_without_au_floor(self):
+    def test_focused_bounds_fit_compact_system_without_au_floor(self):
         bodies = _bodies()
         bodies[1].position_m = [1.0e8, 2.0e8, 0.0]
 
-        bounds = focused_canvas_bounds(bodies, [0, 1])
+        bounds = viewport.focused_fit_bounds(bodies, [0, 1])
         scale = viewport.canvas_scale(
             900,
             300,
@@ -53,12 +53,41 @@ class ViewportTests(unittest.TestCase):
             1.0,
             "follow_selected",
             use_focused_bounds=True,
+            focused_bounds=bounds,
         )
 
-        self.assertEqual(bounds.center, (5.0e7, 1.0e8))
-        self.assertEqual(bounds.half_width_m, 5.0e7)
-        self.assertEqual(bounds.half_height_m, 1.0e8)
-        self.assertAlmostEqual(scale, 300.0 * 0.45 / 1.0e8)
+        self.assertAlmostEqual(bounds.center[0], 1.0e8 / 3.0)
+        self.assertAlmostEqual(bounds.center[1], 2.0e8 / 3.0)
+        self.assertEqual(bounds.half_width_m, bounds.half_height_m)
+        self.assertAlmostEqual(scale, 300.0 * 0.45 / bounds.half_height_m)
+
+    def test_focused_fit_is_rotation_invariant(self):
+        bodies = _bodies()
+        bodies[0].mass_kg = 1.0
+        bodies[1].mass_kg = 1.0
+        bodies[0].position_m = [-AU, 0.0, 0.0]
+        bodies[1].position_m = [AU, 0.0, 0.0]
+        horizontal = viewport.focused_fit_bounds(bodies, [0, 1])
+
+        bodies[0].position_m = [0.0, -AU, 0.0]
+        bodies[1].position_m = [0.0, AU, 0.0]
+        vertical = viewport.focused_fit_bounds(bodies, [0, 1])
+
+        self.assertEqual(horizontal.half_width_m, vertical.half_width_m)
+        self.assertEqual(horizontal.half_height_m, vertical.half_height_m)
+
+    def test_focused_extent_expands_immediately_and_contracts_gradually(self):
+        self.assertEqual(viewport.stabilize_focused_extent(100.0, 110.0), 110.0)
+        self.assertEqual(viewport.stabilize_focused_extent(100.0, 90.0), 100.0)
+        self.assertEqual(viewport.stabilize_focused_extent(100.0, 80.0), 99.0)
+
+    def test_planet_sized_extent_changes_stay_inside_focused_fit_deadband(self):
+        retained_extent = 100.0
+
+        for required_extent in (94.0, 100.0, 91.0, 98.0):
+            retained_extent = viewport.stabilize_focused_extent(retained_extent, required_extent)
+
+        self.assertEqual(retained_extent, 100.0)
 
     def test_overview_inset_geometry_and_containment(self):
         rect = viewport.overview_inset_rect(1000, 600)

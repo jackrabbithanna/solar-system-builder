@@ -104,6 +104,8 @@ The Focus and Fit button appears when the selected body or group has a focusable
 
 The focused time step and trail cadence may be edited without changing the saved values. Changing accuracy recalculates an automatically selected focused step, while a manually edited focused step is retained until focus ends. Under Full N-body, hidden bodies continue evolving while only the focus is rendered. Click Focus and Fit again, select another hierarchy item, or change view/policy to leave focus and restore the stored view settings.
 
+While focused, the fitted camera uses a rotation-independent radial extent with headroom. It expands as needed to keep the focused bodies visible and contracts gradually after a sustained decrease in system extent, avoiding rapid zoom changes as binaries and planets rotate.
+
 ## System Controls
 
 The system menu in the header switches between bundled presets and saved systems.
