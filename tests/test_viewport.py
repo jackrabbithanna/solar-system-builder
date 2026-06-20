@@ -3,7 +3,7 @@ import unittest
 from src import viewport
 from src.constants import AU
 from src.models import Body
-from src.scales import OverviewEntity
+from src.scales import OverviewEntity, focused_canvas_bounds
 
 
 class ViewportTests(unittest.TestCase):
@@ -38,6 +38,34 @@ class ViewportTests(unittest.TestCase):
 
         self.assertAlmostEqual(center[0], AU)
         self.assertGreater(scale, 0.0)
+
+    def test_focused_bounds_fit_compact_asymmetric_system_without_au_floor(self):
+        bodies = _bodies()
+        bodies[1].position_m = [1.0e8, 2.0e8, 0.0]
+
+        bounds = focused_canvas_bounds(bodies, [0, 1])
+        scale = viewport.canvas_scale(
+            900,
+            300,
+            bodies,
+            [0, 1],
+            *bounds.center,
+            1.0,
+            "follow_selected",
+            use_focused_bounds=True,
+        )
+
+        self.assertEqual(bounds.center, (5.0e7, 1.0e8))
+        self.assertEqual(bounds.half_width_m, 5.0e7)
+        self.assertEqual(bounds.half_height_m, 1.0e8)
+        self.assertAlmostEqual(scale, 300.0 * 0.45 / 1.0e8)
+
+    def test_overview_inset_geometry_and_containment(self):
+        rect = viewport.overview_inset_rect(1000, 600)
+
+        self.assertEqual(rect, viewport.InsetRect(12.0, 428.0, 240.0, 160.0))
+        self.assertTrue(viewport.point_in_rect(20.0, 500.0, rect))
+        self.assertFalse(viewport.point_in_rect(500.0, 500.0, rect))
 
     def test_body_and_entity_hit_tests_select_closest_visible_target(self):
         bodies = _bodies()

@@ -10,7 +10,7 @@ The canvas shows the active simulation view.
 - Faint colored lines show orbital trails collected during playback and manual stepping.
 - A white ring marks the selected body or selected overview group.
 - A small red dot marks the shared barycenter when the visible active set has enough mass data to compute one.
-- In Hybrid Focus mode, muted markers and trails show outside context while the focused subsystem remains the main active view.
+- In Hybrid Focus mode, a lower-left overview inset shows outside systems while the focused subsystem remains fitted in the main view. The focused system has a white ring in the inset; click another inset marker to select it and leave the focused view.
 
 Move the pointer over a body or group marker to see its name. Click a body to select it in the body list and load its editable properties. In System Overview mode, click a group marker to select that group.
 
@@ -80,14 +80,14 @@ Changing the view mode clears existing trails because the active display context
 
 The simulation scope controls which bodies or system markers are actively advanced and displayed.
 
-- Auto chooses a scope from the current system, view mode, and focus state.
+- Auto chooses a scope from the current system hierarchy and focus state.
 - System Overview simulates and displays high-level group barycenters instead of every body.
 - Full N-body simulates all bodies together.
 - Stellar Overview simulates root stars in multi-star systems.
 - Focused Subsystem simulates the selected body or group context, such as a star and its descendants.
-- Hybrid Focus simulates a focused subsystem while showing outside context as muted overview markers.
+- Hybrid Focus simulates a focused subsystem while showing outside context in an overview inset.
 
-Auto uses System Overview for Log Overview when the system has multiple overview groups, Focused Subsystem for Follow Selected, Stellar Overview for multi-star root systems, and Full N-body otherwise. Using the Focus and Fit button switches Auto into a hybrid focused context.
+Auto uses System Overview whenever the system has multiple usable top-level groups, regardless of view scale mode. It uses Stellar Overview for remaining multi-star root systems and Full N-body otherwise. A focused target uses Hybrid Focus when outside context exists and Focused Subsystem when the target covers the whole system.
 
 ## Focus and Selection
 
@@ -97,11 +97,12 @@ Selecting a body loads its editable properties. Selecting a group loads a group 
 
 The Focus and Fit button appears when the selected body or group has a focusable subsystem. Activating it:
 
-- sets the view mode to Follow Selected,
-- sets the simulation scope to Auto,
+- temporarily uses Follow Selected and Auto without changing the saved system settings,
 - resets canvas zoom,
-- chooses a visible time step suitable for the focused bodies,
+- chooses a visible time step from the shortest focused orbit and current accuracy profile,
 - clears existing trails.
+
+The focused time step and trail cadence may be edited without changing the saved values. Changing accuracy recalculates an automatically selected focused step, while a manually edited focused step is retained until focus ends. Click Focus and Fit again, select another hierarchy item, or change view/scope to leave focus and restore the stored settings.
 
 ## System Controls
 

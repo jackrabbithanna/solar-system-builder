@@ -125,7 +125,7 @@ Centauri System are advanced as temporary group barycenters, and their group
 trails show the wide-system path. The sidebar focus action can zoom into either
 a semantic group or a star with child planets. In that focused state, `auto`
 uses hybrid focused context: the focused bodies are advanced in detail while
-outside systems are drawn as coarse barycenter context. This lets Proxima b/d/c
+outside systems appear as coarse barycenter context in a selectable overview inset. This lets Proxima b/d/c
 Candidate or the Alpha Centauri A Candidate show local orbital paths without
 forcing every whole-system step to use the shortest planetary timestep.
 

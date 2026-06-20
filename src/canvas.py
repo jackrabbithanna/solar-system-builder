@@ -19,7 +19,7 @@ from gi.repository import Gdk, GObject, Gtk
 
 from . import viewport
 from .models import Body
-from .scales import OverviewEntity, collapsed_child_counts
+from .scales import CanvasBounds, OverviewEntity, collapsed_child_counts
 
 Trail = list[tuple[float, float]]
 Positions = Sequence[Sequence[float]]
@@ -35,8 +35,9 @@ class CanvasScene:
     view_mode: str = "fit_system"
     using_system_overview: bool = False
     using_hybrid_focus: bool = False
+    using_focused_fit: bool = False
     selected_group_center: tuple[float, float] | None = None
-    hybrid_bounds: tuple[tuple[float, float], float] | None = None
+    focused_bounds: CanvasBounds | None = None
     trails: list[Trail] = field(default_factory=list)
     overview_entities: list[OverviewEntity] = field(default_factory=list)
     overview_positions: Positions = field(default_factory=list)
@@ -44,6 +45,11 @@ class CanvasScene:
     context_entities: list[OverviewEntity] = field(default_factory=list)
     context_positions: Positions = field(default_factory=list)
     context_trails: dict[str, Trail] = field(default_factory=dict)
+    inset_entities: list[OverviewEntity] = field(default_factory=list)
+    inset_positions: Positions = field(default_factory=list)
+    inset_trails: dict[str, Trail] = field(default_factory=dict)
+    inset_targets: dict[str, str] = field(default_factory=dict)
+    focused_inset_entity_id: str | None = None
 
 
 class SolarSystemCanvas(Gtk.DrawingArea):
@@ -52,6 +58,7 @@ class SolarSystemCanvas(Gtk.DrawingArea):
     __gsignals__ = {
         "body-selected": (GObject.SignalFlags.RUN_FIRST, None, (int,)),
         "group-selected": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
+        "focus-target-selected": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
         "zoom-factor-changed": (GObject.SignalFlags.RUN_FIRST, None, (float,)),
     }
 
@@ -94,6 +101,10 @@ class SolarSystemCanvas(Gtk.DrawingArea):
         return False
 
     def _on_query_tooltip(self, _widget, x: int, y: int, _keyboard_mode: bool, tooltip) -> bool:
+        inset_entity = self._inset_entity_at_point(float(x), float(y))
+        if inset_entity is not None:
+            tooltip.set_text(inset_entity.name)
+            return True
         body_index = self._body_index_at_point(float(x), float(y))
         if body_index is not None:
             tooltip.set_text(self._scene.bodies[body_index].name)
@@ -105,6 +116,16 @@ class SolarSystemCanvas(Gtk.DrawingArea):
         return False
 
     def _on_pressed(self, _gesture, _n_press: int, x: float, y: float) -> None:
+        inset_entity = self._inset_entity_at_point(x, y)
+        if inset_entity is not None:
+            target = self._scene.inset_targets.get(inset_entity.id)
+            if target is not None and inset_entity.id != self._scene.focused_inset_entity_id:
+                self.emit("focus-target-selected", target)
+            return
+        if self._scene.using_hybrid_focus:
+            rect = viewport.overview_inset_rect(self.get_width(), self.get_height())
+            if viewport.point_in_rect(x, y, rect):
+                return
         body_index = self._body_index_at_point(x, y)
         if body_index is not None:
             self.emit("body-selected", body_index)
@@ -170,7 +191,7 @@ class SolarSystemCanvas(Gtk.DrawingArea):
         if barycenter is not None:
             self._draw_shared_barycenter(cr, barycenter[0], barycenter[1])
         if self._scene.using_hybrid_focus:
-            self._draw_context_entities(cr, origin_x, origin_y, scale, center_x_m, center_y_m)
+            self._draw_overview_inset(cr, width, height)
 
     def _draw_system_overview(self, cr, width: int, height: int) -> None:
         entities = self._scene.overview_entities
@@ -230,54 +251,118 @@ class SolarSystemCanvas(Gtk.DrawingArea):
         if barycenter is not None:
             self._draw_shared_barycenter(cr, barycenter[0], barycenter[1])
 
-    def _draw_context_entities(
-        self,
-        cr,
-        origin_x: float,
-        origin_y: float,
-        scale: float,
-        center_x_m: float,
-        center_y_m: float,
-    ) -> None:
-        entities = self._scene.context_entities
-        positions = self._scene.context_positions
-        if not entities or len(positions) == 0:
+    def _draw_overview_inset(self, cr, width: int, height: int) -> None:
+        entities = self._scene.inset_entities
+        positions = self._scene.inset_positions
+        if len(entities) < 2 or len(positions) != len(entities):
             return
+        rect = viewport.overview_inset_rect(width, height)
+        padding = 10.0
+        inner_width = max(1, int(rect.width - 2.0 * padding))
+        inner_height = max(1, int(rect.height - 2.0 * padding))
+        center_x_m, center_y_m = viewport.overview_view_center(entities, positions)
+        scale = viewport.overview_canvas_scale(
+            inner_width,
+            inner_height,
+            positions,
+            center_x_m,
+            center_y_m,
+            1.0,
+            "fit_system",
+        )
+        origin_x = rect.x + rect.width / 2.0
+        origin_y = rect.y + rect.height / 2.0
 
+        cr.save()
+        cr.set_source_rgba(0.015, 0.02, 0.027, 0.9)
+        cr.rectangle(rect.x, rect.y, rect.width, rect.height)
+        cr.fill_preserve()
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.28)
         cr.set_line_width(1.0)
+        cr.stroke()
+        cr.rectangle(rect.x, rect.y, rect.width, rect.height)
+        cr.clip()
+
         for entity in entities:
-            trail = self._scene.context_trails.get(entity.id, [])
+            trail = self._scene.inset_trails.get(entity.id, [])
             if len(trail) < 2:
                 continue
             rgba = self._rgba(entity.color)
-            cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.22)
-            first_x, first_y = self._project(trail[0][0], trail[0][1], origin_x, origin_y, scale, center_x_m, center_y_m)
+            cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.35)
+            first_x, first_y = viewport.project(
+                trail[0][0], trail[0][1], origin_x, origin_y, scale, center_x_m, center_y_m, "fit_system"
+            )
             cr.move_to(first_x, first_y)
             for point_x, point_y in trail[1:]:
-                x, y = self._project(point_x, point_y, origin_x, origin_y, scale, center_x_m, center_y_m)
-                cr.line_to(x, y)
+                projected = viewport.project(
+                    point_x, point_y, origin_x, origin_y, scale, center_x_m, center_y_m, "fit_system"
+                )
+                cr.line_to(*projected)
             cr.stroke()
 
         for index, entity in enumerate(entities):
-            position = positions[index]
-            x, y = self._project(float(position[0]), float(position[1]), origin_x, origin_y, scale, center_x_m, center_y_m)
+            x, y = viewport.project(
+                float(positions[index][0]),
+                float(positions[index][1]),
+                origin_x,
+                origin_y,
+                scale,
+                center_x_m,
+                center_y_m,
+                "fit_system",
+            )
             rgba = self._rgba(entity.color)
-            cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.45)
+            cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.95)
             cr.arc(x, y, 5.0, 0.0, math.tau)
             cr.fill()
+            if entity.id == self._scene.focused_inset_entity_id:
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.9)
+                cr.set_line_width(2.0)
+                cr.arc(x, y, 9.0, 0.0, math.tau)
+                cr.stroke()
+        cr.restore()
 
-        barycenter = viewport.shared_barycenter_point(
-            entities,
-            positions,
-            origin_x,
-            origin_y,
+    def _inset_entity_at_point(self, pointer_x: float, pointer_y: float) -> OverviewEntity | None:
+        if not self._scene.using_hybrid_focus or len(self._scene.inset_entities) < 2:
+            return None
+        width = self.get_width()
+        height = self.get_height()
+        if width <= 0 or height <= 0:
+            return None
+        rect = viewport.overview_inset_rect(width, height)
+        if not viewport.point_in_rect(pointer_x, pointer_y, rect):
+            return None
+        padding = 10.0
+        inner_width = max(1, int(rect.width - 2.0 * padding))
+        inner_height = max(1, int(rect.height - 2.0 * padding))
+        center_x_m, center_y_m = viewport.overview_view_center(
+            self._scene.inset_entities,
+            self._scene.inset_positions,
+        )
+        scale = viewport.overview_canvas_scale(
+            inner_width,
+            inner_height,
+            self._scene.inset_positions,
+            center_x_m,
+            center_y_m,
+            1.0,
+            "fit_system",
+        )
+        return viewport.entity_at_point(
+            self._scene.inset_entities,
+            self._scene.inset_positions,
+            pointer_x,
+            pointer_y,
+            int(rect.width),
+            int(rect.height),
             scale,
             center_x_m,
             center_y_m,
-            self._scene.view_mode,
+            "fit_system",
+            10.0,
+            origin_x=rect.x + rect.width / 2.0,
+            origin_y=rect.y + rect.height / 2.0,
         )
-        if barycenter is not None:
-            self._draw_shared_barycenter(cr, barycenter[0], barycenter[1])
 
     def _body_index_at_point(self, pointer_x: float, pointer_y: float) -> int | None:
         if not self._scene.bodies or self._scene.using_system_overview:
@@ -315,29 +400,21 @@ class SolarSystemCanvas(Gtk.DrawingArea):
             entities = self._scene.overview_entities
             positions = self._scene.overview_positions
             hit_radius = 12.0
-        elif self._scene.using_hybrid_focus:
-            entities = self._scene.context_entities
-            positions = self._scene.context_positions
-            hit_radius = 10.0
         else:
             return None
 
         if not entities or len(positions) == 0:
             return None
-        if self._scene.using_system_overview:
-            center_x_m, center_y_m = viewport.overview_view_center(entities, positions)
-            scale = viewport.overview_canvas_scale(
-                width,
-                height,
-                positions,
-                center_x_m,
-                center_y_m,
-                self._zoom_factor,
-                self._scene.view_mode,
-            )
-        else:
-            center_x_m, center_y_m = self._view_center()
-            scale = self._canvas_scale(width, height, center_x_m, center_y_m)
+        center_x_m, center_y_m = viewport.overview_view_center(entities, positions)
+        scale = viewport.overview_canvas_scale(
+            width,
+            height,
+            positions,
+            center_x_m,
+            center_y_m,
+            self._zoom_factor,
+            self._scene.view_mode,
+        )
         return viewport.entity_at_point(
             entities,
             positions,
@@ -358,7 +435,7 @@ class SolarSystemCanvas(Gtk.DrawingArea):
             self._scene.view_mode,
             self._scene.selected_body_index,
             self._scene.selected_group_center,
-            self._scene.hybrid_bounds if self._scene.using_hybrid_focus else None,
+            self._scene.focused_bounds if self._scene.using_focused_fit else None,
         )
 
     def _canvas_scale(self, width: int, height: int, center_x_m: float, center_y_m: float) -> float:
@@ -371,7 +448,7 @@ class SolarSystemCanvas(Gtk.DrawingArea):
             center_y_m,
             self._zoom_factor,
             self._scene.view_mode,
-            use_focused_bounds=self._scene.using_hybrid_focus,
+            use_focused_bounds=self._scene.using_focused_fit,
         )
 
     def _project(

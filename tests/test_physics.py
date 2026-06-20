@@ -3,16 +3,18 @@ import unittest
 import numpy as np
 
 from src.constants import AU, DAY, G, SOLAR_MASS, YEAR
-from src.models import Body
+from src.models import Body, SystemSettings
 from src.physics import SimulationState, acceleration, advance, advance_with_samples, step
 from src.presets import load_builtin_solar_system, load_builtin_solar_systems
 from src.scales import (
     LIGHT_YEAR,
+    FocusState,
     active_body_indices,
     context_overview_entities,
     derived_max_step_s,
     derived_overview_max_step_s,
     distance_between_bodies_m,
+    effective_focus_settings,
     effective_simulation_scope,
     focused_visible_step_s,
     focus_target_body_indices,
@@ -373,6 +375,37 @@ class PhysicsTests(unittest.TestCase):
 
         self.assertEqual(scope, "hybrid_focused_context")
 
+    def test_auto_scope_uses_focused_subsystem_when_target_covers_system(self):
+        solar_system = load_builtin_solar_system()
+
+        scope = effective_simulation_scope(
+            solar_system.bodies,
+            "auto",
+            "fit_system",
+            0,
+            solar_system.groups,
+            "body:sun",
+        )
+
+        self.assertEqual(scope, "focused_subsystem")
+
+    def test_auto_scope_uses_group_overview_independent_of_view_mode(self):
+        alpha_centauri = next(
+            system
+            for system in load_builtin_solar_systems()
+            if system.id == "builtin-binary-system"
+        )
+
+        scope = effective_simulation_scope(
+            alpha_centauri.bodies,
+            "auto",
+            "fit_system",
+            0,
+            alpha_centauri.groups,
+        )
+
+        self.assertEqual(scope, "system_overview")
+
     def test_context_entities_exclude_focused_target(self):
         alpha_centauri = next(
             system
@@ -407,8 +440,8 @@ class PhysicsTests(unittest.TestCase):
         focused_step = focused_visible_step_s(proxima_bodies, "balanced")
         overview_step = derived_overview_max_step_s(all_entities, "balanced")
 
-        self.assertGreaterEqual(focused_step, 7.0 * DAY)
-        self.assertLess(focused_step, YEAR)
+        self.assertGreater(focused_step, 1.0)
+        self.assertLess(focused_step, DAY)
         self.assertGreater(overview_step, focused_step)
 
     def test_alpha_centauri_overview_policy_ignores_planetary_timestep(self):
@@ -429,7 +462,8 @@ class PhysicsTests(unittest.TestCase):
         ]
         overview_step = derived_max_step_s(overview_bodies, "fast")
 
-        self.assertEqual(full_step, 0.5 * DAY)
+        self.assertGreater(full_step, 1.0)
+        self.assertLess(full_step, 0.5 * DAY)
         self.assertGreaterEqual(overview_step, 30.0 * DAY)
         self.assertGreater(overview_step, full_step)
 
@@ -515,6 +549,26 @@ class PhysicsTests(unittest.TestCase):
         self.assertEqual(format_elapsed_time(1_000 * YEAR), "1.00 millennia")
         self.assertEqual(format_elapsed_time(1_000_000 * YEAR), "1.00 Myr")
         self.assertEqual(recommended_trail_sample_interval_s(90 * DAY), 90 * DAY)
+        self.assertEqual(recommended_trail_sample_interval_s(0.25 * DAY), 0.25 * DAY)
+
+    def test_focused_settings_are_runtime_overrides(self):
+        stored = SystemSettings(
+            visible_step_s=10.0 * DAY,
+            view_mode="log_overview",
+            simulation_scope="full_nbody",
+            trail_sample_interval_s=5.0 * DAY,
+        )
+        focused = effective_focus_settings(
+            stored,
+            FocusState("body:sun", 0.25 * DAY, 0.25 * DAY),
+        )
+
+        self.assertEqual(focused.visible_step_s, 0.25 * DAY)
+        self.assertEqual(focused.view_mode, "follow_selected")
+        self.assertEqual(focused.simulation_scope, "auto")
+        self.assertEqual(stored.visible_step_s, 10.0 * DAY)
+        self.assertEqual(stored.view_mode, "log_overview")
+        self.assertEqual(stored.simulation_scope, "full_nbody")
 
     def test_distance_formatting_uses_au_then_light_years(self):
         self.assertEqual(format_distance(0.0), "0.0000 AU")

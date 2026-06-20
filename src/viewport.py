@@ -7,13 +7,32 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from collections.abc import Callable, Sequence
 
 from .constants import AU
 from .models import Body
-from .scales import OverviewEntity, focused_canvas_bounds
+from .scales import CanvasBounds, OverviewEntity, focused_canvas_bounds
 
 Position2D = Sequence[float]
+
+
+@dataclass(frozen=True)
+class InsetRect:
+    x: float
+    y: float
+    width: float
+    height: float
+
+
+def overview_inset_rect(width: int, height: int) -> InsetRect:
+    inset_width = max(80.0, min(240.0, max(160.0, width * 0.3), width - 24.0))
+    inset_height = min(inset_width * 2.0 / 3.0, max(60.0, height - 24.0))
+    return InsetRect(12.0, height - inset_height - 12.0, inset_width, inset_height)
+
+
+def point_in_rect(x: float, y: float, rect: InsetRect) -> bool:
+    return rect.x <= x <= rect.x + rect.width and rect.y <= y <= rect.y + rect.height
 
 
 def clamp_zoom_factor(zoom_factor: float, minimum: float = 1.0, maximum: float = 64.0) -> float:
@@ -60,12 +79,12 @@ def body_view_center(
     view_mode: str,
     selected_index: int,
     selected_group_center: tuple[float, float] | None = None,
-    hybrid_bounds: tuple[tuple[float, float], float] | None = None,
+    hybrid_bounds: CanvasBounds | None = None,
 ) -> tuple[float, float]:
     if not bodies:
         return (0.0, 0.0)
     if hybrid_bounds is not None:
-        return hybrid_bounds[0]
+        return hybrid_bounds.center
     if view_mode == "follow_selected":
         if selected_group_center is not None:
             return selected_group_center
@@ -125,8 +144,9 @@ def canvas_scale(
     if use_focused_bounds:
         bounds = focused_canvas_bounds(bodies, active_indices)
         if bounds is not None:
-            _, radius_m = bounds
-            return min(width, height) * 0.45 / max(radius_m, AU) * zoom_factor
+            horizontal_scale = width * 0.45 / bounds.half_width_m
+            vertical_scale = height * 0.45 / bounds.half_height_m
+            return min(horizontal_scale, vertical_scale) * zoom_factor
     max_distance = max(
         view_distance(body.position_m[0], body.position_m[1], center_x_m, center_y_m, view_mode)
         for index, body in enumerate(bodies)
@@ -189,9 +209,12 @@ def entity_at_point(
     center_y_m: float,
     view_mode: str,
     hit_radius: float,
+    *,
+    origin_x: float | None = None,
+    origin_y: float | None = None,
 ) -> OverviewEntity | None:
-    origin_x = width / 2.0
-    origin_y = height / 2.0
+    origin_x = width / 2.0 if origin_x is None else origin_x
+    origin_y = height / 2.0 if origin_y is None else origin_y
     closest_entity = None
     closest_distance = math.inf
 

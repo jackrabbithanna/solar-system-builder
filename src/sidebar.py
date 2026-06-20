@@ -371,8 +371,11 @@ class BodyInspectorPanel(GObject.GObject):
     def set_selected_name(self, name: str) -> None:
         self.selected_name_label.set_label(name)
 
-    def configure_focus_button(self, visible: bool) -> None:
+    def configure_focus_button(self, visible: bool, focused: bool) -> None:
         self.focus_button.set_visible(visible)
+        self.focus_button.set_tooltip_text(
+            "Exit focused view" if focused else "Focus and fit this system"
+        )
 
     def set_body_editor_sensitive(self, sensitive: bool, orbit_sensitive: bool) -> None:
         for widget in (self.mass_entry, self.x_spin, self.y_spin, self.vx_spin, self.vy_spin):

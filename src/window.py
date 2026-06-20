@@ -20,7 +20,7 @@ from gi.repository import Adw, GLib, Gtk
 from . import hierarchy, playback
 from .canvas import CanvasScene, SolarSystemCanvas
 from .constants import AU, DAY
-from .models import Body, DataSource, ModelError, OrbitData, SolarSystem, SystemGroup
+from .models import Body, DataSource, ModelError, OrbitData, SolarSystem, SystemGroup, SystemSettings
 from .orbit_editing import (
     generate_binary_pair_orbit,
     generate_body_orbit,
@@ -30,9 +30,12 @@ from .orbits import body_indices_for_group, group_barycenter
 from .presets import load_builtin_solar_system, load_builtin_solar_systems
 from .scales import (
     DISTANCE_UNITS,
+    FocusState,
     distance_between_bodies_m,
+    effective_focus_settings,
     focused_canvas_bounds,
     focused_visible_step_s,
+    focus_overview_entity,
     focus_target_body_indices,
     format_elapsed_time,
     recommended_trail_sample_interval_s,
@@ -112,6 +115,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.selected_index = 0
         self.focus_group_id: str | None = None
         self.focus_target: str | None = None
+        self.focus_state: FocusState | None = None
         self.selected_group_id: str | None = None
         self.playing = False
         self.editing = False
@@ -180,6 +184,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
 
         self.canvas.connect("body-selected", self._on_canvas_body_selected)
         self.canvas.connect("group-selected", self._on_canvas_group_selected)
+        self.canvas.connect("focus-target-selected", self._on_canvas_focus_target_selected)
         self.canvas.connect("zoom-factor-changed", self._on_canvas_zoom_factor_changed)
         self.play_button.connect("clicked", self._on_play_clicked)
         self.step_back_button.connect("clicked", self._on_step_back_clicked)
@@ -240,6 +245,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.selected_index = self._body_index_for_id(selected_body_id)
         self.focus_group_id = self._group_id_for_body_index(self.selected_index)
         self.focus_target = None
+        self.focus_state = None
         self.selected_group_id = None
         self._populate_body_list()
         self._select_body(self.selected_index)
@@ -374,10 +380,10 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
 
     def _configure_focus_button(self, target: str | None) -> None:
         if target is None:
-            self.body_inspector.configure_focus_button(False)
+            self.body_inspector.configure_focus_button(False, False)
             return
         active_indices = focus_target_body_indices(self.system.bodies, self.system.groups, target)
-        self.body_inspector.configure_focus_button(bool(active_indices))
+        self.body_inspector.configure_focus_button(bool(active_indices), target == self.focus_target)
 
     def _body_focus_target(self, body: Body) -> str | None:
         if any(candidate.parent_id == body.id for candidate in self.system.bodies):
@@ -385,7 +391,27 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         return None
 
     def _clear_dynamic_simulation_state(self) -> None:
+        self.simulation.increment_generation()
         self.simulation.clear_dynamic(self.system.bodies)
+
+    def _effective_settings(self) -> SystemSettings:
+        return effective_focus_settings(self.system.settings, self.focus_state)
+
+    def _exit_focus(self, *, reload_settings: bool = True) -> bool:
+        if self.focus_state is None:
+            return False
+        self.focus_state = None
+        self.focus_target = None
+        if self.selected_group_id is not None:
+            self.focus_group_id = self.selected_group_id
+        else:
+            self.focus_group_id = self._group_id_for_body_index(self.selected_index)
+        self.zoom_factor = 1.0
+        self.canvas.set_zoom_factor(1.0)
+        self._clear_dynamic_simulation_state()
+        if reload_settings:
+            self._load_settings_editor()
+        return True
 
     def _set_body_editor_sensitive(self, sensitive: bool) -> None:
         self.body_inspector.set_body_editor_sensitive(
@@ -512,7 +538,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.system_library.load_editor()
 
     def _load_settings_editor(self) -> None:
-        self.system_panel.load_settings(self.system.settings)
+        self.system_panel.load_settings(self._effective_settings())
         self._configure_position_spins()
 
     def _on_body_edit(self, *_args) -> None:
@@ -537,6 +563,12 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._refresh_canvas()
 
     def _on_time_step_changed(self, _panel, visible_step_s: float) -> None:
+        if self.focus_state is not None:
+            self.focus_state.visible_step_s = visible_step_s
+            self.focus_state.trail_sample_interval_s = recommended_trail_sample_interval_s(visible_step_s)
+            self.focus_state.step_manually_overridden = True
+            self._update_title()
+            return
         self.system.settings.visible_step_s = visible_step_s
         self.system.settings.trail_sample_interval_s = recommended_trail_sample_interval_s(
             self.system.settings.visible_step_s
@@ -545,16 +577,29 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
 
     def _on_accuracy_changed(self, _panel, accuracy_profile: str) -> None:
         self.system.settings.accuracy_profile = accuracy_profile
+        if self.focus_state is not None and not self.focus_state.step_manually_overridden:
+            active_indices = focus_target_body_indices(
+                self.system.bodies,
+                self.system.groups,
+                self.focus_state.target,
+            )
+            focused_bodies = [self.system.bodies[index] for index in active_indices]
+            self.focus_state.visible_step_s = focused_visible_step_s(focused_bodies, accuracy_profile)
+            self.focus_state.trail_sample_interval_s = recommended_trail_sample_interval_s(
+                self.focus_state.visible_step_s
+            )
+            self._load_settings_editor()
         self._update_title()
 
     def _on_view_mode_changed(self, _panel, view_mode: str) -> None:
+        self._exit_focus(reload_settings=False)
         self.system.settings.view_mode = view_mode
-        self.focus_target = None
         self._clear_dynamic_simulation_state()
         self._update_title()
         self._refresh_canvas()
 
     def _on_simulation_scope_changed(self, _panel, simulation_scope: str) -> None:
+        self._exit_focus(reload_settings=False)
         self.system.settings.simulation_scope = simulation_scope
         self._clear_dynamic_simulation_state()
         self._update_title()
@@ -669,6 +714,13 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         if target is None:
             return
 
+        if self.focus_state is not None and self.focus_state.target == target:
+            self._exit_focus()
+            self._configure_focus_button(target)
+            self._update_title()
+            self._refresh_canvas()
+            return
+
         active_indices = focus_target_body_indices(self.system.bodies, self.system.groups, target)
         if not active_indices:
             return
@@ -679,24 +731,26 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         else:
             self.focus_group_id = None
         focused_bodies = [self.system.bodies[index] for index in active_indices]
-        self.system.settings.visible_step_s = focused_visible_step_s(
+        visible_step_s = focused_visible_step_s(
             focused_bodies,
             self.system.settings.accuracy_profile,
         )
-        self.system.settings.trail_sample_interval_s = recommended_trail_sample_interval_s(
-            self.system.settings.visible_step_s
+        self.focus_state = FocusState(
+            target=target,
+            visible_step_s=visible_step_s,
+            trail_sample_interval_s=recommended_trail_sample_interval_s(visible_step_s),
         )
-        self.system.settings.view_mode = "follow_selected"
-        self.system.settings.simulation_scope = "auto"
         self.zoom_factor = 1.0
+        self.canvas.set_zoom_factor(1.0)
         self._clear_dynamic_simulation_state()
         self._load_settings_editor()
+        self._configure_focus_button(target)
         self._update_title()
         self._refresh_canvas()
 
     def _on_hierarchy_body_selected(self, _list_box: BodyHierarchyList, body_index: int) -> None:
         if body_index != self.selected_index or self.selected_group_id is not None:
-            self.focus_target = None
+            self._exit_focus()
             self.selected_group_id = None
             self.selected_index = body_index
             self.focus_group_id = self._group_id_for_body_index(body_index)
@@ -706,7 +760,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
 
     def _on_hierarchy_group_selected(self, _list_box: BodyHierarchyList, group_id: str) -> None:
         if group_id != self.selected_group_id:
-            self.focus_target = None
+            self._exit_focus()
             self.selected_group_id = group_id
             self._load_group_focus(group_id)
             self._update_title()
@@ -735,11 +789,23 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._set_zoom_factor(self.zoom_factor * 1.5)
 
     def _on_canvas_body_selected(self, _canvas: SolarSystemCanvas, body_index: int) -> None:
+        self._exit_focus()
         self._select_body(body_index)
         self._refresh_canvas()
 
     def _on_canvas_group_selected(self, _canvas: SolarSystemCanvas, group_id: str) -> None:
+        self._exit_focus()
         self._select_group(group_id)
+
+    def _on_canvas_focus_target_selected(self, _canvas: SolarSystemCanvas, target: str) -> None:
+        target_type, _, target_id = target.partition(":")
+        self._exit_focus()
+        if target_type == "group" and self._group_by_id(target_id) is not None:
+            self._select_group(target_id)
+        elif target_type == "body":
+            self._select_body(self._body_index_for_id(target_id))
+        self._update_title()
+        self._refresh_canvas()
 
     def _on_canvas_zoom_factor_changed(self, _canvas: SolarSystemCanvas, zoom_factor: float) -> None:
         self.zoom_factor = zoom_factor
@@ -786,9 +852,10 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         return True
 
     def _advance(self, dt_s: float) -> None:
+        settings = self._effective_settings()
         job = self._simulation_job(dt_s)
         result = playback.run_simulation_job(job)
-        if self.simulation.apply_result(result, self.system.bodies, self.system.groups, self.system.settings):
+        if self.simulation.apply_result(result, self.system.bodies, self.system.groups, settings):
             self._after_simulation_applied()
 
     def _queue_simulation_job(self) -> None:
@@ -808,7 +875,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         return self.simulation.create_job(
             self.system.bodies,
             self.system.groups,
-            self.system.settings,
+            self._effective_settings(),
             self.selected_index,
             self.focus_group_id,
             self.focus_target,
@@ -830,7 +897,12 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.play_button.set_icon_name("media-playback-start-symbolic")
             return False
 
-        if self.simulation.apply_result(result, self.system.bodies, self.system.groups, self.system.settings):
+        if self.simulation.apply_result(
+            result,
+            self.system.bodies,
+            self.system.groups,
+            self._effective_settings(),
+        ):
             self._after_simulation_applied()
 
         if self.playing:
@@ -851,10 +923,11 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         return self.system_panel.step_seconds()
 
     def _max_step_seconds(self) -> float:
+        settings = self._effective_settings()
         return self.simulation.max_step_seconds(
             self.system.bodies,
             self.system.groups,
-            self.system.settings,
+            settings,
             self.selected_index,
             self.focus_group_id,
             self.focus_target,
@@ -873,29 +946,32 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.canvas.set_scene(self._canvas_scene())
 
     def _canvas_scene(self) -> CanvasScene:
+        settings = self._effective_settings()
         active_indices = self._active_body_indices()
         using_hybrid_focus = self._using_hybrid_focus()
         selected_group_center = (
             self._group_center(self.selected_group_id)
-            if self.system.settings.view_mode == "follow_selected" and self.selected_group_id is not None
+            if settings.view_mode == "follow_selected" and self.selected_group_id is not None
             else None
         )
-        hybrid_bounds = (
+        focused_bounds = (
             focused_canvas_bounds(self.system.bodies, active_indices)
-            if using_hybrid_focus
+            if self.focus_state is not None
             else None
         )
+        inset_entities, inset_positions, inset_targets, focused_inset_id = self._inset_overview_data()
         return CanvasScene(
             bodies=self.system.bodies,
             active_indices=active_indices,
             selected_body_index=self.selected_index,
             selected_group_id=self.selected_group_id,
             selectable_group_ids={group.id for group in self.system.groups},
-            view_mode=self.system.settings.view_mode,
+            view_mode=settings.view_mode,
             using_system_overview=self._using_system_overview(),
             using_hybrid_focus=using_hybrid_focus,
+            using_focused_fit=self.focus_state is not None,
             selected_group_center=selected_group_center,
-            hybrid_bounds=hybrid_bounds,
+            focused_bounds=focused_bounds,
             trails=list(self.simulation.trails),
             overview_entities=self._overview_entities(),
             overview_positions=self._overview_positions(),
@@ -903,44 +979,72 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             context_entities=self._context_entities(),
             context_positions=self._context_positions(),
             context_trails=dict(self.simulation.context_trails),
+            inset_entities=inset_entities,
+            inset_positions=inset_positions,
+            inset_trails=dict(self.simulation.context_trails),
+            inset_targets=inset_targets,
+            focused_inset_entity_id=focused_inset_id,
         )
+
+    def _inset_overview_data(self):
+        if not self._using_hybrid_focus():
+            return [], [], {}, None
+        focused = focus_overview_entity(self.system.bodies, self.system.groups, self.focus_target)
+        if focused is None:
+            return [], [], {}, None
+        context_entities = self._context_entities()
+        context_positions = self._context_positions()
+        entities = [focused, *context_entities]
+        positions = [focused.position_m, *context_positions]
+        group_ids = {group.id for group in self.system.groups}
+        targets = {focused.id: self.focus_target}
+        for entity in context_entities:
+            if entity.id in group_ids:
+                targets[entity.id] = f"group:{entity.id}"
+            elif entity.id.startswith("context-"):
+                targets[entity.id] = f"body:{entity.id.removeprefix('context-')}"
+        return entities, positions, targets, focused.id
 
     def _overview_positions(self):
         return self.simulation.overview_positions(self.system.bodies, self.system.groups)
 
     def _active_body_indices(self) -> list[int]:
+        settings = self._effective_settings()
         return self.simulation.active_body_indices(
             self.system.bodies,
             self.system.groups,
-            self.system.settings,
+            settings,
             self.selected_index,
             self.focus_group_id,
             self.focus_target,
         )
 
     def _effective_simulation_scope(self) -> str:
+        settings = self._effective_settings()
         return self.simulation.effective_simulation_scope(
             self.system.bodies,
             self.system.groups,
-            self.system.settings,
+            settings,
             self.selected_index,
             self.focus_target,
         )
 
     def _using_system_overview(self) -> bool:
+        settings = self._effective_settings()
         return self.simulation.using_system_overview(
             self.system.bodies,
             self.system.groups,
-            self.system.settings,
+            settings,
             self.selected_index,
             self.focus_target,
         )
 
     def _using_hybrid_focus(self) -> bool:
+        settings = self._effective_settings()
         return self.simulation.using_hybrid_focus(
             self.system.bodies,
             self.system.groups,
-            self.system.settings,
+            settings,
             self.selected_index,
             self.focus_group_id,
             self.focus_target,

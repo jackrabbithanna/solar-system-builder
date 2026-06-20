@@ -39,11 +39,11 @@ The fix is:
 
 Regression coverage exists in `tests/test_physics.py`.
 
-The UI derives the internal `max_step_s` from a scale policy in `src/scales.py` instead of always using the physics default. That policy estimates parent-child orbital periods or unparented root-body pair periods where possible and clamps the result by the selected accuracy profile. The visible time step can be days, years, decades, centuries, millennia, or Myr; it must still be passed through `advance()` or `advance_with_samples()` with a bounded internal step.
+The UI derives the internal `max_step_s` from a scale policy in `src/scales.py` instead of always using the physics default. That policy estimates parent-child orbital periods or unparented root-body pair periods where possible, applies the selected accuracy fraction, and caps the result by profile without imposing a day-scale lower bound. The visible time step can be days, years, decades, centuries, millennia, or Myr; it must still be passed through `advance()` or `advance_with_samples()` with a bounded internal step.
 
 ## Simulation Scope
 
-Large systems can choose an active simulation scope before calling physics. `full_nbody` advances every body. `stellar_overview` advances only root stars and collapses child systems for display. `system_overview` advances temporary group barycenters, such as the Alpha Centauri AB system and the Proxima system. `focused_subsystem` advances the selected root system and its children. `hybrid_focused_context` advances a focused group or body-descendant system in detail while drawing outside systems as coarse barycenter context. `auto` selects system overview for grouped log-overview views and hybrid focus when a focus target is active.
+Large systems can choose an active simulation scope before calling physics. `full_nbody` advances every body. `stellar_overview` advances only root stars and collapses child systems for display. `system_overview` advances temporary group barycenters, such as the Alpha Centauri AB system and the Proxima system. `focused_subsystem` advances the selected root system and its children. `hybrid_focused_context` advances a focused group or body-descendant system in detail while showing outside systems as coarse barycenter context in an overview inset. `auto` selects system overview when multiple top-level group entities exist, stellar overview for remaining multi-star systems, and full N-body otherwise. A focus target selects hybrid focus only when outside context exists; a whole-system target uses focused subsystem.
 
 This scope is a UI orchestration layer. `physics.py` still receives a normal flat `SimulationState` containing only the active bodies, and `window.py` merges completed active states back into the full UI state on the GTK main thread.
 
@@ -51,13 +51,13 @@ This scope is a UI orchestration layer. `physics.py` still receives a normal fla
 
 In `system_overview`, group barycenters are computed from current body masses, positions, and velocities. The overview state is temporary: playback advances group markers and group trails, updates elapsed time, and does not write barycenter positions back into the real star and planet bodies.
 
-In `hybrid_focused_context`, focused bodies are merged back into the full body state after playback. Context barycenters are temporary display state: they draw muted markers/trails and do not mutate real bodies or apply gravitational feedback into the focused subsystem.
+In `hybrid_focused_context`, focused bodies are merged back into the full body state after playback. Context barycenters are temporary display state: they draw markers and trails in the overview inset and do not mutate real bodies or apply gravitational feedback into the focused subsystem.
 
 ## Trail Sampling
 
 Dense trail rendering uses `advance_with_samples()` to collect positions after each bounded internal step. At a visible interval of 30 days, the physics and trail renderer may see many internal samples instead of one sparse 30-day line segment. This keeps zoomed inner-planet trails from looking polygonal or rosette-like solely because of display sampling.
 
-For large visible time steps, the UI decimates those physics samples before appending trails. Trail cadence is a display policy and should not change integration accuracy. In scoped body modes, trails are appended only for active bodies. In `system_overview`, separate group trails are appended instead of body trails. In `hybrid_focused_context`, focused body trails and coarse context trails are both sampled from their own worker results.
+For large visible time steps, the UI decimates those physics samples before appending trails. Trail cadence is a display policy and should not change integration accuracy. In scoped body modes, trails are appended only for active bodies. In `system_overview`, separate group trails are appended instead of body trails. In `hybrid_focused_context`, focused body trails and coarse inset context trails are both sampled from their own worker results. Focus and Fit uses the visible step as its trail cadence, including for sub-day compact orbits.
 
 ## Display Scale Helpers
 

@@ -7,10 +7,10 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .constants import AU, DAY, G, YEAR
-from .models import Body, SystemGroup
+from .models import Body, SystemGroup, SystemSettings
 
 LIGHT_YEAR = 299_792_458.0 * YEAR
 LIGHT_YEAR_THRESHOLD_M = 10_000.0 * AU
@@ -70,6 +70,8 @@ _OVERVIEW_PROFILE_CLAMPS_S = {
     "fast": (100.0 * YEAR, 1_000.0 * YEAR),
 }
 
+_MIN_STEP_S = 1.0
+
 _FOCUSED_VISIBLE_STEP_FRACTIONS = {
     "high": 1.0 / 96.0,
     "balanced": 1.0 / 48.0,
@@ -92,6 +94,33 @@ class OverviewEntity:
     position_m: list[float]
     velocity_mps: list[float]
     color: str
+
+
+@dataclass(frozen=True)
+class CanvasBounds:
+    center: tuple[float, float]
+    half_width_m: float
+    half_height_m: float
+
+
+@dataclass
+class FocusState:
+    target: str
+    visible_step_s: float
+    trail_sample_interval_s: float
+    step_manually_overridden: bool = False
+
+
+def effective_focus_settings(settings: SystemSettings, focus_state: FocusState | None) -> SystemSettings:
+    if focus_state is None:
+        return settings
+    return replace(
+        settings,
+        visible_step_s=focus_state.visible_step_s,
+        trail_sample_interval_s=focus_state.trail_sample_interval_s,
+        view_mode="follow_selected",
+        simulation_scope="auto",
+    )
 
 
 def unit_index(items: tuple[tuple[str, str, float], ...] | tuple[tuple[str, str], ...], value: str) -> int:
@@ -153,11 +182,11 @@ def format_distance(distance_m: float) -> str:
 
 def derived_max_step_s(bodies: list[Body], accuracy_profile: str) -> float:
     fraction = _PERIOD_FRACTIONS.get(accuracy_profile, _PERIOD_FRACTIONS["balanced"])
-    lower, upper = _PROFILE_CLAMPS_S.get(accuracy_profile, _PROFILE_CLAMPS_S["balanced"])
+    _lower, upper = _PROFILE_CLAMPS_S.get(accuracy_profile, _PROFILE_CLAMPS_S["balanced"])
     shortest_period = _shortest_parent_orbit_period_s(bodies) or _shortest_unparented_pair_period_s(bodies)
     if shortest_period is None:
         return DAY
-    return max(lower, min(upper, shortest_period * fraction))
+    return max(_MIN_STEP_S, min(upper, shortest_period * fraction))
 
 
 def derived_overview_max_step_s(entities: list[OverviewEntity], accuracy_profile: str) -> float:
@@ -168,11 +197,12 @@ def derived_overview_max_step_s(entities: list[OverviewEntity], accuracy_profile
     shortest_period = _shortest_entity_pair_period_s(entities)
     if shortest_period is None:
         return lower
-    return max(lower, min(upper, shortest_period / 32.0))
+    fraction = _PERIOD_FRACTIONS.get(accuracy_profile, _PERIOD_FRACTIONS["balanced"])
+    return max(_MIN_STEP_S, min(upper, shortest_period * fraction))
 
 
 def recommended_trail_sample_interval_s(visible_step_s: float) -> float:
-    return max(DAY, abs(visible_step_s))
+    return max(_MIN_STEP_S, abs(visible_step_s))
 
 
 def effective_simulation_scope(
@@ -186,12 +216,12 @@ def effective_simulation_scope(
     if requested_scope != "auto":
         return requested_scope
     if focus_target is not None:
-        return "hybrid_focused_context"
-    if view_mode == "log_overview" and len(system_overview_entities(bodies, groups or [])) > 1:
+        if context_overview_entities(bodies, groups or [], focus_target):
+            return "hybrid_focused_context"
+        return "focused_subsystem"
+    if len(system_overview_entities(bodies, groups or [])) > 1:
         return "system_overview"
     root_star_count = sum(1 for body in bodies if body.kind == "star" and body.parent_id is None)
-    if view_mode == "follow_selected":
-        return "focused_subsystem"
     if root_star_count > 1:
         return "stellar_overview"
     return "full_nbody"
@@ -250,35 +280,33 @@ def focused_visible_step_s(bodies: list[Body], accuracy_profile: str) -> float:
         accuracy_profile,
         _FOCUSED_VISIBLE_STEP_FRACTIONS["balanced"],
     )
-    lower, upper = _FOCUSED_VISIBLE_STEP_CLAMPS_S.get(
+    _lower, upper = _FOCUSED_VISIBLE_STEP_CLAMPS_S.get(
         accuracy_profile,
         _FOCUSED_VISIBLE_STEP_CLAMPS_S["balanced"],
     )
     shortest_period = _shortest_parent_orbit_period_s(bodies) or _shortest_unparented_pair_period_s(bodies)
     if shortest_period is None:
-        return lower
-    return max(lower, min(upper, shortest_period * fraction))
+        return DAY
+    return max(_MIN_STEP_S, min(upper, shortest_period * fraction))
 
 
 def focused_canvas_bounds(
     bodies: list[Body],
     active_indices: list[int],
-) -> tuple[tuple[float, float], float] | None:
+) -> CanvasBounds | None:
     if not active_indices:
         return None
     active_bodies = [bodies[index] for index in active_indices]
-    total_mass = sum(body.mass_kg for body in active_bodies)
-    if total_mass > 0.0:
-        center_x = sum(body.mass_kg * body.position_m[0] for body in active_bodies) / total_mass
-        center_y = sum(body.mass_kg * body.position_m[1] for body in active_bodies) / total_mass
-    else:
-        center_x = sum(body.position_m[0] for body in active_bodies) / len(active_bodies)
-        center_y = sum(body.position_m[1] for body in active_bodies) / len(active_bodies)
-    radius = max(
-        math.hypot(body.position_m[0] - center_x, body.position_m[1] - center_y)
-        for body in active_bodies
+    min_x = min(body.position_m[0] for body in active_bodies)
+    max_x = max(body.position_m[0] for body in active_bodies)
+    min_y = min(body.position_m[1] for body in active_bodies)
+    max_y = max(body.position_m[1] for body in active_bodies)
+    fallback_extent = max(max(body.radius_m for body in active_bodies), 1.0)
+    return CanvasBounds(
+        center=((min_x + max_x) / 2.0, (min_y + max_y) / 2.0),
+        half_width_m=max((max_x - min_x) / 2.0, fallback_extent),
+        half_height_m=max((max_y - min_y) / 2.0, fallback_extent),
     )
-    return (center_x, center_y), max(radius, AU)
 
 
 def system_overview_entities(bodies: list[Body], groups: list[SystemGroup]) -> list[OverviewEntity]:
@@ -333,6 +361,34 @@ def context_overview_entities(
         used_indices.update(indices)
 
     return entities
+
+
+def focus_overview_entity(
+    bodies: list[Body],
+    groups: list[SystemGroup],
+    focus_target: str | None,
+) -> OverviewEntity | None:
+    indices = focus_target_body_indices(bodies, groups, focus_target)
+    if not indices or focus_target is None:
+        return None
+    target_type, _, target_id = focus_target.partition(":")
+    if target_type == "group":
+        group = next((candidate for candidate in groups if candidate.id == target_id), None)
+        if group is None:
+            return None
+    elif target_type == "body":
+        body = next((candidate for candidate in bodies if candidate.id == target_id), None)
+        if body is None:
+            return None
+        group = SystemGroup(
+            id=body.id,
+            name=f"{body.name} System",
+            kind=f"{body.kind}_system",
+            body_ids=[body.id],
+        )
+    else:
+        return None
+    return _overview_entity_for_indices(group, bodies, indices)
 
 
 def _overview_entity_for_indices(
