@@ -578,12 +578,12 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _on_accuracy_changed(self, _panel, accuracy_profile: str) -> None:
         self.system.settings.accuracy_profile = accuracy_profile
         if self.focus_state is not None and not self.focus_state.step_manually_overridden:
-            active_indices = focus_target_body_indices(
+            focused_bodies = playback.focused_timing_bodies(
                 self.system.bodies,
                 self.system.groups,
                 self.focus_state.target,
+                collapse_moons=self.system.settings.simulation_scope != "full_nbody",
             )
-            focused_bodies = [self.system.bodies[index] for index in active_indices]
             self.focus_state.visible_step_s = focused_visible_step_s(focused_bodies, accuracy_profile)
             self.focus_state.trail_sample_interval_s = recommended_trail_sample_interval_s(
                 self.focus_state.visible_step_s
@@ -763,7 +763,12 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.focus_group_id = target.removeprefix("group:")
         else:
             self.focus_group_id = None
-        focused_bodies = [self.system.bodies[index] for index in active_indices]
+        focused_bodies = playback.focused_timing_bodies(
+            self.system.bodies,
+            self.system.groups,
+            target,
+            collapse_moons=self.system.settings.simulation_scope != "full_nbody",
+        )
         visible_step_s = focused_visible_step_s(
             focused_bodies,
             self.system.settings.accuracy_profile,
@@ -988,6 +993,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
                 policy += " approximation"
             if self.simulation.auto_approximation_locked:
                 policy += " (locked until reset)"
+        if decision.moons_collapsed:
+            policy += " (moons collapsed)"
         self.window_title.set_subtitle(
             f"{self.system.epoch} - {policy}, max step {max_step_days:,.2f} days"
         )

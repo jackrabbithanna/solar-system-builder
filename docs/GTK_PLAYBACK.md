@@ -29,7 +29,9 @@ Completed results are applied by `SimulationSession.apply_result(...)` on the GT
 
 After a result applies, `window.py` refreshes GTK widgets: relationship labels, selected editor fields, the time label, and the canvas scene. Trails are appended on the GTK main thread from the sampled positions returned by `advance_with_samples()`. The trail selection, capping, and storage logic lives in `playback.py`.
 
-Full N-body jobs pass every body even when focus displays only a subset. Root-star and focused policies may pass an active body subset. System-barycenter mode passes temporary group entities and applies only elapsed time plus group trails. Focus + Coarse Context advances focused bodies and outside aggregate context in one worker job; only focused body state is merged back. Full-job samples are aggregated on the main thread for focused inset trails.
+Full N-body jobs pass every body even when focus displays only a subset. Root-star and focused policies may pass an active body subset. System-barycenter mode passes temporary group entities and applies only elapsed time plus group trails. Focus + Coarse Context advances focused bodies and outside aggregate context as one coupled temporary state. The worker splits the result so only focused body state is merged back, while context state remains session-owned. Full-job samples are aggregated on the main thread for focused inset trails.
+
+At star-scale detail, Auto and scoped body policies send planet-and-moon memberships as mass-weighted proxy rows. On the main thread, each completed proxy position and velocity delta is applied to the planet and its moons. This freezes their relative phase while preserving a valid subsystem for later planetary Focus and Fit. Explicit Full N-body still sends every moon as its own physics row, but coarse views do not draw or sample moon trails.
 
 ## Stale Result Guard
 

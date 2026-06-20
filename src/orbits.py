@@ -41,40 +41,11 @@ def state_vectors_from_orbit(parent: Body, body: Body, orbit: OrbitData) -> tupl
             parent.mass_kg,
             body.mass_kg,
         )
-    if semi_major_axis_m <= 0.0:
-        raise ModelError("semi_major_axis_m must be positive")
-
-    eccentricity = orbit.eccentricity if orbit.eccentricity is not None else 0.0
-    if not 0.0 <= eccentricity < 1.0:
-        raise ModelError("eccentricity must be at least 0 and less than 1")
-
-    mean_anomaly = math.radians(orbit.mean_anomaly_deg or 0.0)
-    inclination = math.radians(orbit.inclination_deg or 0.0)
-    ascending_node = math.radians(orbit.longitude_of_ascending_node_deg or 0.0)
-    argument = math.radians(orbit.argument_of_periapsis_deg or 0.0)
-    eccentric_anomaly = _solve_eccentric_anomaly(mean_anomaly, eccentricity)
-    cos_e = math.cos(eccentric_anomaly)
-    sin_e = math.sin(eccentric_anomaly)
-    radius_m = semi_major_axis_m * (1.0 - eccentricity * cos_e)
-    if radius_m <= 0.0:
-        raise ModelError("orbit radius must be positive")
-
-    orbital_x = semi_major_axis_m * (cos_e - eccentricity)
-    orbital_y = semi_major_axis_m * math.sqrt(1.0 - eccentricity * eccentricity) * sin_e
-
-    mu = _gravitational_parameter(parent.mass_kg, body.mass_kg)
-    mean_motion = math.sqrt(mu / semi_major_axis_m**3)
-    orbital_vx = -semi_major_axis_m * mean_motion * sin_e / (1.0 - eccentricity * cos_e)
-    orbital_vy = (
-        semi_major_axis_m
-        * mean_motion
-        * math.sqrt(1.0 - eccentricity * eccentricity)
-        * cos_e
-        / (1.0 - eccentricity * cos_e)
+    relative_position, relative_velocity = _relative_state_from_orbit(
+        semi_major_axis_m,
+        parent.mass_kg + body.mass_kg,
+        orbit,
     )
-
-    relative_position = _rotate_from_orbital_plane(orbital_x, orbital_y, inclination, ascending_node, argument)
-    relative_velocity = _rotate_from_orbital_plane(orbital_vx, orbital_vy, inclination, ascending_node, argument)
     return (
         [parent.position_m[index] + relative_position[index] for index in range(3)],
         [parent.velocity_mps[index] + relative_velocity[index] for index in range(3)],
@@ -226,34 +197,46 @@ def _relative_state_from_orbit(
     total_mass_kg: float,
     orbit: OrbitData,
 ) -> tuple[list[float], list[float]]:
-    if semi_major_axis_m <= 0.0:
-        raise ModelError("semi_major_axis_m must be positive")
+    orbit.validate()
     eccentricity = orbit.eccentricity if orbit.eccentricity is not None else 0.0
-    if not 0.0 <= eccentricity < 1.0:
-        raise ModelError("eccentricity must be at least 0 and less than 1")
-
     mean_anomaly = math.radians(orbit.mean_anomaly_deg or 0.0)
     inclination = math.radians(orbit.inclination_deg or 0.0)
     ascending_node = math.radians(orbit.longitude_of_ascending_node_deg or 0.0)
     argument = math.radians(orbit.argument_of_periapsis_deg or 0.0)
-    eccentric_anomaly = _solve_eccentric_anomaly(mean_anomaly, eccentricity)
-    cos_e = math.cos(eccentric_anomaly)
-    sin_e = math.sin(eccentric_anomaly)
-    radius_m = semi_major_axis_m * (1.0 - eccentricity * cos_e)
-    if radius_m <= 0.0:
-        raise ModelError("orbit radius must be positive")
-
-    orbital_x = semi_major_axis_m * (cos_e - eccentricity)
-    orbital_y = semi_major_axis_m * math.sqrt(1.0 - eccentricity * eccentricity) * sin_e
-    mean_motion = math.sqrt(G * total_mass_kg / semi_major_axis_m**3)
-    orbital_vx = -semi_major_axis_m * mean_motion * sin_e / (1.0 - eccentricity * cos_e)
-    orbital_vy = (
-        semi_major_axis_m
-        * mean_motion
-        * math.sqrt(1.0 - eccentricity * eccentricity)
-        * cos_e
-        / (1.0 - eccentricity * cos_e)
-    )
+    mu = G * total_mass_kg
+    if eccentricity < 1.0:
+        eccentric_anomaly = _solve_eccentric_anomaly(mean_anomaly, eccentricity)
+        cos_e = math.cos(eccentric_anomaly)
+        sin_e = math.sin(eccentric_anomaly)
+        denominator = 1.0 - eccentricity * cos_e
+        orbital_x = semi_major_axis_m * (cos_e - eccentricity)
+        orbital_y = semi_major_axis_m * math.sqrt(1.0 - eccentricity**2) * sin_e
+        mean_motion = math.sqrt(mu / semi_major_axis_m**3)
+        orbital_vx = -semi_major_axis_m * mean_motion * sin_e / denominator
+        orbital_vy = (
+            semi_major_axis_m
+            * mean_motion
+            * math.sqrt(1.0 - eccentricity**2)
+            * cos_e
+            / denominator
+        )
+    else:
+        axis_magnitude = abs(semi_major_axis_m)
+        hyperbolic_anomaly = _solve_hyperbolic_anomaly(mean_anomaly, eccentricity)
+        cosh_h = math.cosh(hyperbolic_anomaly)
+        sinh_h = math.sinh(hyperbolic_anomaly)
+        denominator = eccentricity * cosh_h - 1.0
+        orbital_x = axis_magnitude * (eccentricity - cosh_h)
+        orbital_y = axis_magnitude * math.sqrt(eccentricity**2 - 1.0) * sinh_h
+        mean_motion = math.sqrt(mu / axis_magnitude**3)
+        orbital_vx = -axis_magnitude * mean_motion * sinh_h / denominator
+        orbital_vy = (
+            axis_magnitude
+            * mean_motion
+            * math.sqrt(eccentricity**2 - 1.0)
+            * cosh_h
+            / denominator
+        )
     return (
         _rotate_from_orbital_plane(orbital_x, orbital_y, inclination, ascending_node, argument),
         _rotate_from_orbital_plane(orbital_vx, orbital_vy, inclination, ascending_node, argument),
@@ -287,6 +270,18 @@ def _solve_eccentric_anomaly(mean_anomaly: float, eccentricity: float) -> float:
         if abs(delta) < 1.0e-12:
             break
     return estimate
+
+
+def _solve_hyperbolic_anomaly(mean_anomaly: float, eccentricity: float) -> float:
+    estimate = math.asinh(mean_anomaly / eccentricity)
+    for _ in range(50):
+        correction = (
+            eccentricity * math.sinh(estimate) - estimate - mean_anomaly
+        ) / (eccentricity * math.cosh(estimate) - 1.0)
+        estimate -= correction
+        if abs(correction) < 1.0e-12:
+            return estimate
+    raise ModelError("could not solve hyperbolic anomaly")
 
 
 def _rotate_from_orbital_plane(

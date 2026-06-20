@@ -354,12 +354,14 @@ class BodyInspectorPanel(GObject.GObject):
         self.vx_spin = vx_spin
         self.vy_spin = vy_spin
         self.orbit_target_options: list[tuple[str, str]] = []
+        self.orbit_editor_enabled = False
         self.editing = False
 
         self.focus_button.connect("clicked", lambda *_args: self.emit("focus-requested"))
         self.generate_orbit_button.connect("clicked", lambda *_args: self.emit("generate-body-orbit"))
         self.generate_group_orbit_button.connect("clicked", lambda *_args: self.emit("generate-group-orbit"))
         self.generate_binary_orbit_button.connect("clicked", lambda *_args: self.emit("generate-binary-orbit"))
+        self.orbit_eccentricity_spin.connect("value-changed", self._on_orbit_eccentricity_changed)
         self.mass_entry.connect("activate", self._on_body_edit)
         self.mass_entry.connect("notify::has-focus", self._on_mass_focus_changed)
         for spin in (self.x_spin, self.y_spin, self.vx_spin, self.vy_spin):
@@ -402,8 +404,19 @@ class BodyInspectorPanel(GObject.GObject):
         )
 
     def set_orbit_editor_sensitive(self, sensitive: bool) -> None:
+        self.orbit_editor_enabled = sensitive
         for widget in self.orbit_editor_widgets():
             widget.set_sensitive(sensitive)
+        self._sync_hyperbolic_orbit_controls()
+
+    def _on_orbit_eccentricity_changed(self, *_args) -> None:
+        self._sync_hyperbolic_orbit_controls()
+
+    def _sync_hyperbolic_orbit_controls(self) -> None:
+        hyperbolic = self.orbit_eccentricity_spin.get_value() > 1.0
+        if hyperbolic:
+            self.orbit_period_spin.set_value(0.0)
+        self.orbit_period_spin.set_sensitive(self.orbit_editor_enabled and not hyperbolic)
 
     def set_orbit_expander_sensitive(self, sensitive: bool) -> None:
         self.orbit_expander.set_sensitive(sensitive)
@@ -546,10 +559,11 @@ class BodyInspectorPanel(GObject.GObject):
     def orbit_from_editor(self, epoch: str) -> OrbitData:
         semi_major_axis_m = self.orbit_axis_spin.get_value() * AU
         orbital_period_s = self.orbit_period_spin.get_value() * DAY
+        eccentricity = self.orbit_eccentricity_spin.get_value()
         notes = self.orbit_notes_entry.get_text().strip()
-        if semi_major_axis_m <= 0.0:
+        if semi_major_axis_m == 0.0:
             semi_major_axis_m = None
-        if orbital_period_s <= 0.0:
+        if orbital_period_s <= 0.0 or eccentricity > 1.0:
             orbital_period_s = None
         if semi_major_axis_m is None and orbital_period_s is None:
             raise ModelError("enter a semi-major axis or orbital period")
@@ -558,7 +572,7 @@ class BodyInspectorPanel(GObject.GObject):
         orbit = OrbitData(
             semi_major_axis_m=semi_major_axis_m,
             orbital_period_s=orbital_period_s,
-            eccentricity=self.orbit_eccentricity_spin.get_value(),
+            eccentricity=eccentricity,
             inclination_deg=self.orbit_inclination_spin.get_value(),
             longitude_of_ascending_node_deg=self.orbit_node_spin.get_value(),
             argument_of_periapsis_deg=self.orbit_periapsis_spin.get_value(),

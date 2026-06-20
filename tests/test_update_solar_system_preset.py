@@ -183,7 +183,7 @@ class UpdateSolarSystemPresetTests(unittest.TestCase):
                 {
                     "id": body_id,
                     "name": body_id.title(),
-                    "kind": "dwarf planet",
+                    "kind": "star" if body_id == "sun" else "dwarf planet",
                     "mass_kg": index + 1,
                     "radius_m": index + 2,
                     "position_m": [0, 0, 0],
@@ -221,11 +221,24 @@ class UpdateSolarSystemPresetTests(unittest.TestCase):
         self.assertNotIn("ceres", targets)
         self.assertNotIn("sedna", targets)
 
-    def test_solar_system_targets_include_ceres_and_pluto(self):
+    def test_solar_system_targets_include_new_body_types_and_orbit_centers(self):
         targets = update_solar_system_preset.SOLAR_SYSTEM_TARGETS
 
         self.assertEqual(targets["pluto"], "999")
         self.assertEqual(targets["ceres"], "1;")
+        self.assertEqual(targets["moon"], "301")
+        self.assertEqual(targets["halley"], "90000030")
+        self.assertEqual(targets["bennu"], "101955;")
+        self.assertEqual(update_solar_system_preset.SOLAR_SYSTEM_ORBIT_CENTERS["moon"], "500@399")
+
+    def test_lunar_elements_url_uses_earth_as_center(self):
+        url = update_solar_system_preset.build_horizons_elements_url(
+            "301",
+            "2026-06-14 00:00:00",
+            "500@399",
+        )
+
+        self.assertIn("CENTER=%27500%40399%27", url)
 
     def test_apply_vectors_requires_all_targets(self):
         preset = {

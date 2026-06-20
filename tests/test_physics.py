@@ -325,6 +325,21 @@ class PhysicsTests(unittest.TestCase):
             },
         )
 
+    def test_planetary_focus_uses_moons_and_exact_host_star_context(self):
+        bodies = [
+            Body("Sun", "star", 10.0, 1.0, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], "#fff", id="sun"),
+            Body("Earth", "planet", 2.0, 1.0, [10.0, 0.0, 0.0], [0.0, 1.0, 0.0], "#00f", id="earth", parent_id="sun"),
+            Body("Moon", "moon", 1.0, 1.0, [11.0, 0.0, 0.0], [0.0, 2.0, 0.0], "#aaa", id="moon", parent_id="earth"),
+            Body("Mars", "planet", 1.0, 1.0, [20.0, 0.0, 0.0], [0.0, 1.0, 0.0], "#f00", id="mars", parent_id="sun"),
+        ]
+
+        focused = focus_target_body_indices(bodies, [], "body:earth")
+        context = context_overview_entities(bodies, [], "body:earth")
+
+        self.assertEqual([bodies[index].id for index in focused], ["earth", "moon"])
+        self.assertEqual([entity.id for entity in context], ["context-sun"])
+        self.assertEqual(context[0].mass_kg, bodies[0].mass_kg)
+
     def test_alpha_centauri_body_focus_supports_star_without_group(self):
         alpha_centauri = next(
             system

@@ -318,6 +318,31 @@ def context_overview_entities(
     entities: list[OverviewEntity] = []
     used_indices: set[int] = set()
 
+    target_type, _, target_id = (focus_target or "").partition(":")
+    if target_type == "body":
+        bodies_by_id = {body.id: (index, body) for index, body in enumerate(bodies)}
+        target = bodies_by_id.get(target_id)
+        parent_id = target[1].parent_id if target is not None else None
+        while parent_id is not None:
+            parent_entry = bodies_by_id.get(parent_id)
+            if parent_entry is None:
+                break
+            parent_index, parent = parent_entry
+            if parent_index not in focused_indices:
+                entities.append(
+                    OverviewEntity(
+                        id=f"context-{parent.id}",
+                        name=parent.name,
+                        kind=parent.kind,
+                        mass_kg=parent.mass_kg,
+                        position_m=parent.position_m[:],
+                        velocity_mps=parent.velocity_mps[:],
+                        color=parent.color,
+                    )
+                )
+                used_indices.add(parent_index)
+            parent_id = parent.parent_id
+
     for entity in system_overview_entities(bodies, groups):
         indices = set(_body_indices_for_group(bodies, groups, entity.id))
         if not indices or indices & focused_indices:

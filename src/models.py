@@ -6,15 +6,17 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
 from .constants import DAY
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 ACCURACY_PROFILES = {"high", "balanced", "fast"}
+BODY_KINDS = frozenset({"star", "planet", "dwarf planet", "moon", "comet", "asteroid"})
 DISTANCE_UNITS = {"km", "AU", "kAU", "ly"}
 VIEW_MODES = {"fit_system", "follow_selected", "log_overview"}
 SIMULATION_SCOPES = {
@@ -35,8 +37,17 @@ def _optional_positive_float(data: dict[str, Any], field_name: str) -> float | N
     if data.get(field_name) is None:
         return None
     value = float(data[field_name])
-    if value <= 0.0:
+    if value <= 0.0 or not math.isfinite(value):
         raise ModelError(f"{field_name} must be positive")
+    return value
+
+
+def _optional_nonzero_float(data: dict[str, Any], field_name: str) -> float | None:
+    if data.get(field_name) is None:
+        return None
+    value = float(data[field_name])
+    if value == 0.0 or not math.isfinite(value):
+        raise ModelError(f"{field_name} must be finite and nonzero")
     return value
 
 
@@ -44,8 +55,8 @@ def _optional_float(data: dict[str, Any], field_name: str) -> float | None:
     if data.get(field_name) is None:
         return None
     value = float(data[field_name])
-    if value != value:
-        raise ModelError(f"{field_name} cannot contain NaN")
+    if not math.isfinite(value):
+        raise ModelError(f"{field_name} must be finite")
     return value
 
 
@@ -76,7 +87,7 @@ class OrbitData:
         if data is None:
             return None
         orbit = cls(
-            semi_major_axis_m=_optional_positive_float(data, "semi_major_axis_m"),
+            semi_major_axis_m=_optional_nonzero_float(data, "semi_major_axis_m"),
             orbital_period_s=_optional_positive_float(data, "orbital_period_s"),
             eccentricity=_optional_float(data, "eccentricity"),
             inclination_deg=_optional_float(data, "inclination_deg"),
@@ -96,8 +107,23 @@ class OrbitData:
     def validate(self) -> None:
         if self.semi_major_axis_m is None and self.orbital_period_s is None:
             raise ModelError("orbit requires semi_major_axis_m or orbital_period_s")
-        if self.eccentricity is not None and not 0.0 <= self.eccentricity < 1.0:
-            raise ModelError("eccentricity must be at least 0 and less than 1")
+        if self.semi_major_axis_m is not None and not math.isfinite(self.semi_major_axis_m):
+            raise ModelError("semi_major_axis_m must be finite")
+        if self.orbital_period_s is not None and (
+            self.orbital_period_s <= 0.0 or not math.isfinite(self.orbital_period_s)
+        ):
+            raise ModelError("orbital_period_s must be finite and positive")
+        eccentricity = self.eccentricity if self.eccentricity is not None else 0.0
+        if not math.isfinite(eccentricity) or eccentricity < 0.0 or eccentricity == 1.0:
+            raise ModelError("eccentricity must be nonnegative and cannot equal 1")
+        if eccentricity < 1.0:
+            if self.semi_major_axis_m is not None and self.semi_major_axis_m <= 0.0:
+                raise ModelError("elliptic semi_major_axis_m must be positive")
+        else:
+            if self.semi_major_axis_m is None or self.semi_major_axis_m >= 0.0:
+                raise ModelError("hyperbolic semi_major_axis_m must be negative")
+            if self.orbital_period_s is not None:
+                raise ModelError("hyperbolic orbit cannot have orbital_period_s")
         for field_name in (
             "inclination_deg",
             "longitude_of_ascending_node_deg",
@@ -105,8 +131,8 @@ class OrbitData:
             "mean_anomaly_deg",
         ):
             value = getattr(self, field_name)
-            if value is not None and value != value:
-                raise ModelError(f"{field_name} cannot contain NaN")
+            if value is not None and not math.isfinite(value):
+                raise ModelError(f"{field_name} must be finite")
         if not self.reference_plane.strip():
             raise ModelError("reference_plane is required")
 
@@ -205,6 +231,8 @@ class Body:
             raise ModelError("body id is required")
         if not self.name.strip():
             raise ModelError("body name is required")
+        if self.kind not in BODY_KINDS:
+            raise ModelError(f"{self.name} unsupported body kind {self.kind}")
         if self.mass_kg <= 0.0:
             raise ModelError(f"{self.name} mass must be positive")
         if self.radius_m <= 0.0:
@@ -376,7 +404,7 @@ class SolarSystem:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SolarSystem":
         version = int(data.get("schema_version", 0))
-        if version not in (1, 2, 3, 4, 5, 6, SCHEMA_VERSION):
+        if version not in range(1, SCHEMA_VERSION + 1):
             raise ModelError(f"unsupported schema version {version}")
         system_id = str(data.get("id") or uuid4())
         bodies = [Body.from_dict(item) for item in data.get("bodies", [])]
@@ -448,14 +476,32 @@ class SolarSystem:
             seen_ids.add(body.id)
         for body in self.bodies:
             if body.parent_id is None:
+                if body.kind != "star":
+                    raise ModelError(f"{body.name} {body.kind} requires a parent star")
                 continue
             if body.parent_id == body.id:
                 raise ModelError(f"{body.name} cannot parent itself")
             if body.parent_id not in seen_ids:
                 raise ModelError(f"{body.name} parent_id {body.parent_id} does not exist")
         self._validate_parent_cycles()
+        self._validate_body_parent_kinds()
         self._validate_groups(seen_ids)
         self._validate_group_orbit_targets(seen_ids)
+
+    def _validate_body_parent_kinds(self) -> None:
+        bodies_by_id = {body.id: body for body in self.bodies}
+        for body in self.bodies:
+            if body.parent_id is None:
+                continue
+            parent = bodies_by_id[body.parent_id]
+            if body.kind == "star":
+                raise ModelError(f"{body.name} star must be a root body")
+            if body.kind == "moon":
+                if parent.kind not in {"planet", "dwarf planet"}:
+                    raise ModelError(f"{body.name} moon parent must be a planet or dwarf planet")
+                continue
+            if parent.kind != "star":
+                raise ModelError(f"{body.name} {body.kind} parent must be a star")
 
     def _validate_parent_cycles(self) -> None:
         bodies_by_id = {body.id: body for body in self.bodies}

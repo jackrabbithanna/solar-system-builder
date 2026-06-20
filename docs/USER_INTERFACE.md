@@ -7,6 +7,7 @@ Solar System Builder opens to a 2D, top-down simulation canvas with playback con
 The canvas shows the active simulation view.
 
 - Colored dots represent visible bodies, or group markers when the app is showing a system overview.
+- Moons use compact circles, asteroids use irregular markers, and comets have a short tail pointing away from their parent star.
 - Faint colored lines show orbital trails collected during playback and manual stepping.
 - A white ring marks the selected body or selected overview group.
 - A small red dot marks the shared barycenter when the visible active set has enough mass data to compute one.
@@ -85,7 +86,7 @@ The physics policy controls which bodies or aggregate system markers participate
 - System Barycenters simulates high-level group barycenters instead of every body.
 - Root Stars simulates root stars without their descendants.
 - Focused Subsystem simulates the selected body or group context, such as a star and its descendants.
-- Focus + Coarse Context simulates a focused subsystem and outside aggregate context separately.
+- Focus + Coarse Context simulates a focused subsystem together with outside aggregate context so they exert gravity on each other.
 
 Auto starts with a hardware-neutral estimate and refines it from measured full-physics worker times. If full N-body exceeds the budget, Auto chooses the best available approximation. Once approximate history has been applied, Auto remains approximate until Reset because omitted orbital phases cannot be reconstructed exactly. Selecting Full N-body after that history offers to reset first.
 
@@ -101,6 +102,10 @@ The Focus and Fit button appears when the selected body or group has a focusable
 - resets canvas zoom,
 - chooses a visible time step from the shortest focused orbit and current accuracy profile,
 - clears existing trails.
+
+Planets with moons are focusable subsystems. Under Focus + Coarse Context, the host star participates in the coupled worker simulation while only the planet and its descendants are rendered in the main canvas.
+
+Outside planetary Focus and Fit, moon markers and trails are collapsed into their parent planets. Auto and scoped physics use a mass-weighted planet-and-moons proxy so moon periods do not force planetary-scale playback to use moon-scale internal steps. The window subtitle shows `moons collapsed` while this proxy is active. Explicit Full N-body still simulates every moon, but keeps moon-level rendering hidden until planetary focus.
 
 The focused time step and trail cadence may be edited without changing the saved values. Changing accuracy recalculates an automatically selected focused step, while a manually edited focused step is retained until focus ends. Under Full N-body, hidden bodies continue evolving while only the focus is rendered. Click Focus and Fit again, select another hierarchy item, or change view/policy to leave focus and restore the stored view settings.
 
@@ -140,9 +145,9 @@ When a body has a parent, the distance panel shows its distance to that parent. 
 
 Bodies and groups show an Orbital Data section. Use it to enter published orbital parameters and generate the raw position and velocity fields used by the simulator.
 
-- Semi-major Axis (AU) sets the orbit size directly.
+- Semi-major Axis (AU) sets the orbit size directly. Hyperbolic trajectories use a negative axis.
 - Period (days) can be used instead of semi-major axis; the app derives the orbit size from the parent and body masses.
-- Eccentricity sets the ellipse shape.
+- Eccentricity sets the conic shape. Values below 1 are elliptic, values above 1 are hyperbolic, and exactly 1 is unsupported. Hyperbolic trajectories cannot use Period.
 - Inclination, Node, Periapsis, and Mean Anomaly set the 3D orientation and orbital phase.
 - Epoch, Source, Source URL, and Notes preserve provenance and assumptions.
 - Generate State Vector writes the derived position and velocity into the selected body, rebuilds the simulation state, and clears trails.

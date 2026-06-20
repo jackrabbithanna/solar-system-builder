@@ -55,6 +55,44 @@ class OrbitConversionTests(unittest.TestCase):
         self.assertTrue(all(math.isfinite(component) for component in velocity))
         self.assertNotEqual(position[2], 30.0)
 
+    def test_hyperbolic_orbit_has_expected_periapsis_and_positive_energy(self):
+        star = Body("Star", "star", SOLAR_MASS, 1.0, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], "#fff")
+        comet = Body("Comet", "comet", 1.0e14, 1.0, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], "#fff")
+        axis_magnitude = 2.0 * AU
+        eccentricity = 1.5
+        orbit = OrbitData(
+            semi_major_axis_m=-axis_magnitude,
+            eccentricity=eccentricity,
+            mean_anomaly_deg=0.0,
+        )
+
+        position, velocity = state_vectors_from_orbit(star, comet, orbit)
+
+        radius = math.dist(position, star.position_m)
+        speed_sq = sum(component * component for component in velocity)
+        mu = G * (star.mass_kg + comet.mass_kg)
+        specific_energy = 0.5 * speed_sq - mu / radius
+        self.assertAlmostEqual(radius, axis_magnitude * (eccentricity - 1.0), delta=1.0)
+        self.assertAlmostEqual(specific_energy, mu / (2.0 * axis_magnitude), delta=1.0)
+
+    def test_hyperbolic_mean_anomaly_is_not_angle_wrapped(self):
+        star = Body("Star", "star", SOLAR_MASS, 1.0, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], "#fff")
+        comet = Body("Comet", "comet", 1.0e14, 1.0, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], "#fff")
+
+        positive, _ = state_vectors_from_orbit(
+            star,
+            comet,
+            OrbitData(semi_major_axis_m=-AU, eccentricity=2.0, mean_anomaly_deg=720.0),
+        )
+        negative, _ = state_vectors_from_orbit(
+            star,
+            comet,
+            OrbitData(semi_major_axis_m=-AU, eccentricity=2.0, mean_anomaly_deg=-720.0),
+        )
+
+        self.assertAlmostEqual(positive[0], negative[0], delta=1.0)
+        self.assertAlmostEqual(positive[1], -negative[1], delta=1.0)
+
     def test_missing_axis_and_period_fails(self):
         star = Body("Star", "star", SOLAR_MASS, 1.0, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], "#fff")
         planet = Body("Planet", "planet", EARTH_MASS, 1.0, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], "#00f")

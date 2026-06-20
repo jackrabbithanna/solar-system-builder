@@ -40,6 +40,13 @@ SOLAR_SYSTEM_TARGETS = {
     "neptune": "899",
     "pluto": "999",
     "ceres": "1;",
+    "moon": "301",
+    "halley": "90000030",
+    "bennu": "101955;",
+}
+
+SOLAR_SYSTEM_ORBIT_CENTERS = {
+    "moon": "500@399",
 }
 
 DWARF_PLANET_TARGETS = {
@@ -58,15 +65,17 @@ PRESET_CONFIGS = {
     "solar-system": {
         "path": REPO_ROOT / "src" / "presets" / "solar_system.json",
         "targets": SOLAR_SYSTEM_TARGETS,
+        "orbit_centers": SOLAR_SYSTEM_ORBIT_CENTERS,
         "description": (
             "Built-in Solar System preset using SI units and JPL Horizons "
-            "solar-system barycentric state vectors, heliocentric osculating "
+            "solar-system barycentric state vectors, parent-centered osculating "
             "orbital metadata, and preserved local physical metadata."
         ),
     },
     "dwarf-planets": {
         "path": REPO_ROOT / "src" / "presets" / "dwarf_planets.json",
         "targets": DWARF_PLANET_TARGETS,
+        "orbit_centers": {},
         "description": (
             "Built-in Dwarf Planets preset using SI units, JPL Horizons "
             "solar-system barycentric state vectors, heliocentric osculating "
@@ -108,7 +117,7 @@ class OrbitalElements:
             "epoch": f"{epoch} TDB",
             "reference_plane": self.reference_plane,
             "approximation_notes": (
-                "Horizons heliocentric osculating elements at the preset epoch; "
+                "Horizons parent-centered osculating elements at the preset epoch; "
                 "the committed Cartesian state remains the simulation seed."
             ),
         }
@@ -182,14 +191,18 @@ def build_horizons_url(target_id: str, epoch: str) -> str:
     return f"{HORIZONS_URL}?{urlencode(params)}"
 
 
-def build_horizons_elements_url(target_id: str, epoch: str) -> str:
+def build_horizons_elements_url(
+    target_id: str,
+    epoch: str,
+    center_id: str = "500@10",
+) -> str:
     params = {
         "format": "json",
         "COMMAND": f"'{target_id}'",
         "OBJ_DATA": "NO",
         "MAKE_EPHEM": "YES",
         "EPHEM_TYPE": "ELEMENTS",
-        "CENTER": "'500@10'",
+        "CENTER": f"'{center_id}'",
         "TLIST": f"'{epoch}'",
         "TLIST_TYPE": "CAL",
         "TIME_TYPE": "TDB",
@@ -214,8 +227,12 @@ def fetch_horizons_vector(target_id: str, epoch: str) -> StateVector:
     return parse_horizons_vector(str(payload["result"]))
 
 
-def fetch_horizons_elements(target_id: str, epoch: str) -> OrbitalElements:
-    url = build_horizons_elements_url(target_id, epoch)
+def fetch_horizons_elements(
+    target_id: str,
+    epoch: str,
+    center_id: str = "500@10",
+) -> OrbitalElements:
+    url = build_horizons_elements_url(target_id, epoch, center_id)
     with urlopen(url, timeout=30) as response:
         payload = json.load(response)
 
@@ -241,8 +258,10 @@ def apply_vectors(
     description: str | None = None,
     elements: dict[str, OrbitalElements] | None = None,
     retrieved_at: str | None = None,
+    orbit_centers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     targets = targets or TARGETS
+    orbit_centers = orbit_centers or {}
     body_ids = {body["id"] for body in preset.get("bodies", [])}
     missing_bodies = sorted(targets.keys() - body_ids)
     if missing_bodies:
@@ -276,7 +295,11 @@ def apply_vectors(
             body["orbit"] = elements[body_id].to_orbit_dict(epoch)
             body["data_source"] = {
                 "source_name": "JPL Horizons",
-                "source_url": build_horizons_elements_url(targets[body_id], epoch),
+                "source_url": build_horizons_elements_url(
+                    targets[body_id],
+                    epoch,
+                    orbit_centers.get(body_id, "500@10"),
+                ),
                 "catalog_id": targets[body_id],
                 "retrieved_at": retrieved_at,
                 "citation": "JPL Horizons osculating elements and state vectors.",
@@ -286,10 +309,19 @@ def apply_vectors(
     return updated
 
 
-def fetch_all_elements(epoch: str, targets: dict[str, str] | None = None) -> dict[str, OrbitalElements]:
+def fetch_all_elements(
+    epoch: str,
+    targets: dict[str, str] | None = None,
+    orbit_centers: dict[str, str] | None = None,
+) -> dict[str, OrbitalElements]:
     targets = targets or TARGETS
+    orbit_centers = orbit_centers or {}
     return {
-        body_id: fetch_horizons_elements(target_id, epoch)
+        body_id: fetch_horizons_elements(
+            target_id,
+            epoch,
+            orbit_centers.get(body_id, "500@10"),
+        )
         for body_id, target_id in targets.items()
         if body_id != "sun"
     }
@@ -370,9 +402,10 @@ def main() -> int:
     config = PRESET_CONFIGS[args.preset_set]
     preset_path = args.preset or config["path"]
     targets = config["targets"]
+    orbit_centers = config["orbit_centers"]
     preset = load_preset(preset_path)
     vectors = fetch_all_vectors(args.epoch, targets)
-    elements = fetch_all_elements(args.epoch, targets)
+    elements = fetch_all_elements(args.epoch, targets, orbit_centers)
     updated = apply_vectors(
         preset,
         vectors,
@@ -380,6 +413,7 @@ def main() -> int:
         targets,
         str(config["description"]),
         elements,
+        orbit_centers=orbit_centers,
     )
 
     print_summary(vectors, targets)

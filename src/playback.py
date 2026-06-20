@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 import numpy as np
@@ -34,6 +34,101 @@ CALIBRATION_WEIGHT = 0.25
 MIN_CALIBRATION_WORK_UNITS = 100
 
 
+def detailed_moon_indices(bodies: list[Body], focus_target: str | None) -> set[int]:
+    target_type, _, target_id = (focus_target or "").partition(":")
+    if target_type != "body":
+        return set()
+    target = next((body for body in bodies if body.id == target_id), None)
+    if target is None or target.kind not in {"planet", "dwarf planet"}:
+        return set()
+    descendant_indices = focus_target_body_indices(bodies, [], focus_target)
+    return {index for index in descendant_indices if bodies[index].kind == "moon"}
+
+
+def moon_lod_memberships(
+    bodies: list[Body],
+    indices: list[int],
+    detailed_moons: set[int],
+) -> tuple[list[int], list[list[int]], bool]:
+    index_set = set(indices)
+    indices_by_id = {body.id: index for index, body in enumerate(bodies)}
+    moons_by_parent: dict[int, list[int]] = {}
+    for index in indices:
+        body = bodies[index]
+        if body.kind != "moon" or index in detailed_moons or body.parent_id is None:
+            continue
+        parent_index = indices_by_id.get(body.parent_id)
+        if parent_index is not None and parent_index in index_set:
+            moons_by_parent.setdefault(parent_index, []).append(index)
+
+    representatives: list[int] = []
+    memberships: list[list[int]] = []
+    collapsed_moons = {index for moon_indices in moons_by_parent.values() for index in moon_indices}
+    for index in indices:
+        if index in collapsed_moons:
+            continue
+        representatives.append(index)
+        memberships.append([index, *moons_by_parent.get(index, [])])
+    return representatives, memberships, bool(collapsed_moons)
+
+
+def body_display_indices(
+    bodies: list[Body],
+    groups: list[SystemGroup],
+    focus_target: str | None,
+) -> list[int]:
+    indices = focus_target_body_indices(bodies, groups, focus_target) or list(range(len(bodies)))
+    detailed_moons = detailed_moon_indices(bodies, focus_target)
+    return [
+        index
+        for index in indices
+        if bodies[index].kind != "moon" or index in detailed_moons
+    ]
+
+
+def proxy_bodies_for_memberships(bodies: list[Body], memberships: list[list[int]]) -> list[Body]:
+    proxies: list[Body] = []
+    for membership in memberships:
+        representative = bodies[membership[0]]
+        masses = [bodies[index].mass_kg for index in membership]
+        total_mass = sum(masses)
+        position = [
+            sum(bodies[index].mass_kg * bodies[index].position_m[axis] for index in membership) / total_mass
+            for axis in range(3)
+        ]
+        velocity = [
+            sum(bodies[index].mass_kg * bodies[index].velocity_mps[axis] for index in membership) / total_mass
+            for axis in range(3)
+        ]
+        proxies.append(
+            replace(
+                representative,
+                mass_kg=total_mass,
+                position_m=position,
+                velocity_mps=velocity,
+            )
+        )
+    return proxies
+
+
+def focused_timing_bodies(
+    bodies: list[Body],
+    groups: list[SystemGroup],
+    focus_target: str,
+    *,
+    collapse_moons: bool,
+) -> list[Body]:
+    indices = focus_target_body_indices(bodies, groups, focus_target)
+    if not collapse_moons:
+        return [bodies[index] for index in indices]
+    _representatives, memberships, _collapsed = moon_lod_memberships(
+        bodies,
+        indices,
+        detailed_moon_indices(bodies, focus_target),
+    )
+    return proxy_bodies_for_memberships(bodies, memberships)
+
+
 @dataclass(frozen=True)
 class PhysicsDecision:
     policy: str
@@ -44,6 +139,8 @@ class PhysicsDecision:
     estimated_work_units: int
     predicted_duration_ms: float
     auto_approximation: bool = False
+    moons_collapsed: bool = False
+    physics_memberships: list[list[int]] | None = None
 
 
 @dataclass(frozen=True)
@@ -54,7 +151,6 @@ class SimulationJobPlan:
     start_elapsed_s: float
     dt_s: float
     max_step_s: float
-    context_max_step_s: float | None = None
     overview_entity_ids: list[str] | None = None
     context_entity_ids: list[str] | None = None
     display_indices: list[int] | None = None
@@ -64,6 +160,8 @@ class SimulationJobPlan:
     auto_approximation: bool = False
     inset_entity_ids: list[str] | None = None
     inset_body_indices: list[list[int]] | None = None
+    moons_collapsed: bool = False
+    physics_memberships: list[list[int]] | None = None
 
 
 @dataclass(frozen=True)
@@ -271,20 +369,6 @@ class SimulationSession:
         active = self.active_body_indices(bodies, groups, settings, selected_index, focus_group_id, focus_target)
         return derived_max_step_s([bodies[index] for index in active], settings.accuracy_profile)
 
-    def context_max_step_seconds(
-        self,
-        bodies: list[Body],
-        groups: list[SystemGroup],
-        settings: SystemSettings,
-        selected_index: int,
-        focus_group_id: str | None,
-        focus_target: str | None,
-    ) -> float:
-        entities = self.context_entities(bodies, groups, focus_target)
-        if not entities:
-            return self.focused_max_step_seconds(bodies, groups, settings, selected_index, focus_group_id, focus_target)
-        return derived_overview_max_step_s(entities, settings.accuracy_profile)
-
     def create_job(
         self,
         bodies: list[Body],
@@ -314,6 +398,8 @@ class SimulationSession:
             estimated_work_units=decision.estimated_work_units,
             predicted_duration_ms=decision.predicted_duration_ms,
             auto_approximation=decision.auto_approximation,
+            moons_collapsed=decision.moons_collapsed,
+            physics_memberships=decision.physics_memberships,
         )
 
         if decision.mode == "system_overview":
@@ -330,26 +416,24 @@ class SimulationSession:
         if decision.mode == "hybrid_focus":
             active = decision.physics_indices
             context_entities = self.context_entities(bodies, groups, focus_target)
-            state = simulation_state_for_indices(self.state, active)
+            state = simulation_state_for_memberships(
+                self.state,
+                decision.physics_memberships or [[index] for index in active],
+            )
             context_state = self._context_simulation_state(bodies, groups, focus_target)
             plan = SimulationJobPlan(
                 mode="hybrid_focus",
                 start_elapsed_s=state.elapsed_s,
-                context_max_step_s=self.context_max_step_seconds(
-                    bodies,
-                    groups,
-                    settings,
-                    selected_index,
-                    focus_group_id,
-                    focus_target,
-                ),
                 context_entity_ids=[entity.id for entity in context_entities],
                 **common_plan,
             )
             return SimulationJob(plan, state, context_state)
 
         active = decision.physics_indices
-        state = simulation_state_for_indices(self.state, active)
+        state = simulation_state_for_memberships(
+            self.state,
+            decision.physics_memberships or [[index] for index in active],
+        )
         inset_ids, inset_indices = self._inset_memberships(bodies, groups, focus_target)
         plan = SimulationJobPlan(
             mode="body_detail",
@@ -371,32 +455,43 @@ class SimulationSession:
         dt_s: float,
     ) -> PhysicsDecision:
         all_indices = list(range(len(bodies)))
-        display_indices = focus_target_body_indices(bodies, groups, focus_target) or all_indices
-        full_max_step_s = derived_max_step_s(bodies, settings.accuracy_profile)
-        full_work = estimate_work_units(dt_s, full_max_step_s, len(bodies))
+        display_indices = body_display_indices(bodies, groups, focus_target)
+        detailed_moons = detailed_moon_indices(bodies, focus_target)
+        auto_indices, auto_memberships, auto_collapsed = moon_lod_memberships(
+            bodies,
+            all_indices,
+            detailed_moons,
+        )
+        auto_bodies = proxy_bodies_for_memberships(bodies, auto_memberships)
+        auto_max_step_s = derived_max_step_s(auto_bodies, settings.accuracy_profile)
+        full_work = estimate_work_units(dt_s, auto_max_step_s, len(auto_indices))
         full_duration = full_work * self.ms_per_work_unit
 
         if settings.simulation_scope == "auto":
             if not self.auto_approximation_locked and full_duration <= AUTO_PHYSICS_BUDGET_MS:
                 return PhysicsDecision(
-                    "full_nbody",
-                    "body_detail",
-                    all_indices,
-                    display_indices,
-                    full_max_step_s,
-                    full_work,
-                    full_duration,
+                    policy="full_nbody",
+                    mode="body_detail",
+                    physics_indices=auto_indices,
+                    display_indices=display_indices,
+                    max_step_s=auto_max_step_s,
+                    estimated_work_units=full_work,
+                    predicted_duration_ms=full_duration,
+                    moons_collapsed=auto_collapsed,
+                    physics_memberships=auto_memberships,
                 )
             fallback = self._auto_fallback_policy(bodies, groups, focus_target)
             if fallback == "full_nbody":
                 return PhysicsDecision(
-                    "full_nbody",
-                    "body_detail",
-                    all_indices,
-                    display_indices,
-                    full_max_step_s,
-                    full_work,
-                    full_duration,
+                    policy="full_nbody",
+                    mode="body_detail",
+                    physics_indices=auto_indices,
+                    display_indices=display_indices,
+                    max_step_s=auto_max_step_s,
+                    estimated_work_units=full_work,
+                    predicted_duration_ms=full_duration,
+                    moons_collapsed=auto_collapsed,
+                    physics_memberships=auto_memberships,
                 )
             return self._decision_for_policy(
                 fallback,
@@ -409,6 +504,7 @@ class SimulationSession:
                 dt_s,
                 display_indices,
                 auto_approximation=True,
+                allow_moon_lod=True,
             )
 
         return self._decision_for_policy(
@@ -421,6 +517,7 @@ class SimulationSession:
             focus_target,
             dt_s,
             display_indices,
+            allow_moon_lod=settings.simulation_scope != "full_nbody",
         )
 
     def _decision_for_policy(
@@ -436,6 +533,7 @@ class SimulationSession:
         display_indices: list[int],
         *,
         auto_approximation: bool = False,
+        allow_moon_lod: bool,
     ) -> PhysicsDecision:
         if policy == "system_overview" and len(self.overview_entities(bodies, groups)) > 1:
             entities = self.overview_entities(bodies, groups)
@@ -463,18 +561,36 @@ class SimulationSession:
         )
         if policy == "full_nbody":
             active = list(range(len(bodies)))
-        max_step_s = derived_max_step_s([bodies[index] for index in active], settings.accuracy_profile)
-        work = estimate_work_units(dt_s, max_step_s, len(active))
+        if allow_moon_lod:
+            active, memberships, moons_collapsed = moon_lod_memberships(
+                bodies,
+                active,
+                detailed_moon_indices(bodies, focus_target),
+            )
+        else:
+            memberships = [[index] for index in active]
+            moons_collapsed = False
+        physics_bodies = proxy_bodies_for_memberships(bodies, memberships)
+        max_step_s = derived_max_step_s(physics_bodies, settings.accuracy_profile)
         mode: SimulationMode = "hybrid_focus" if policy == "hybrid_focused_context" else "body_detail"
+        simulated_count = len(active)
+        if mode == "hybrid_focus":
+            simulated_count += len(self.context_entities(bodies, groups, focus_target))
+        work = estimate_work_units(dt_s, max_step_s, simulated_count)
+        effective_display_indices = (
+            display_indices if focus_target is not None or policy == "full_nbody" else active
+        )
         return PhysicsDecision(
-            policy,
-            mode,
-            active,
-            display_indices if focus_target else active,
-            max_step_s,
-            work,
-            work * self.ms_per_work_unit,
-            auto_approximation,
+            policy=policy,
+            mode=mode,
+            physics_indices=active,
+            display_indices=effective_display_indices,
+            max_step_s=max_step_s,
+            estimated_work_units=work,
+            predicted_duration_ms=work * self.ms_per_work_unit,
+            auto_approximation=auto_approximation,
+            moons_collapsed=moons_collapsed,
+            physics_memberships=memberships,
         )
 
     def _auto_fallback_policy(
@@ -550,7 +666,15 @@ class SimulationSession:
             )
             return True
 
-        merge_active_state(self.state, result.state, result.plan.active_indices)
+        memberships = result.plan.physics_memberships or [
+            [index] for index in result.plan.active_indices
+        ]
+        expanded_samples = expand_membership_position_samples(
+            result.position_samples,
+            self.state,
+            memberships,
+        )
+        merge_membership_state(self.state, result.state, memberships)
         self.overview_trails = {}
         self.overview_state = None
         self.overview_entity_ids = []
@@ -568,7 +692,7 @@ class SimulationSession:
             )
         elif result.plan.effective_policy == "full_nbody" and result.plan.inset_entity_ids:
             inset_samples = aggregate_position_samples(
-                result.position_samples,
+                expanded_samples,
                 self.state.masses_kg,
                 result.plan.inset_body_indices or [],
             )
@@ -581,10 +705,21 @@ class SimulationSession:
                 result.state.elapsed_s,
                 settings.trail_sample_interval_s,
             )
+        detailed_moons = {
+            index
+            for index in (result.plan.display_indices or [])
+            if bodies[index].kind == "moon"
+        }
+        trail_indices = [
+            index
+            for index in result.plan.active_indices
+            if bodies[index].kind != "moon" or index in detailed_moons
+        ]
+        trail_samples = [sample[trail_indices].copy() for sample in expanded_samples]
         self._append_body_trails(
             bodies,
-            result.position_samples,
-            result.plan.active_indices,
+            trail_samples,
+            trail_indices,
             result.plan.start_elapsed_s,
             result.state.elapsed_s,
             settings.trail_sample_interval_s,
@@ -681,7 +816,6 @@ def run_simulation_job(job: SimulationJob) -> SimulationJobResult:
             job.context_state,
             job.plan.dt_s,
             job.plan.max_step_s,
-            job.plan.context_max_step_s or job.plan.max_step_s,
         )
         state, position_samples = focused_result
         duration_ms = (time.perf_counter() - started) * 1_000.0
@@ -702,23 +836,44 @@ def advance_hybrid_simulations(
     context_state: SimulationState | None,
     dt_s: float,
     focused_max_step_s: float,
-    context_max_step_s: float,
 ):
-    focused_result = advance_with_samples(
-        focused_state,
+    if context_state is None:
+        focused_result = advance_with_samples(
+            focused_state,
+            dt_s,
+            "post_newtonian",
+            focused_max_step_s,
+        )
+        return focused_result, None
+
+    focused_count = len(focused_state.masses_kg)
+    combined_state = SimulationState(
+        masses_kg=np.concatenate((focused_state.masses_kg, context_state.masses_kg)),
+        positions_m=np.concatenate((focused_state.positions_m, context_state.positions_m)),
+        velocities_mps=np.concatenate((focused_state.velocities_mps, context_state.velocities_mps)),
+        elapsed_s=focused_state.elapsed_s,
+    )
+    combined_result, combined_samples = advance_with_samples(
+        combined_state,
         dt_s,
         "post_newtonian",
         focused_max_step_s,
     )
-    if context_state is None:
-        return focused_result, None
-    context_result = advance_with_samples(
-        context_state,
-        dt_s,
-        "post_newtonian",
-        context_max_step_s,
+    focused_result = SimulationState(
+        masses_kg=combined_result.masses_kg[:focused_count].copy(),
+        positions_m=combined_result.positions_m[:focused_count].copy(),
+        velocities_mps=combined_result.velocities_mps[:focused_count].copy(),
+        elapsed_s=combined_result.elapsed_s,
     )
-    return focused_result, context_result
+    context_result = SimulationState(
+        masses_kg=combined_result.masses_kg[focused_count:].copy(),
+        positions_m=combined_result.positions_m[focused_count:].copy(),
+        velocities_mps=combined_result.velocities_mps[focused_count:].copy(),
+        elapsed_s=combined_result.elapsed_s,
+    )
+    focused_samples = [sample[:focused_count].copy() for sample in combined_samples]
+    context_samples = [sample[focused_count:].copy() for sample in combined_samples]
+    return (focused_result, focused_samples), (context_result, context_samples)
 
 
 def simulation_state_for_indices(state: SimulationState, active_indices: list[int]) -> SimulationState:
@@ -730,10 +885,85 @@ def simulation_state_for_indices(state: SimulationState, active_indices: list[in
     )
 
 
+def simulation_state_for_memberships(
+    state: SimulationState,
+    memberships: list[list[int]],
+) -> SimulationState:
+    masses: list[float] = []
+    positions: list[np.ndarray] = []
+    velocities: list[np.ndarray] = []
+    for membership in memberships:
+        member_masses = state.masses_kg[membership]
+        total_mass = float(member_masses.sum())
+        masses.append(total_mass)
+        positions.append(
+            np.sum(state.positions_m[membership] * member_masses[:, np.newaxis], axis=0)
+            / total_mass
+        )
+        velocities.append(
+            np.sum(state.velocities_mps[membership] * member_masses[:, np.newaxis], axis=0)
+            / total_mass
+        )
+    return SimulationState(
+        masses_kg=np.array(masses, dtype=float),
+        positions_m=np.array(positions, dtype=float),
+        velocities_mps=np.array(velocities, dtype=float),
+        elapsed_s=state.elapsed_s,
+    )
+
+
 def merge_active_state(state: SimulationState, active_state: SimulationState, active_indices: list[int]) -> None:
     state.positions_m[active_indices] = active_state.positions_m
     state.velocities_mps[active_indices] = active_state.velocities_mps
     state.elapsed_s = active_state.elapsed_s
+
+
+def merge_membership_state(
+    state: SimulationState,
+    membership_state: SimulationState,
+    memberships: list[list[int]],
+) -> None:
+    if len(memberships) != len(membership_state.masses_kg):
+        raise ValueError("membership count must match simulation state")
+    for membership_index, membership in enumerate(memberships):
+        member_masses = state.masses_kg[membership]
+        total_mass = float(member_masses.sum())
+        old_position = (
+            np.sum(state.positions_m[membership] * member_masses[:, np.newaxis], axis=0)
+            / total_mass
+        )
+        old_velocity = (
+            np.sum(state.velocities_mps[membership] * member_masses[:, np.newaxis], axis=0)
+            / total_mass
+        )
+        state.positions_m[membership] += membership_state.positions_m[membership_index] - old_position
+        state.velocities_mps[membership] += membership_state.velocities_mps[membership_index] - old_velocity
+    state.elapsed_s = membership_state.elapsed_s
+
+
+def expand_membership_position_samples(
+    position_samples: list[np.ndarray],
+    state: SimulationState,
+    memberships: list[list[int]],
+) -> list[np.ndarray]:
+    if any(len(sample) != len(memberships) for sample in position_samples):
+        raise ValueError("membership count must match position samples")
+    offsets: list[np.ndarray] = []
+    for membership in memberships:
+        member_masses = state.masses_kg[membership]
+        center = (
+            np.sum(state.positions_m[membership] * member_masses[:, np.newaxis], axis=0)
+            / float(member_masses.sum())
+        )
+        offsets.append(state.positions_m[membership] - center)
+
+    expanded_samples: list[np.ndarray] = []
+    for sample in position_samples:
+        expanded = state.positions_m.copy()
+        for membership_index, membership in enumerate(memberships):
+            expanded[membership] = sample[membership_index] + offsets[membership_index]
+        expanded_samples.append(expanded)
+    return expanded_samples
 
 
 def overview_simulation_state(

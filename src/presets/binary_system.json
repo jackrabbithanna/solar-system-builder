@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 8,
   "id": "builtin-binary-system",
   "name": "Alpha Centauri",
   "epoch": "Approximate Alpha Centauri seed",

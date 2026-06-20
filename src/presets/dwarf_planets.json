@@ -1,5 +1,5 @@
 {
-  "schema_version": 7,
+  "schema_version": 8,
   "id": "builtin-dwarf-planets",
   "name": "Dwarf Planets",
   "epoch": "2026-06-14 00:00:00 TDB, JPL Horizons, solar-system barycentric",

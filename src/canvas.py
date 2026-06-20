@@ -191,9 +191,9 @@ class SolarSystemCanvas(Gtk.DrawingArea):
             x, y = self._project(body.position_m[0], body.position_m[1], origin_x, origin_y, scale, center_x_m, center_y_m)
             radius = self._display_radius(body)
             rgba = self._rgba(body.color)
-            cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.95)
-            cr.arc(x, y, radius, 0.0, math.tau)
-            cr.fill()
+            self._draw_body_marker(
+                cr, body, x, y, radius, rgba, origin_x, origin_y, scale, center_x_m, center_y_m
+            )
             if index == self._scene.selected_body_index:
                 cr.set_source_rgba(1.0, 1.0, 1.0, 0.85)
                 cr.set_line_width(2.0)
@@ -534,7 +534,110 @@ class SolarSystemCanvas(Gtk.DrawingArea):
     def _display_radius(self, body: Body) -> float:
         if body.kind == "star":
             return 8.5
+        if body.kind == "moon":
+            return 3.0
+        if body.kind == "asteroid":
+            return 3.5
+        if body.kind == "comet":
+            return 4.0
         return max(3.0, min(7.0, math.log10(body.radius_m) - 2.0))
+
+    def _draw_body_marker(
+        self,
+        cr,
+        body: Body,
+        x: float,
+        y: float,
+        radius: float,
+        rgba: Gdk.RGBA,
+        origin_x: float,
+        origin_y: float,
+        scale: float,
+        center_x_m: float,
+        center_y_m: float,
+    ) -> None:
+        cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.95)
+        if body.kind == "asteroid":
+            cr.move_to(x, y - radius)
+            cr.line_to(x + radius * 0.85, y - radius * 0.15)
+            cr.line_to(x + radius * 0.55, y + radius)
+            cr.line_to(x - radius * 0.75, y + radius * 0.65)
+            cr.line_to(x - radius, y - radius * 0.35)
+            cr.close_path()
+            cr.fill()
+            return
+        if body.kind == "comet":
+            self._draw_comet_tail(
+                cr,
+                body,
+                x,
+                y,
+                radius,
+                rgba,
+                origin_x,
+                origin_y,
+                scale,
+                center_x_m,
+                center_y_m,
+            )
+            cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.95)
+        cr.arc(x, y, radius, 0.0, math.tau)
+        cr.fill()
+
+    def _draw_comet_tail(
+        self,
+        cr,
+        body: Body,
+        x: float,
+        y: float,
+        radius: float,
+        rgba: Gdk.RGBA,
+        origin_x: float,
+        origin_y: float,
+        scale: float,
+        center_x_m: float,
+        center_y_m: float,
+    ) -> None:
+        parent = next(
+            (candidate for candidate in self._scene.bodies if candidate.id == body.parent_id),
+            None,
+        )
+        if parent is None or parent.kind != "star":
+            return
+        parent_x, parent_y = self._project(
+            parent.position_m[0],
+            parent.position_m[1],
+            origin_x,
+            origin_y,
+            scale,
+            center_x_m,
+            center_y_m,
+        )
+        delta_x = x - parent_x
+        delta_y = y - parent_y
+        distance = math.hypot(delta_x, delta_y)
+        if distance <= 0.0:
+            return
+        direction_x = delta_x / distance
+        direction_y = delta_y / distance
+        perpendicular_x = -direction_y
+        perpendicular_y = direction_x
+        tail_start_x = x + direction_x * radius
+        tail_start_y = y + direction_y * radius
+        tail_end_x = x + direction_x * (radius + 14.0)
+        tail_end_y = y + direction_y * (radius + 14.0)
+        cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.35)
+        cr.move_to(
+            tail_start_x + perpendicular_x * 2.5,
+            tail_start_y + perpendicular_y * 2.5,
+        )
+        cr.line_to(tail_end_x, tail_end_y)
+        cr.line_to(
+            tail_start_x - perpendicular_x * 2.5,
+            tail_start_y - perpendicular_y * 2.5,
+        )
+        cr.close_path()
+        cr.fill()
 
     def _rgba(self, color: str) -> Gdk.RGBA:
         rgba = Gdk.RGBA()

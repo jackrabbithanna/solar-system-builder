@@ -5,7 +5,15 @@ import unittest
 from pathlib import Path
 
 from src.constants import DAY
-from src.models import Body, DataSource, ModelError, OrbitData, SCHEMA_VERSION, SolarSystem
+from src.models import (
+    BODY_KINDS,
+    SCHEMA_VERSION,
+    Body,
+    DataSource,
+    ModelError,
+    OrbitData,
+    SolarSystem,
+)
 from src.presets import load_builtin_solar_system, load_builtin_solar_systems
 
 ALPHA_CENTAURI_GENERATOR_PATH = (
@@ -27,9 +35,17 @@ class ModelTests(unittest.TestCase):
         self.assertGreaterEqual(len(clone.bodies), 11)
         self.assertIn("ceres", {body.id for body in clone.bodies})
         self.assertIn("pluto", {body.id for body in clone.bodies})
+        parents_by_id = {body.id: body.parent_id for body in clone.bodies}
+        self.assertEqual(parents_by_id["moon"], "earth")
+        self.assertEqual(parents_by_id["halley"], "sun")
+        self.assertEqual(parents_by_id["bennu"], "sun")
+        kinds_by_id = {body.id: body.kind for body in clone.bodies}
+        self.assertEqual(kinds_by_id["moon"], "moon")
+        self.assertEqual(kinds_by_id["halley"], "comet")
+        self.assertEqual(kinds_by_id["bennu"], "asteroid")
         self.assertEqual(
-            {body.parent_id for body in clone.bodies if body.kind != "star"},
-            {"sun"},
+            BODY_KINDS,
+            {"star", "planet", "dwarf planet", "moon", "comet", "asteroid"},
         )
 
     def test_all_builtin_presets_round_trip(self):
@@ -262,6 +278,17 @@ class ModelTests(unittest.TestCase):
         with self.assertRaisesRegex(ModelError, "eccentricity"):
             SolarSystem.from_dict(data)
 
+    def test_hyperbolic_orbit_requires_negative_axis_and_no_period(self):
+        orbit = OrbitData(semi_major_axis_m=-2.0, eccentricity=1.5)
+
+        orbit.validate()
+        self.assertEqual(OrbitData.from_dict(orbit.to_dict()), orbit)
+
+        with self.assertRaisesRegex(ModelError, "must be negative"):
+            OrbitData(semi_major_axis_m=2.0, eccentricity=1.5).validate()
+        with self.assertRaisesRegex(ModelError, "cannot have orbital_period_s"):
+            OrbitData(semi_major_axis_m=-2.0, orbital_period_s=10.0, eccentricity=1.5).validate()
+
     def test_invalid_simulation_scope_fails(self):
         data = _sample_system_data()
         data["settings"] = {"simulation_scope": "nearby_only"}
@@ -479,6 +506,106 @@ class ModelTests(unittest.TestCase):
         data["bodies"][0]["parent_id"] = "earth"
 
         with self.assertRaisesRegex(ModelError, "parent cycle"):
+            SolarSystem.from_dict(data)
+
+    def test_body_kinds_and_parent_semantics_are_validated(self):
+        data = _sample_system_data()
+        data["bodies"].extend(
+            [
+                {
+                    "id": "pluto",
+                    "name": "Pluto",
+                    "kind": "dwarf planet",
+                    "mass_kg": 1.0,
+                    "radius_m": 1.0,
+                    "position_m": [2.0, 0.0, 0.0],
+                    "velocity_mps": [0.0, 1.0, 0.0],
+                    "color": "#aaa",
+                    "parent_id": "sun",
+                },
+                {
+                    "id": "moon",
+                    "name": "Moon",
+                    "kind": "moon",
+                    "mass_kg": 1.0,
+                    "radius_m": 1.0,
+                    "position_m": [1.1, 0.0, 0.0],
+                    "velocity_mps": [0.0, 1.1, 0.0],
+                    "color": "#ccc",
+                    "parent_id": "earth",
+                },
+                {
+                    "id": "charon",
+                    "name": "Charon",
+                    "kind": "moon",
+                    "mass_kg": 1.0,
+                    "radius_m": 1.0,
+                    "position_m": [2.1, 0.0, 0.0],
+                    "velocity_mps": [0.0, 1.1, 0.0],
+                    "color": "#bbb",
+                    "parent_id": "pluto",
+                },
+                {
+                    "id": "halley",
+                    "name": "Halley",
+                    "kind": "comet",
+                    "mass_kg": 1.0,
+                    "radius_m": 1.0,
+                    "position_m": [3.0, 0.0, 0.0],
+                    "velocity_mps": [0.0, 1.0, 0.0],
+                    "color": "#fff",
+                    "parent_id": "sun",
+                },
+                {
+                    "id": "bennu",
+                    "name": "Bennu",
+                    "kind": "asteroid",
+                    "mass_kg": 1.0,
+                    "radius_m": 1.0,
+                    "position_m": [4.0, 0.0, 0.0],
+                    "velocity_mps": [0.0, 1.0, 0.0],
+                    "color": "#999",
+                    "parent_id": "sun",
+                },
+            ]
+        )
+
+        system = SolarSystem.from_dict(data)
+
+        self.assertEqual(len(system.bodies), 7)
+
+    def test_unknown_kind_and_invalid_moon_parent_fail(self):
+        data = _sample_system_data()
+        data["bodies"][1]["kind"] = "space rock"
+        with self.assertRaisesRegex(ModelError, "unsupported body kind"):
+            SolarSystem.from_dict(data)
+
+        data = _sample_system_data()
+        data["bodies"][1]["kind"] = "moon"
+        with self.assertRaisesRegex(ModelError, "moon parent must be"):
+            SolarSystem.from_dict(data)
+
+    def test_root_nonstar_and_nonstar_planet_parent_fail(self):
+        data = _sample_system_data()
+        data["bodies"][1].pop("parent_id")
+        with self.assertRaisesRegex(ModelError, "requires a parent star"):
+            SolarSystem.from_dict(data)
+
+        data = _sample_system_data()
+        data["bodies"].append(
+            {
+                "id": "child",
+                "name": "Child",
+                "kind": "asteroid",
+                "mass_kg": 1.0,
+                "radius_m": 1.0,
+                "position_m": [2.0, 0.0, 0.0],
+                "velocity_mps": [0.0, 1.0, 0.0],
+                "color": "#999",
+                "parent_id": "earth",
+            }
+        )
+        with self.assertRaisesRegex(ModelError, "parent must be a star"):
             SolarSystem.from_dict(data)
 
     def test_duplicate_remaps_parent_ids(self):

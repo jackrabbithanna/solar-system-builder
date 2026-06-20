@@ -232,7 +232,7 @@ def body_relationship_label(bodies: list[Body], body: Body) -> str:
     if parent is None:
         return body.kind
     distance = distance_between_bodies_m(body, parent)
-    return f"orbits {parent.name} - {format_distance(distance)}"
+    return f"{body.kind} - orbits {parent.name} - {format_distance(distance)}"
 
 
 def group_label(bodies: list[Body], groups: list[SystemGroup], group: SystemGroup) -> str:

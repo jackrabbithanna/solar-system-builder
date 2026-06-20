@@ -54,7 +54,8 @@ class HierarchyTests(unittest.TestCase):
     def test_relationship_labels_cover_orbits_and_nearest_stars(self):
         bodies = _sample_bodies()
 
-        self.assertEqual(hierarchy.body_relationship_label(bodies, bodies[1]), "orbits Sun - 1.00 AU")
+        self.assertEqual(hierarchy.body_relationship_label(bodies, bodies[1]), "planet - orbits Sun - 1.00 AU")
+        self.assertEqual(hierarchy.body_relationship_label(bodies, bodies[2]), "moon - orbits Earth - 0.0000 AU")
         self.assertEqual(hierarchy.body_relationship_label(bodies, bodies[0]), "star - nearest star 2.00 AU")
 
     def test_group_lookup_includes_descendant_body_parent_chains(self):

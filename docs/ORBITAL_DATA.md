@@ -29,7 +29,7 @@ Binary pair generation is different: for a group with exactly two direct bodies,
 
 ## Stored Metadata
 
-Schema v7 stores optional orbital metadata on both bodies and groups:
+Schema v8 stores optional orbital metadata on both bodies and groups:
 
 - `orbit`: source orbital parameters used to generate a simulation seed.
 - `data_source`: source name, URL, catalog id, retrieval date, and citation metadata.
@@ -39,13 +39,16 @@ Old systems migrate without orbital metadata. Existing preset and saved-system v
 
 ## Supported Orbital Inputs
 
-The first implementation supports bound Keplerian ellipses around a selected parent body or around a selected group/body target.
+The converter supports bound Keplerian ellipses and unbound hyperbolic trajectories around a selected parent body or group/body target.
 
 - Semi-major axis may be entered directly.
 - Orbital period may be entered instead; the app derives semi-major axis from the parent and body masses.
+- Elliptic trajectories use `0 <= eccentricity < 1` and a positive semi-major axis.
+- Hyperbolic trajectories use `eccentricity > 1`, a conventional negative semi-major axis, and no orbital period.
+- Exactly parabolic trajectories (`eccentricity = 1`) are not supported.
 - Eccentricity defaults to `0`.
 - Inclination, longitude of ascending node, argument of periapsis, and mean anomaly default to `0`.
-- The reference plane is the app-local XY plane.
+- The reference plane is the app-local XY plane. Hyperbolic mean anomaly is not angle-wrapped.
 
 The converter preserves 3D vectors internally, but the current canvas is still a top-down X/Y view.
 
