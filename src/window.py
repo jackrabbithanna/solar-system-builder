@@ -600,8 +600,41 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
 
     def _on_simulation_scope_changed(self, _panel, simulation_scope: str) -> None:
         self._exit_focus(reload_settings=False)
+        if simulation_scope == "full_nbody" and self.simulation.auto_approximation_locked:
+            self._load_settings_editor()
+            self._prompt_reset_for_full_physics()
+            return
         self.system.settings.simulation_scope = simulation_scope
         self._clear_dynamic_simulation_state()
+        self._update_title()
+        self._refresh_canvas()
+
+    def _prompt_reset_for_full_physics(self) -> None:
+        dialog = Adw.AlertDialog.new(
+            "Reset for Full N-body?",
+            "Auto has already used approximate physics. Reset the simulation before switching to full N-body so omitted orbital history is not treated as exact.",
+        )
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("reset", "Reset and Use Full N-body")
+        dialog.set_response_appearance("reset", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("reset")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", self._on_full_physics_reset_response)
+        dialog.present(self)
+
+    def _on_full_physics_reset_response(self, _dialog, response: str) -> None:
+        if response != "reset":
+            return
+        selected_body_id = self.system.bodies[self.selected_index].id if self.system.bodies else None
+        self.playing = False
+        self.play_button.set_icon_name("media-playback-start-symbolic")
+        self._replace_system(
+            self.loaded_system_snapshot,
+            refresh_snapshot=False,
+            selected_body_id=selected_body_id,
+        )
+        self.system.settings.simulation_scope = "full_nbody"
+        self._load_settings_editor()
         self._update_title()
         self._refresh_canvas()
 
@@ -916,6 +949,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self._load_group_focus(self.selected_group_id)
         else:
             self._load_body_editor(self.system.bodies[self.selected_index])
+        self._update_title()
         self._update_time_label()
         self._refresh_canvas()
 
@@ -935,9 +969,27 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
 
     def _update_title(self) -> None:
         self.window_title.set_title(self.system.name)
-        max_step_days = self._max_step_seconds() / DAY
-        scope = self._effective_simulation_scope().replace("_", " ")
-        self.window_title.set_subtitle(f"{self.system.epoch} - {scope}, max step {max_step_days:,.2f} days")
+        settings = self._effective_settings()
+        decision = self.simulation.physics_decision(
+            self.system.bodies,
+            self.system.groups,
+            settings,
+            self.selected_index,
+            self.focus_group_id,
+            self.focus_target,
+            settings.visible_step_s,
+        )
+        max_step_days = decision.max_step_s / DAY
+        policy = decision.policy.replace("_", " ")
+        if settings.simulation_scope == "auto":
+            policy = f"Auto: {policy}"
+            if decision.auto_approximation:
+                policy += " approximation"
+            if self.simulation.auto_approximation_locked:
+                policy += " (locked until reset)"
+        self.window_title.set_subtitle(
+            f"{self.system.epoch} - {policy}, max step {max_step_days:,.2f} days"
+        )
 
     def _update_time_label(self) -> None:
         self.time_label.set_label(f"Simulation time: {format_elapsed_time(self.simulation.state.elapsed_s)}")
@@ -1010,7 +1062,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
 
     def _active_body_indices(self) -> list[int]:
         settings = self._effective_settings()
-        return self.simulation.active_body_indices(
+        return self.simulation.display_body_indices(
             self.system.bodies,
             self.system.groups,
             settings,

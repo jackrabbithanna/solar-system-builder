@@ -9,10 +9,10 @@ Stable playback uses `physics.advance_with_samples()`, which may run many 1-day 
 ## Threading Model
 
 - `window.py` owns a single `ThreadPoolExecutor`.
-- `playback.SimulationSession` owns simulation state, trails, overview/context caches, and the generation counter.
-- `playback.SimulationSession` creates `SimulationJob` records containing copied active-scope, overview, and context `SimulationState` values for worker use.
+- `playback.SimulationSession` owns simulation state, trails, overview/context caches, Auto Physics calibration/lock state, and the generation counter.
+- `playback.SimulationSession` creates `SimulationJob` records containing the physics/display plan and copied full, overview, or context `SimulationState` values for worker use.
 - The worker receives a `SimulationJob`.
-- The worker runs physics only through `playback.run_simulation_job(...)` and returns a `SimulationJobResult` with final state plus copied position samples.
+- The worker runs physics only through `playback.run_simulation_job(...)` and returns a `SimulationJobResult` with final state, copied position samples, and measured worker duration.
 - The worker must not mutate `Body` objects.
 - The worker must not call GTK APIs.
 - Completion is handed back to the main thread with `GLib.idle_add(...)`.
@@ -29,7 +29,7 @@ Completed results are applied by `SimulationSession.apply_result(...)` on the GT
 
 After a result applies, `window.py` refreshes GTK widgets: relationship labels, selected editor fields, the time label, and the canvas scene. Trails are appended on the GTK main thread from the sampled positions returned by `advance_with_samples()`. The trail selection, capping, and storage logic lives in `playback.py`.
 
-The UI may pass only an active body subset to the worker. Stellar overview mode advances root stars only, while focused subsystem mode advances a selected root body and its children. System overview mode passes temporary group barycenter entities to the worker and applies only elapsed time plus group trails. Hybrid focused context mode advances focused bodies and outside context barycenters in the same worker job; only focused body state is merged back into the model, while context barycenters remain display-only. Inactive bodies remain in the full UI state but are not updated by that worker result.
+Full N-body jobs pass every body even when focus displays only a subset. Root-star and focused policies may pass an active body subset. System-barycenter mode passes temporary group entities and applies only elapsed time plus group trails. Focus + Coarse Context advances focused bodies and outside aggregate context in one worker job; only focused body state is merged back. Full-job samples are aggregated on the main thread for focused inset trails.
 
 ## Stale Result Guard
 

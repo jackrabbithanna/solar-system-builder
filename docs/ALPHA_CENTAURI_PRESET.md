@@ -107,27 +107,14 @@ objects. They should not be treated as confirmed discoveries.
 
 The preset stores schema v5 settings:
 
-- `visible_step_s`: `30` days
+- `visible_step_s`: `1` millennium
 - `accuracy_profile`: `fast`
 - `distance_unit`: `AU`
-- `view_mode`: `log_overview`
+- `view_mode`: `fit_system`
 - `simulation_scope`: `auto`
-- `trail_sample_interval_s`: `30` days
+- `trail_sample_interval_s`: `1` millennium
 
-`log_overview` is important because Proxima is thousands of AU away from Alpha
-Centauri AB while the Proxima planets are much less than 2 AU from their parent.
-A linear fit-system view would make the close Proxima planetary system visually
-collapse.
-
-`auto` simulation scope keeps the whole-system Alpha Centauri view interactive by
-using a system overview in `log_overview`: Alpha Centauri AB and the Proxima
-Centauri System are advanced as temporary group barycenters, and their group
-trails show the wide-system path. The sidebar focus action can zoom into either
-a semantic group or a star with child planets. In that focused state, `auto`
-uses hybrid focused context: the focused bodies are advanced in detail while
-outside systems appear as coarse barycenter context in a selectable overview inset. This lets Proxima b/d/c
-Candidate or the Alpha Centauri A Candidate show local orbital paths without
-forcing every whole-system step to use the shortest planetary timestep.
+The fitted linear default gives the Alpha Centauri AB and Proxima overview markers the full canvas. At a one-millennium step, Auto predicts that resolving every short planetary orbit would exceed its 200 ms budget, so whole-system playback advances the two temporary group barycenters. Focusing before approximate playback temporarily selects a local sub-day step; Auto can then advance all seven bodies with full N-body physics while rendering only the focused subsystem and overview inset. After approximate playback has occurred, Reset is required before Auto can return to full physics.
 
 ## Limitations
 

@@ -40,6 +40,10 @@ class ModelTests(unittest.TestCase):
             ["builtin-solar-system", "builtin-dwarf-planets", "builtin-binary-system"],
         )
         self.assertEqual([system.name for system in systems], ["Solar System", "Dwarf Planets", "Alpha Centauri"])
+        alpha = systems[-1]
+        self.assertEqual(alpha.settings.visible_step_s, 1_000.0 * 365.25 * DAY)
+        self.assertEqual(alpha.settings.trail_sample_interval_s, 1_000.0 * 365.25 * DAY)
+        self.assertEqual(alpha.settings.view_mode, "fit_system")
         for system in systems:
             clone = SolarSystem.from_dict(system.to_dict())
             self.assertEqual(system.id, clone.id)

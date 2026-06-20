@@ -17,6 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 G = 6.67430e-11
 AU = 149_597_870_700.0
 DAY = 86_400.0
+YEAR = 365.25 * DAY
 SOLAR_MASS = 1.98847e30
 EARTH_MASS = 5.97237e24
 SOLAR_RADIUS = 696_340_000.0
@@ -131,12 +132,12 @@ def build_preset() -> dict[str, Any]:
             "readable simulation seed, not a current-date ephemeris."
         ),
         "settings": {
-            "visible_step_s": 30.0 * DAY,
+            "visible_step_s": 1_000.0 * YEAR,
             "accuracy_profile": "fast",
             "distance_unit": "AU",
-            "view_mode": "log_overview",
+            "view_mode": "fit_system",
             "simulation_scope": "auto",
-            "trail_sample_interval_s": 30.0 * DAY,
+            "trail_sample_interval_s": 1_000.0 * YEAR,
         },
         "groups": [
             {

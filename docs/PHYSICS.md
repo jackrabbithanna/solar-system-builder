@@ -41,13 +41,15 @@ Regression coverage exists in `tests/test_physics.py`.
 
 The UI derives the internal `max_step_s` from a scale policy in `src/scales.py` instead of always using the physics default. That policy estimates parent-child orbital periods or unparented root-body pair periods where possible, applies the selected accuracy fraction, and caps the result by profile without imposing a day-scale lower bound. The visible time step can be days, years, decades, centuries, millennia, or Myr; it must still be passed through `advance()` or `advance_with_samples()` with a bounded internal step.
 
-## Simulation Scope
+## Physics Policy
 
-Large systems can choose an active simulation scope before calling physics. `full_nbody` advances every body. `stellar_overview` advances only root stars and collapses child systems for display. `system_overview` advances temporary group barycenters, such as the Alpha Centauri AB system and the Proxima system. `focused_subsystem` advances the selected root system and its children. `hybrid_focused_context` advances a focused group or body-descendant system in detail while showing outside systems as coarse barycenter context in an overview inset. `auto` selects system overview when multiple top-level group entities exist, stellar overview for remaining multi-star systems, and full N-body otherwise. A focus target selects hybrid focus only when outside context exists; a whole-system target uses focused subsystem.
+Large systems can choose a physics policy before calling physics. `full_nbody` advances every body. `stellar_overview` advances root stars only. `system_overview` advances temporary group barycenters, such as Alpha Centauri AB and the Proxima system. `focused_subsystem` advances a selected root system and its descendants. `hybrid_focused_context` advances focused bodies and outside aggregate context separately.
 
-This scope is a UI orchestration layer. `physics.py` still receives a normal flat `SimulationState` containing only the active bodies, and `window.py` merges completed active states back into the full UI state on the GTK main thread.
+`auto` estimates full-N-body work as `ceil(abs(visible_step) / max_internal_step) * body_count^2`. It begins at `0.02 ms` per work unit with a 200 ms budget, then updates that rate with a 25% EWMA from full jobs of at least 100 units. When full physics is too expensive, Auto selects focused/hybrid, system-barycenter, or root-star approximation in that order of applicability.
 
-`SystemGroup` hierarchy can guide focused subsystem selection. A group such as `Alpha Centauri AB` or `Proxima Centauri System` is a semantic navigation unit; it does not isolate gravity or create a separate physics engine. `Body.parent_id` can also define focusable local systems, such as a star and its planets or, later, a planet and its moons. Only the selected simulation scope determines whether the UI intentionally advances a subset instead of the full flat N-body state.
+Physics and display indices are separate. A focused full-N-body job advances and applies every body while the canvas renders only focused indices. Its full-state samples are mass-aggregated into inset marker trails. Approximate results lock Auto to approximation until the state is reset or replaced because excluded orbital history cannot be recovered.
+
+`SystemGroup` hierarchy guides approximation and display selection. A group such as `Alpha Centauri AB` or `Proxima Centauri System` is a semantic navigation unit; it does not isolate gravity or create a separate physics engine. `Body.parent_id` can also define focusable local systems, such as a star and its planets or, later, a planet and its moons.
 
 In `system_overview`, group barycenters are computed from current body masses, positions, and velocities. The overview state is temporary: playback advances group markers and group trails, updates elapsed time, and does not write barycenter positions back into the real star and planet bodies.
 

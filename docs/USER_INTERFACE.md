@@ -64,7 +64,7 @@ The accuracy menu controls how small the internal simulation substeps should be.
 - Balanced is the default tradeoff between speed and accuracy.
 - Fast allows larger internal steps for quicker playback.
 
-The window subtitle shows the effective simulation scope and the current maximum internal step in days.
+The window subtitle shows the effective physics policy, whether Auto is using an approximation, and the current maximum internal step in days.
 
 ### View Scale Mode
 
@@ -76,18 +76,18 @@ The view mode controls how the canvas is centered and scaled.
 
 Changing the view mode clears existing trails because the active display context may change.
 
-### Simulation Scope
+### Physics Policy
 
-The simulation scope controls which bodies or system markers are actively advanced and displayed.
+The physics policy controls which bodies or aggregate system markers participate in integration. Focus and Fit independently controls which detailed bodies are displayed.
 
-- Auto chooses a scope from the current system hierarchy and focus state.
-- System Overview simulates and displays high-level group barycenters instead of every body.
 - Full N-body simulates all bodies together.
-- Stellar Overview simulates root stars in multi-star systems.
+- Auto predicts the cost of full N-body and uses it when one update should finish within approximately 200 ms.
+- System Barycenters simulates high-level group barycenters instead of every body.
+- Root Stars simulates root stars without their descendants.
 - Focused Subsystem simulates the selected body or group context, such as a star and its descendants.
-- Hybrid Focus simulates a focused subsystem while showing outside context in an overview inset.
+- Focus + Coarse Context simulates a focused subsystem and outside aggregate context separately.
 
-Auto uses System Overview whenever the system has multiple usable top-level groups, regardless of view scale mode. It uses Stellar Overview for remaining multi-star root systems and Full N-body otherwise. A focused target uses Hybrid Focus when outside context exists and Focused Subsystem when the target covers the whole system.
+Auto starts with a hardware-neutral estimate and refines it from measured full-physics worker times. If full N-body exceeds the budget, Auto chooses the best available approximation. Once approximate history has been applied, Auto remains approximate until Reset because omitted orbital phases cannot be reconstructed exactly. Selecting Full N-body after that history offers to reset first.
 
 ## Focus and Selection
 
@@ -97,12 +97,12 @@ Selecting a body loads its editable properties. Selecting a group loads a group 
 
 The Focus and Fit button appears when the selected body or group has a focusable subsystem. Activating it:
 
-- temporarily uses Follow Selected and Auto without changing the saved system settings,
+- temporarily uses Follow Selected without changing the saved View Scale Mode or Physics Policy,
 - resets canvas zoom,
 - chooses a visible time step from the shortest focused orbit and current accuracy profile,
 - clears existing trails.
 
-The focused time step and trail cadence may be edited without changing the saved values. Changing accuracy recalculates an automatically selected focused step, while a manually edited focused step is retained until focus ends. Click Focus and Fit again, select another hierarchy item, or change view/scope to leave focus and restore the stored settings.
+The focused time step and trail cadence may be edited without changing the saved values. Changing accuracy recalculates an automatically selected focused step, while a manually edited focused step is retained until focus ends. Under Full N-body, hidden bodies continue evolving while only the focus is rendered. Click Focus and Fit again, select another hierarchy item, or change view/policy to leave focus and restore the stored view settings.
 
 ## System Controls
 

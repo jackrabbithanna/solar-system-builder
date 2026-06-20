@@ -565,7 +565,7 @@ class PhysicsTests(unittest.TestCase):
 
         self.assertEqual(focused.visible_step_s, 0.25 * DAY)
         self.assertEqual(focused.view_mode, "follow_selected")
-        self.assertEqual(focused.simulation_scope, "auto")
+        self.assertEqual(focused.simulation_scope, "full_nbody")
         self.assertEqual(stored.visible_step_s, 10.0 * DAY)
         self.assertEqual(stored.view_mode, "log_overview")
         self.assertEqual(stored.simulation_scope, "full_nbody")

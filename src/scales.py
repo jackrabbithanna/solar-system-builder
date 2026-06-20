@@ -45,11 +45,11 @@ VIEW_MODE_LABELS: tuple[tuple[str, str], ...] = (
 
 SIMULATION_SCOPE_LABELS: tuple[tuple[str, str], ...] = (
     ("Auto", "auto"),
-    ("System Overview", "system_overview"),
     ("Full N-body", "full_nbody"),
-    ("Stellar Overview", "stellar_overview"),
+    ("System Barycenters", "system_overview"),
+    ("Root Stars", "stellar_overview"),
     ("Focused Subsystem", "focused_subsystem"),
-    ("Hybrid Focus", "hybrid_focused_context"),
+    ("Focus + Coarse Context", "hybrid_focused_context"),
 )
 
 _PERIOD_FRACTIONS = {
@@ -119,7 +119,6 @@ def effective_focus_settings(settings: SystemSettings, focus_state: FocusState |
         visible_step_s=focus_state.visible_step_s,
         trail_sample_interval_s=focus_state.trail_sample_interval_s,
         view_mode="follow_selected",
-        simulation_scope="auto",
     )
 
 

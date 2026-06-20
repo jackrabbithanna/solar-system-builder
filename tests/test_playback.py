@@ -1,14 +1,136 @@
 import unittest
+from dataclasses import replace
 from unittest.mock import patch
 
 import numpy as np
 
 from src import playback
+from src.constants import DAY
 from src.models import Body, SystemGroup, SystemSettings
 from src.physics import SimulationState
+from src.presets import load_builtin_solar_systems
+from src.scales import derived_max_step_s, focus_target_body_indices, focused_visible_step_s
 
 
 class PlaybackTests(unittest.TestCase):
+    def test_work_estimate_uses_absolute_substeps_and_body_count_squared(self):
+        self.assertEqual(playback.estimate_work_units(10.0, 3.0, 4), 64)
+        self.assertEqual(playback.estimate_work_units(-10.0, 3.0, 4), 64)
+        self.assertEqual(playback.estimate_work_units(0.0, 3.0, 4), 0)
+
+    def test_auto_policy_uses_full_for_small_presets_and_overview_for_alpha_centauri(self):
+        systems = {system.name: system for system in load_builtin_solar_systems()}
+
+        for name in ("Solar System", "Dwarf Planets"):
+            system = systems[name]
+            decision = playback.SimulationSession.from_bodies(system.bodies).physics_decision(
+                system.bodies, system.groups, system.settings, 0, None, None, system.settings.visible_step_s
+            )
+            self.assertEqual(decision.policy, "full_nbody")
+            self.assertFalse(decision.auto_approximation)
+
+        alpha = systems["Alpha Centauri"]
+        decision = playback.SimulationSession.from_bodies(alpha.bodies).physics_decision(
+            alpha.bodies, alpha.groups, alpha.settings, 0, None, None, alpha.settings.visible_step_s
+        )
+        self.assertEqual(decision.policy, "system_overview")
+        self.assertTrue(decision.auto_approximation)
+        full_work = playback.estimate_work_units(
+            alpha.settings.visible_step_s,
+            derived_max_step_s(alpha.bodies, alpha.settings.accuracy_profile),
+            len(alpha.bodies),
+        )
+        self.assertGreater(
+            full_work * playback.INITIAL_MS_PER_WORK_UNIT,
+            playback.AUTO_PHYSICS_BUDGET_MS,
+        )
+
+    def test_focused_alpha_centauri_simulates_all_bodies_but_displays_proxima(self):
+        alpha = next(system for system in load_builtin_solar_systems() if system.name == "Alpha Centauri")
+        target = "body:proxima-centauri"
+        focused_indices = focus_target_body_indices(alpha.bodies, alpha.groups, target)
+        focused_step = focused_visible_step_s(
+            [alpha.bodies[index] for index in focused_indices],
+            alpha.settings.accuracy_profile,
+        )
+        settings = replace(alpha.settings, visible_step_s=focused_step)
+        session = playback.SimulationSession.from_bodies(alpha.bodies)
+
+        decision = session.physics_decision(alpha.bodies, alpha.groups, settings, 0, None, target, focused_step)
+
+        self.assertEqual(decision.policy, "full_nbody")
+        self.assertEqual(decision.physics_indices, list(range(len(alpha.bodies))))
+        self.assertEqual(decision.display_indices, focused_indices)
+
+    def test_applied_auto_approximation_locks_until_state_replacement(self):
+        alpha = next(system for system in load_builtin_solar_systems() if system.name == "Alpha Centauri")
+        session = playback.SimulationSession.from_bodies(alpha.bodies)
+        job = session.create_job(alpha.bodies, alpha.groups, alpha.settings, 0, None, None, alpha.settings.visible_step_s)
+        result = playback.run_simulation_job(job)
+
+        self.assertTrue(session.apply_result(result, alpha.bodies, alpha.groups, alpha.settings))
+        self.assertTrue(session.auto_approximation_locked)
+
+        target = "body:proxima-centauri"
+        focused_indices = focus_target_body_indices(alpha.bodies, alpha.groups, target)
+        focused_step = focused_visible_step_s(
+            [alpha.bodies[index] for index in focused_indices],
+            alpha.settings.accuracy_profile,
+        )
+        focused_settings = replace(alpha.settings, visible_step_s=focused_step)
+        locked_decision = session.physics_decision(
+            alpha.bodies, alpha.groups, focused_settings, 0, None, target, focused_step
+        )
+        self.assertEqual(locked_decision.policy, "hybrid_focused_context")
+        self.assertTrue(locked_decision.auto_approximation)
+
+        session.replace_bodies(alpha.bodies)
+
+        self.assertFalse(session.auto_approximation_locked)
+        reset_decision = session.physics_decision(
+            alpha.bodies, alpha.groups, focused_settings, 0, None, target, focused_step
+        )
+        self.assertEqual(reset_decision.policy, "full_nbody")
+
+    def test_full_job_timing_calibrates_estimator(self):
+        bodies = [_body(str(index), kind="star") for index in range(11)]
+        settings = SystemSettings(visible_step_s=DAY, simulation_scope="full_nbody")
+        session = playback.SimulationSession.from_bodies(bodies)
+        job = session.create_job(bodies, [], settings, 0, None, None, DAY)
+        result = playback.SimulationJobResult(
+            job.plan,
+            session.state.copy(),
+            [session.state.positions_m.copy()],
+            worker_duration_ms=float(job.plan.estimated_work_units),
+        )
+
+        self.assertTrue(session.apply_result(result, bodies, [], settings))
+        self.assertAlmostEqual(session.ms_per_work_unit, 0.265)
+
+    def test_full_focus_result_updates_hidden_bodies_and_aggregates_inset_trails(self):
+        bodies = [
+            _body("star", kind="star", position=[0.0, 0.0, 0.0]),
+            _body("planet", parent_id="star", position=[1.0, 0.0, 0.0]),
+            _body("other", kind="star", position=[100.0, 0.0, 0.0]),
+        ]
+        settings = SystemSettings(simulation_scope="auto", trail_sample_interval_s=1.0)
+        session = playback.SimulationSession.from_bodies(bodies)
+        job = session.create_job(bodies, [], settings, 0, None, "body:star", 1.0)
+        positions = np.array([[10.0, 0.0, 0.0], [20.0, 0.0, 0.0], [30.0, 0.0, 0.0]])
+        result = playback.SimulationJobResult(
+            job.plan,
+            _state(positions.tolist(), elapsed_s=1.0),
+            [positions],
+        )
+
+        self.assertEqual(job.plan.effective_policy, "full_nbody")
+        self.assertEqual(job.plan.display_indices, [0, 1])
+        self.assertTrue(session.apply_result(result, bodies, [], settings))
+
+        self.assertEqual(bodies[2].position_m[0], 30.0)
+        self.assertEqual(session.context_trails["star"], [(15.0, 0.0)])
+        self.assertEqual(session.context_trails["context-other"], [(30.0, 0.0)])
+
     def test_trail_appending_uses_sampled_positions_and_caps_limit(self):
         bodies = [_body("a"), _body("b")]
         trails = [[(-10.0, -10.0)], []]

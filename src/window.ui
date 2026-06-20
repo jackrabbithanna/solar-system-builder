@@ -245,7 +245,7 @@
                             <property name="spacing">4</property>
                             <child>
                               <object class="GtkLabel">
-                                <property name="label" translatable="yes">Simulation _Scope</property>
+                                <property name="label" translatable="yes">_Physics Policy</property>
                                 <property name="use-underline">True</property>
                                 <property name="mnemonic-widget">simulation_scope_dropdown</property>
                                 <property name="xalign">0</property>
@@ -253,7 +253,7 @@
                             </child>
                             <child>
                               <object class="GtkDropDown" id="simulation_scope_dropdown">
-                                <property name="tooltip-text" translatable="yes">Simulation scope</property>
+                                <property name="tooltip-text" translatable="yes">Physics integration policy</property>
                               </object>
                             </child>
                           </object>

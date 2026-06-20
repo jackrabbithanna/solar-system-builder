@@ -12,7 +12,7 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 - `src/orbit_editing.py`: GTK-free body, group-barycenter, and binary-pair orbit mutations with playback-state rebuilding.
 - `src/orbits.py`: pure Keplerian orbit conversion helpers for generating Cartesian simulation state from optional orbital metadata.
 - `src/physics.py`: NumPy-backed simulation state, acceleration, low-level `step()`, user-facing `advance()`, and sampled `advance_with_samples()`.
-- `src/scales.py`: pure scale helpers for time/distance units, elapsed-time formatting, adaptive internal step policy, simulation scope selection, and trail sampling cadence.
+- `src/scales.py`: pure scale helpers for time/distance units, elapsed-time formatting, adaptive internal step policy, approximation selection, and trail sampling cadence.
 - `src/hierarchy.py`: GTK-free body/group hierarchy helpers for sidebar ordering, depth, group membership, relationship labels, and group centers.
 - `src/viewport.py`: GTK-free canvas projection, scale, view-center, barycenter, zoom clamp, and hit-test helpers.
 - `src/playback.py`: GTK-free `SimulationSession`, worker job/result contracts, active/overview/context state orchestration, generation checks, and trail appending/capping.
@@ -26,8 +26,8 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 1. `load_builtin_solar_system()` or `load_builtin_solar_systems()` loads JSON preset data into `SolarSystem` objects.
 2. `SimulationState.from_bodies()` copies masses, positions, and velocities into NumPy arrays.
 3. Optional `SystemGroup` records organize flat bodies into semantic systems and subsystems; `hierarchy.py` computes sidebar order, group depth, and descendant body membership, while `sidebar.py` renders the hierarchy list.
-4. The UI chooses an active simulation scope, such as full N-body, system overview, stellar overview, focused subsystem, or hybrid focused context.
-5. `playback.SimulationSession` builds copied active/overview/context `SimulationState` data and `SimulationJob` records for workers. Playback advances those copies through `physics.advance_with_samples()` so internal substep positions can be reused for dense trails.
+4. `SimulationSession` chooses a physics policy independently from focused display indices. Auto predicts full-N-body cost against a measured 200 ms worker budget and otherwise selects an approximation.
+5. `playback.SimulationSession` builds copied full/active/overview/context `SimulationState` data and `SimulationJob` records for workers. Playback advances those copies through `physics.advance_with_samples()` so internal substep positions can be reused for body and aggregate trails.
 6. Completed `SimulationJobResult` values are applied by `SimulationSession` on the GTK main thread; active body states are merged back into the full UI state, while temporary overview/context states update elapsed time and group trails without mutating bodies.
 7. `window.py` builds a `CanvasScene` snapshot from main-thread state and passes it to `SolarSystemCanvas`.
 8. `canvas.py` draws body positions/trails, system overview group positions/trails, or focused bodies with muted context markers, while delegating coordinate math and hit tests to `viewport.py`.
@@ -36,7 +36,7 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 
 `Body.parent_id` records local orbital/display parentage, such as planets orbiting a star. Body descendant chains can be used as focus targets, which also supports future planet-and-moon systems. Optional `Body.orbit` and `Body.data_source` records preserve user-entered orbital/source metadata for generating approximate initial state vectors, but `position_m` and `velocity_mps` remain the canonical simulation state. `SystemGroup` records larger semantic hierarchy, such as a binary subsystem or a planetary system. Physics remains a flat N-body simulation over the active body set, so groups do not constrain gravity by themselves.
 
-`SolarSystem.settings` stores per-system playback and view preferences. The UI exposes the visible time step, time unit, accuracy profile, view mode, simulation scope, and distance editor unit, while the physics layer still receives SI values only.
+`SolarSystem.settings` stores per-system playback and view preferences. The UI exposes the visible time step, time unit, accuracy profile, view mode, physics policy (serialized under the compatibility key `simulation_scope`), and distance editor unit, while the physics layer still receives SI values only.
 
 ## Reset Flow
 

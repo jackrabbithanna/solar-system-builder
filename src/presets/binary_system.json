@@ -5,12 +5,12 @@
   "epoch": "Approximate Alpha Centauri seed",
   "description": "Built-in Alpha Centauri-inspired preset using SI units, approximate 2D state vectors, three known stars, confirmed Proxima b/d, and selected candidate planets. This is a readable simulation seed, not a current-date ephemeris.",
   "settings": {
-    "visible_step_s": 2592000.0,
+    "visible_step_s": 31557600000.0,
     "accuracy_profile": "fast",
     "distance_unit": "AU",
-    "view_mode": "log_overview",
+    "view_mode": "fit_system",
     "simulation_scope": "auto",
-    "trail_sample_interval_s": 2592000.0
+    "trail_sample_interval_s": 31557600000.0
   },
   "groups": [
     {

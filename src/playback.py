@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import math
+import time
 from dataclasses import dataclass
 from typing import Literal
 
@@ -19,12 +21,29 @@ from .scales import (
     context_overview_entities,
     derived_max_step_s,
     derived_overview_max_step_s,
-    effective_simulation_scope,
+    focus_overview_entity,
+    focus_target_body_indices,
     system_overview_entities,
 )
 
 TRAIL_POINT_LIMIT = 2000
 SimulationMode = Literal["body_detail", "system_overview", "hybrid_focus"]
+AUTO_PHYSICS_BUDGET_MS = 200.0
+INITIAL_MS_PER_WORK_UNIT = 0.02
+CALIBRATION_WEIGHT = 0.25
+MIN_CALIBRATION_WORK_UNITS = 100
+
+
+@dataclass(frozen=True)
+class PhysicsDecision:
+    policy: str
+    mode: SimulationMode
+    physics_indices: list[int]
+    display_indices: list[int]
+    max_step_s: float
+    estimated_work_units: int
+    predicted_duration_ms: float
+    auto_approximation: bool = False
 
 
 @dataclass(frozen=True)
@@ -38,6 +57,13 @@ class SimulationJobPlan:
     context_max_step_s: float | None = None
     overview_entity_ids: list[str] | None = None
     context_entity_ids: list[str] | None = None
+    display_indices: list[int] | None = None
+    effective_policy: str = "full_nbody"
+    estimated_work_units: int = 0
+    predicted_duration_ms: float = 0.0
+    auto_approximation: bool = False
+    inset_entity_ids: list[str] | None = None
+    inset_body_indices: list[list[int]] | None = None
 
 
 @dataclass(frozen=True)
@@ -53,6 +79,7 @@ class SimulationJobResult:
     state: SimulationState
     position_samples: list[np.ndarray]
     context_result: tuple[SimulationState, list[np.ndarray]] | None = None
+    worker_duration_ms: float = 0.0
 
 
 class SimulationSession:
@@ -69,6 +96,10 @@ class SimulationSession:
         self.context_state: SimulationState | None = None
         self.context_entity_ids: list[str] = []
         self.last_trail_sample_elapsed_s = state.elapsed_s
+        self.auto_approximation_locked = False
+        self.ms_per_work_unit = INITIAL_MS_PER_WORK_UNIT
+        self.last_effective_policy = "full_nbody"
+        self.last_auto_approximation = False
 
     @classmethod
     def from_bodies(cls, bodies: list[Body]) -> "SimulationSession":
@@ -78,6 +109,9 @@ class SimulationSession:
         self.state = SimulationState.from_bodies(bodies)
         if increment_generation:
             self.generation += 1
+        self.auto_approximation_locked = False
+        self.last_effective_policy = "full_nbody"
+        self.last_auto_approximation = False
         self.clear_dynamic(bodies)
 
     def increment_generation(self) -> None:
@@ -105,15 +139,34 @@ class SimulationSession:
         focus_group_id: str | None,
         focus_target: str | None,
     ) -> list[int]:
-        return active_body_indices(
+        return self.physics_decision(
             bodies,
-            settings.simulation_scope,
-            settings.view_mode,
-            selected_index,
             groups,
+            settings,
+            selected_index,
             focus_group_id,
             focus_target,
-        )
+            settings.visible_step_s,
+        ).physics_indices
+
+    def display_body_indices(
+        self,
+        bodies: list[Body],
+        groups: list[SystemGroup],
+        settings: SystemSettings,
+        selected_index: int,
+        focus_group_id: str | None,
+        focus_target: str | None,
+    ) -> list[int]:
+        return self.physics_decision(
+            bodies,
+            groups,
+            settings,
+            selected_index,
+            focus_group_id,
+            focus_target,
+            settings.visible_step_s,
+        ).display_indices
 
     def effective_simulation_scope(
         self,
@@ -123,14 +176,15 @@ class SimulationSession:
         selected_index: int,
         focus_target: str | None,
     ) -> str:
-        return effective_simulation_scope(
+        return self.physics_decision(
             bodies,
-            settings.simulation_scope,
-            settings.view_mode,
-            selected_index,
             groups,
+            settings,
+            selected_index,
+            None,
             focus_target,
-        )
+            settings.visible_step_s,
+        ).policy
 
     def using_system_overview(
         self,
@@ -140,11 +194,12 @@ class SimulationSession:
         selected_index: int,
         focus_target: str | None,
     ) -> bool:
-        return (
-            self.effective_simulation_scope(bodies, groups, settings, selected_index, focus_target)
-            == "system_overview"
-            and len(self.overview_entities(bodies, groups)) > 1
+        if focus_target is not None:
+            return False
+        decision = self.physics_decision(
+            bodies, groups, settings, selected_index, None, focus_target, settings.visible_step_s
         )
+        return decision.mode == "system_overview"
 
     def using_hybrid_focus(
         self,
@@ -155,11 +210,7 @@ class SimulationSession:
         focus_group_id: str | None,
         focus_target: str | None,
     ) -> bool:
-        return (
-            self.effective_simulation_scope(bodies, groups, settings, selected_index, focus_target)
-            == "hybrid_focused_context"
-            and bool(self.active_body_indices(bodies, groups, settings, selected_index, focus_group_id, focus_target))
-        )
+        return bool(focus_target and self.context_entities(bodies, groups, focus_target))
 
     def overview_entities(self, bodies: list[Body], groups: list[SystemGroup]) -> list[OverviewEntity]:
         return system_overview_entities(bodies, groups)
@@ -198,12 +249,15 @@ class SimulationSession:
         focus_group_id: str | None,
         focus_target: str | None,
     ) -> float:
-        if self.using_system_overview(bodies, groups, settings, selected_index, focus_target):
-            return derived_overview_max_step_s(self.overview_entities(bodies, groups), settings.accuracy_profile)
-        if self.using_hybrid_focus(bodies, groups, settings, selected_index, focus_group_id, focus_target):
-            return self.focused_max_step_seconds(bodies, groups, settings, selected_index, focus_group_id, focus_target)
-        active = self.active_body_indices(bodies, groups, settings, selected_index, focus_group_id, focus_target)
-        return derived_max_step_s([bodies[index] for index in active], settings.accuracy_profile)
+        return self.physics_decision(
+            bodies,
+            groups,
+            settings,
+            selected_index,
+            focus_group_id,
+            focus_target,
+            settings.visible_step_s,
+        ).max_step_s
 
     def focused_max_step_seconds(
         self,
@@ -241,39 +295,46 @@ class SimulationSession:
         focus_target: str | None,
         dt_s: float,
     ) -> SimulationJob:
-        if self.using_system_overview(bodies, groups, settings, selected_index, focus_target):
+        decision = self.physics_decision(
+            bodies,
+            groups,
+            settings,
+            selected_index,
+            focus_group_id,
+            focus_target,
+            dt_s,
+        )
+        common_plan = dict(
+            generation=self.generation,
+            active_indices=decision.physics_indices,
+            dt_s=dt_s,
+            max_step_s=decision.max_step_s,
+            display_indices=decision.display_indices,
+            effective_policy=decision.policy,
+            estimated_work_units=decision.estimated_work_units,
+            predicted_duration_ms=decision.predicted_duration_ms,
+            auto_approximation=decision.auto_approximation,
+        )
+
+        if decision.mode == "system_overview":
             entities = self.overview_entities(bodies, groups)
             state = self._overview_simulation_state(bodies, groups)
             plan = SimulationJobPlan(
                 mode="system_overview",
-                generation=self.generation,
-                active_indices=[],
                 start_elapsed_s=state.elapsed_s,
-                dt_s=dt_s,
-                max_step_s=self.max_step_seconds(bodies, groups, settings, selected_index, focus_group_id, focus_target),
                 overview_entity_ids=[entity.id for entity in entities],
+                **common_plan,
             )
             return SimulationJob(plan, state)
 
-        if self.using_hybrid_focus(bodies, groups, settings, selected_index, focus_group_id, focus_target):
-            active = self.active_body_indices(bodies, groups, settings, selected_index, focus_group_id, focus_target)
+        if decision.mode == "hybrid_focus":
+            active = decision.physics_indices
             context_entities = self.context_entities(bodies, groups, focus_target)
             state = simulation_state_for_indices(self.state, active)
             context_state = self._context_simulation_state(bodies, groups, focus_target)
             plan = SimulationJobPlan(
                 mode="hybrid_focus",
-                generation=self.generation,
-                active_indices=active,
                 start_elapsed_s=state.elapsed_s,
-                dt_s=dt_s,
-                max_step_s=self.focused_max_step_seconds(
-                    bodies,
-                    groups,
-                    settings,
-                    selected_index,
-                    focus_group_id,
-                    focus_target,
-                ),
                 context_max_step_s=self.context_max_step_seconds(
                     bodies,
                     groups,
@@ -283,20 +344,173 @@ class SimulationSession:
                     focus_target,
                 ),
                 context_entity_ids=[entity.id for entity in context_entities],
+                **common_plan,
             )
             return SimulationJob(plan, state, context_state)
 
-        active = self.active_body_indices(bodies, groups, settings, selected_index, focus_group_id, focus_target)
+        active = decision.physics_indices
         state = simulation_state_for_indices(self.state, active)
+        inset_ids, inset_indices = self._inset_memberships(bodies, groups, focus_target)
         plan = SimulationJobPlan(
             mode="body_detail",
-            generation=self.generation,
-            active_indices=active,
             start_elapsed_s=state.elapsed_s,
-            dt_s=dt_s,
-            max_step_s=self.max_step_seconds(bodies, groups, settings, selected_index, focus_group_id, focus_target),
+            inset_entity_ids=inset_ids,
+            inset_body_indices=inset_indices,
+            **common_plan,
         )
         return SimulationJob(plan, state)
+
+    def physics_decision(
+        self,
+        bodies: list[Body],
+        groups: list[SystemGroup],
+        settings: SystemSettings,
+        selected_index: int,
+        focus_group_id: str | None,
+        focus_target: str | None,
+        dt_s: float,
+    ) -> PhysicsDecision:
+        all_indices = list(range(len(bodies)))
+        display_indices = focus_target_body_indices(bodies, groups, focus_target) or all_indices
+        full_max_step_s = derived_max_step_s(bodies, settings.accuracy_profile)
+        full_work = estimate_work_units(dt_s, full_max_step_s, len(bodies))
+        full_duration = full_work * self.ms_per_work_unit
+
+        if settings.simulation_scope == "auto":
+            if not self.auto_approximation_locked and full_duration <= AUTO_PHYSICS_BUDGET_MS:
+                return PhysicsDecision(
+                    "full_nbody",
+                    "body_detail",
+                    all_indices,
+                    display_indices,
+                    full_max_step_s,
+                    full_work,
+                    full_duration,
+                )
+            fallback = self._auto_fallback_policy(bodies, groups, focus_target)
+            if fallback == "full_nbody":
+                return PhysicsDecision(
+                    "full_nbody",
+                    "body_detail",
+                    all_indices,
+                    display_indices,
+                    full_max_step_s,
+                    full_work,
+                    full_duration,
+                )
+            return self._decision_for_policy(
+                fallback,
+                bodies,
+                groups,
+                settings,
+                selected_index,
+                focus_group_id,
+                focus_target,
+                dt_s,
+                display_indices,
+                auto_approximation=True,
+            )
+
+        return self._decision_for_policy(
+            settings.simulation_scope,
+            bodies,
+            groups,
+            settings,
+            selected_index,
+            focus_group_id,
+            focus_target,
+            dt_s,
+            display_indices,
+        )
+
+    def _decision_for_policy(
+        self,
+        policy: str,
+        bodies: list[Body],
+        groups: list[SystemGroup],
+        settings: SystemSettings,
+        selected_index: int,
+        focus_group_id: str | None,
+        focus_target: str | None,
+        dt_s: float,
+        display_indices: list[int],
+        *,
+        auto_approximation: bool = False,
+    ) -> PhysicsDecision:
+        if policy == "system_overview" and len(self.overview_entities(bodies, groups)) > 1:
+            entities = self.overview_entities(bodies, groups)
+            max_step_s = derived_overview_max_step_s(entities, settings.accuracy_profile)
+            work = estimate_work_units(dt_s, max_step_s, len(entities))
+            return PhysicsDecision(
+                policy,
+                "system_overview",
+                [],
+                display_indices,
+                max_step_s,
+                work,
+                work * self.ms_per_work_unit,
+                auto_approximation,
+            )
+
+        active = active_body_indices(
+            bodies,
+            policy,
+            settings.view_mode,
+            selected_index,
+            groups,
+            focus_group_id,
+            focus_target,
+        )
+        if policy == "full_nbody":
+            active = list(range(len(bodies)))
+        max_step_s = derived_max_step_s([bodies[index] for index in active], settings.accuracy_profile)
+        work = estimate_work_units(dt_s, max_step_s, len(active))
+        mode: SimulationMode = "hybrid_focus" if policy == "hybrid_focused_context" else "body_detail"
+        return PhysicsDecision(
+            policy,
+            mode,
+            active,
+            display_indices if focus_target else active,
+            max_step_s,
+            work,
+            work * self.ms_per_work_unit,
+            auto_approximation,
+        )
+
+    def _auto_fallback_policy(
+        self,
+        bodies: list[Body],
+        groups: list[SystemGroup],
+        focus_target: str | None,
+    ) -> str:
+        if focus_target is not None:
+            return "hybrid_focused_context" if self.context_entities(bodies, groups, focus_target) else "focused_subsystem"
+        if len(self.overview_entities(bodies, groups)) > 1:
+            return "system_overview"
+        if any(body.kind == "star" and body.parent_id is None for body in bodies):
+            return "stellar_overview"
+        return "full_nbody"
+
+    def _inset_memberships(
+        self,
+        bodies: list[Body],
+        groups: list[SystemGroup],
+        focus_target: str | None,
+    ) -> tuple[list[str], list[list[int]]]:
+        focused = focus_overview_entity(bodies, groups, focus_target)
+        if focused is None:
+            return [], []
+        entities = [focused, *self.context_entities(bodies, groups, focus_target)]
+        indices = [focus_target_body_indices(bodies, groups, focus_target)]
+        group_ids = {group.id for group in groups}
+        for entity in entities[1:]:
+            if entity.id in group_ids:
+                indices.append(focus_target_body_indices(bodies, groups, f"group:{entity.id}"))
+            elif entity.id.startswith("context-"):
+                indices.append(focus_target_body_indices(bodies, groups, f"body:{entity.id.removeprefix('context-')}"))
+            else:
+                indices.append([])
+        return [entity.id for entity in entities], indices
 
     def apply_result(
         self,
@@ -307,6 +521,21 @@ class SimulationSession:
     ) -> bool:
         if not should_apply_generation(result.plan.generation, self.generation):
             return False
+
+        self.last_effective_policy = result.plan.effective_policy
+        self.last_auto_approximation = result.plan.auto_approximation
+        if result.plan.effective_policy != "full_nbody":
+            self.auto_approximation_locked = True
+        if (
+            result.plan.effective_policy == "full_nbody"
+            and result.plan.estimated_work_units >= MIN_CALIBRATION_WORK_UNITS
+            and result.worker_duration_ms > 0.0
+        ):
+            observed = result.worker_duration_ms / result.plan.estimated_work_units
+            self.ms_per_work_unit = (
+                (1.0 - CALIBRATION_WEIGHT) * self.ms_per_work_unit
+                + CALIBRATION_WEIGHT * observed
+            )
 
         if result.plan.mode == "system_overview":
             self.overview_state = result.state
@@ -335,6 +564,21 @@ class SimulationSession:
                 context_samples,
                 result.plan.start_elapsed_s,
                 context_state.elapsed_s,
+                settings.trail_sample_interval_s,
+            )
+        elif result.plan.effective_policy == "full_nbody" and result.plan.inset_entity_ids:
+            inset_samples = aggregate_position_samples(
+                result.position_samples,
+                self.state.masses_kg,
+                result.plan.inset_body_indices or [],
+            )
+            self.context_state = None
+            self.context_entity_ids = result.plan.inset_entity_ids
+            self._append_context_trails(
+                result.plan.inset_entity_ids,
+                inset_samples,
+                result.plan.start_elapsed_s,
+                result.state.elapsed_s,
                 settings.trail_sample_interval_s,
             )
         self._append_body_trails(
@@ -430,6 +674,7 @@ class SimulationSession:
 
 
 def run_simulation_job(job: SimulationJob) -> SimulationJobResult:
+    started = time.perf_counter()
     if job.plan.mode == "hybrid_focus":
         focused_result, context_result = advance_hybrid_simulations(
             job.state,
@@ -439,7 +684,8 @@ def run_simulation_job(job: SimulationJob) -> SimulationJobResult:
             job.plan.context_max_step_s or job.plan.max_step_s,
         )
         state, position_samples = focused_result
-        return SimulationJobResult(job.plan, state, position_samples, context_result)
+        duration_ms = (time.perf_counter() - started) * 1_000.0
+        return SimulationJobResult(job.plan, state, position_samples, context_result, duration_ms)
 
     state, position_samples = advance_with_samples(
         job.state,
@@ -447,7 +693,8 @@ def run_simulation_job(job: SimulationJob) -> SimulationJobResult:
         "post_newtonian",
         job.plan.max_step_s,
     )
-    return SimulationJobResult(job.plan, state, position_samples)
+    duration_ms = (time.perf_counter() - started) * 1_000.0
+    return SimulationJobResult(job.plan, state, position_samples, worker_duration_ms=duration_ms)
 
 
 def advance_hybrid_simulations(
@@ -499,6 +746,34 @@ def overview_simulation_state(
         velocities_mps=np.array([entity.velocity_mps for entity in entities], dtype=float),
         elapsed_s=elapsed_s,
     )
+
+
+def estimate_work_units(dt_s: float, max_step_s: float, body_count: int) -> int:
+    if dt_s == 0.0 or body_count == 0:
+        return 0
+    substeps = max(1, math.ceil(abs(dt_s) / max_step_s))
+    return substeps * body_count * body_count
+
+
+def aggregate_position_samples(
+    position_samples: list[np.ndarray],
+    masses_kg: np.ndarray,
+    entity_body_indices: list[list[int]],
+) -> list[np.ndarray]:
+    aggregated: list[np.ndarray] = []
+    for positions_m in position_samples:
+        entity_positions: list[np.ndarray] = []
+        for indices in entity_body_indices:
+            if not indices:
+                entity_positions.append(np.zeros(3, dtype=float))
+                continue
+            entity_masses = masses_kg[indices]
+            total_mass = float(entity_masses.sum())
+            entity_positions.append(
+                np.sum(positions_m[indices] * entity_masses[:, np.newaxis], axis=0) / total_mass
+            )
+        aggregated.append(np.array(entity_positions, dtype=float))
+    return aggregated
 
 
 def select_trail_samples(
