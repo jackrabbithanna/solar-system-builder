@@ -38,6 +38,7 @@ class CanvasScene:
     using_focused_fit: bool = False
     focused_fit_session: int = 0
     selected_group_center: tuple[float, float] | None = None
+    trail_reference_position: tuple[float, float] | None = None
     trails: list[Trail] = field(default_factory=list)
     overview_entities: list[OverviewEntity] = field(default_factory=list)
     overview_positions: Positions = field(default_factory=list)
@@ -178,10 +179,16 @@ class SolarSystemCanvas(Gtk.DrawingArea):
                 continue
             rgba = self._rgba(self._scene.bodies[index].color)
             cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.35)
-            first_x, first_y = self._project(trail[0][0], trail[0][1], origin_x, origin_y, scale, center_x_m, center_y_m)
+            trail_x, trail_y = viewport.trail_point_in_system_frame(
+                trail[0][0], trail[0][1], self._scene.trail_reference_position
+            )
+            first_x, first_y = self._project(trail_x, trail_y, origin_x, origin_y, scale, center_x_m, center_y_m)
             cr.move_to(first_x, first_y)
             for point_x, point_y in trail[1:]:
-                x, y = self._project(point_x, point_y, origin_x, origin_y, scale, center_x_m, center_y_m)
+                trail_x, trail_y = viewport.trail_point_in_system_frame(
+                    point_x, point_y, self._scene.trail_reference_position
+                )
+                x, y = self._project(trail_x, trail_y, origin_x, origin_y, scale, center_x_m, center_y_m)
                 cr.line_to(x, y)
             cr.stroke()
 

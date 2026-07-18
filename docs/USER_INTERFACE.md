@@ -90,6 +90,15 @@ The physics policy controls which bodies or aggregate system markers participate
 
 Auto starts with a hardware-neutral estimate and refines it from measured full-physics worker times. If full N-body exceeds the budget, Auto chooses the best available approximation. Once approximate history has been applied, Auto remains approximate until Reset because omitted orbital phases cannot be reconstructed exactly. Selecting Full N-body after that history offers to reset first.
 
+### Trail Perspective
+
+Trail Perspective controls the coordinates used for recorded body trails during Focus and Fit.
+
+- Focused Parent is the default. Each physics sample is stored relative to the moving focused body, or relative to the focused group's mass-weighted barycenter. This makes moon and planet trails show their local motion instead of the larger heliocentric or system-level path.
+- System / Inertial stores the original system coordinates, preserving the larger path through the system.
+
+This setting changes recorded playback trails only; it does not draw a separate static orbit curve. System Overview and the context inset remain inertial. Changing Trail Perspective clears existing trails and invalidates a pending playback result so coordinates from different frames are never joined.
+
 ## Focus and Selection
 
 The body list on the right shows groups and bodies in hierarchical order. Group rows show a group type and body count. Body rows show a color swatch, the body name, and relationship text such as the parent it orbits or the nearest other star.
@@ -107,7 +116,7 @@ Planets with moons are focusable subsystems. Under Focus + Coarse Context, the h
 
 Outside planetary Focus and Fit, moon markers and trails are collapsed into their parent planets. Auto and scoped physics use a mass-weighted planet-and-moons proxy so moon periods do not force planetary-scale playback to use moon-scale internal steps. The window subtitle shows `moons collapsed` while this proxy is active. Explicit Full N-body still simulates every moon, but keeps moon-level rendering hidden until planetary focus.
 
-The focused time step and trail cadence may be edited without changing the saved values. Changing accuracy recalculates an automatically selected focused step, while a manually edited focused step is retained until focus ends. Under Full N-body, hidden bodies continue evolving while only the focus is rendered. Click Focus and Fit again, select another hierarchy item, or change view/policy to leave focus and restore the stored view settings.
+The focused time step and trail cadence may be edited without changing the saved values. Changing accuracy recalculates an automatically selected focused step, while a manually edited focused step is retained until focus ends. Under Full N-body, hidden bodies continue evolving while only the focus is rendered. Selecting a body or group inside the focused subsystem preserves the focus target, fitted bounds, manual zoom, and accumulated trails. Click Focus and Fit again, select an item outside the focused subsystem, or change view/policy to leave focus and restore the stored view settings.
 
 While focused, the fitted camera uses a rotation-independent radial extent with headroom. It expands as needed to keep the focused bodies visible and contracts gradually after a sustained decrease in system extent, avoiding rapid zoom changes as binaries and planets rotate.
 

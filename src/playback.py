@@ -23,6 +23,7 @@ from .scales import (
     derived_overview_max_step_s,
     focus_overview_entity,
     focus_target_body_indices,
+    focused_trail_reference_indices,
     system_overview_entities,
 )
 
@@ -162,6 +163,7 @@ class SimulationJobPlan:
     inset_body_indices: list[list[int]] | None = None
     moons_collapsed: bool = False
     physics_memberships: list[list[int]] | None = None
+    trail_reference_indices: list[int] | None = None
 
 
 @dataclass(frozen=True)
@@ -408,6 +410,11 @@ class SimulationSession:
             auto_approximation=decision.auto_approximation,
             moons_collapsed=decision.moons_collapsed,
             physics_memberships=decision.physics_memberships,
+            trail_reference_indices=(
+                focused_trail_reference_indices(bodies, groups, focus_target)
+                if settings.trail_frame == "focused_parent" and focus_target is not None
+                else None
+            ),
         )
 
         if decision.mode == "system_overview":
@@ -723,7 +730,21 @@ class SimulationSession:
             for index in result.plan.active_indices
             if bodies[index].kind != "moon" or index in detailed_moons
         ]
-        trail_samples = [sample[trail_indices].copy() for sample in expanded_samples]
+        reference_indices = result.plan.trail_reference_indices or []
+        if len(reference_indices) == 1:
+            trail_indices = [
+                index for index in trail_indices if index != reference_indices[0]
+            ]
+        stored_samples = (
+            relative_position_samples(
+                expanded_samples,
+                self.state.masses_kg,
+                reference_indices,
+            )
+            if reference_indices
+            else expanded_samples
+        )
+        trail_samples = [sample[trail_indices].copy() for sample in stored_samples]
         self._append_body_trails(
             bodies,
             trail_samples,
@@ -1012,6 +1033,32 @@ def aggregate_position_samples(
             )
         aggregated.append(np.array(entity_positions, dtype=float))
     return aggregated
+
+
+def relative_position_samples(
+    position_samples: list[np.ndarray],
+    masses_kg: np.ndarray,
+    reference_indices: list[int],
+) -> list[np.ndarray]:
+    """Translate samples into a moving body or group-barycenter frame."""
+
+    if not reference_indices:
+        return [sample.copy() for sample in position_samples]
+    indices = np.array(reference_indices, dtype=int)
+    if np.any(indices < 0) or np.any(indices >= len(masses_kg)):
+        raise ValueError("trail reference index is out of range")
+    reference_masses = masses_kg[indices]
+    total_mass = float(reference_masses.sum())
+    if total_mass <= 0.0:
+        raise ValueError("trail reference mass must be positive")
+    relative_samples = []
+    for positions_m in position_samples:
+        center_m = np.sum(
+            positions_m[indices] * reference_masses[:, np.newaxis],
+            axis=0,
+        ) / total_mass
+        relative_samples.append(positions_m - center_m)
+    return relative_samples
 
 
 def select_trail_samples(

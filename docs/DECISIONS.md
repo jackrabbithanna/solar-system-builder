@@ -22,6 +22,10 @@ The UI `Days / step` value is the visible simulation interval. It must not be us
 
 UI trails are sampled from bounded physics substeps, not just from the final position of each visible UI step. This keeps high `Days / step` playback from drawing sparse line segments that make inner orbits look artificially angular or rosette-like.
 
+Focused Parent is the default trail perspective during Focus and Fit. Body focus subtracts the focused body's position at each recorded sample; group focus subtracts the focused group's same-sample mass barycenter. The canvas re-anchors those relative points at the current reference position. Overview and inset trails stay inertial, and changing frames clears trails and invalidates pending playback work. These are recorded trails, not generated static orbit curves.
+
+Selecting a descendant of the active Focus and Fit target changes inspection selection without changing camera state, focus bounds, zoom, or trails. Selecting outside the focused target exits focus.
+
 ## Local JSON Library
 
 User-created systems are stored as JSON in the app data directory. Document import/export is a later feature.

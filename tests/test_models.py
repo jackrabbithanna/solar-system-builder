@@ -157,6 +157,15 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(system.reference_frame.source, "app_local")
         self.assertEqual(system.reference_frame.epoch, system.epoch)
 
+    def test_v9_data_defaults_to_focused_parent_trails(self):
+        data = _sample_system_data(schema_version=9)
+        data["settings"] = {"simulation_scope": "full_nbody"}
+
+        system = SolarSystem.from_dict(data)
+
+        self.assertEqual(system.schema_version, SCHEMA_VERSION)
+        self.assertEqual(system.settings.trail_frame, "focused_parent")
+
     def test_state_origin_and_horizons_frame_round_trip(self):
         data = _sample_system_data()
         data["reference_frame"] = SystemReferenceFrame(
@@ -273,6 +282,7 @@ class ModelTests(unittest.TestCase):
             "view_mode": "log_overview",
             "simulation_scope": "stellar_overview",
             "trail_sample_interval_s": 5.0 * DAY,
+            "trail_frame": "system_inertial",
         }
 
         system = SolarSystem.from_dict(data)
@@ -284,6 +294,7 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(clone.settings.view_mode, "log_overview")
         self.assertEqual(clone.settings.simulation_scope, "stellar_overview")
         self.assertEqual(clone.settings.trail_sample_interval_s, 5.0 * DAY)
+        self.assertEqual(clone.settings.trail_frame, "system_inertial")
 
     def test_orbit_metadata_round_trip(self):
         data = _sample_system_data()
@@ -349,6 +360,13 @@ class ModelTests(unittest.TestCase):
         data["settings"] = {"simulation_scope": "nearby_only"}
 
         with self.assertRaisesRegex(ModelError, "unsupported simulation_scope"):
+            SolarSystem.from_dict(data)
+
+    def test_invalid_trail_frame_fails(self):
+        data = _sample_system_data()
+        data["settings"] = {"trail_frame": "selected_body"}
+
+        with self.assertRaisesRegex(ModelError, "unsupported trail_frame"):
             SolarSystem.from_dict(data)
 
     def test_group_round_trip(self):

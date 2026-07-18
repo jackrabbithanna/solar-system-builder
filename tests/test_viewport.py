@@ -18,6 +18,16 @@ class ViewportTests(unittest.TestCase):
         self.assertEqual(viewport.clamp_zoom_factor(128.0), 64.0)
         self.assertEqual(viewport.clamp_zoom_factor(4.0), 4.0)
 
+    def test_relative_trail_points_are_anchored_to_current_reference(self):
+        self.assertEqual(
+            viewport.trail_point_in_system_frame(2.0, -3.0, (10.0, 20.0)),
+            (12.0, 17.0),
+        )
+        self.assertEqual(
+            viewport.trail_point_in_system_frame(2.0, -3.0, None),
+            (2.0, -3.0),
+        )
+
     def test_body_view_centers_follow_selected_parent_and_mass_center(self):
         bodies = _bodies()
 

@@ -65,6 +65,8 @@ Dense trail rendering uses `advance_with_samples()` to collect positions after e
 
 For large visible time steps, the UI decimates those physics samples before appending trails. Trail cadence is a display policy and should not change integration accuracy. In scoped body modes, trails are appended only for active bodies. In `system_overview`, separate group trails are appended instead of body trails. In `hybrid_focused_context`, focused body trails and coarse inset context trails are split from the same coupled worker samples. Focus and Fit uses the visible step as its trail cadence, including for sub-day compact orbits.
 
+Focused body trails may use either the system inertial frame or a focused-parent frame. The relative frame subtracts the focused body's position from every sample, or subtracts the focused group's mass-weighted barycenter at that same sample time. Relative points are anchored at the reference body's current canvas position when drawn, so the recorded local orbit follows a moving parent without altering simulated state. Overview and context trails stay inertial. Switching frames clears dynamic trails and increments the session generation so a worker result planned in the old frame cannot be applied.
+
 ## Display Scale Helpers
 
 `src/scales.py` also owns display-only scale helpers such as elapsed-time formatting, distance formatting, and body-to-body distance measurement for UI readouts. These helpers may use AU or light-years for presentation, but physics and model state still use meters.

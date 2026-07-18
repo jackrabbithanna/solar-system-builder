@@ -9,7 +9,15 @@ from src.constants import DAY
 from src.models import Body, SystemGroup, SystemSettings
 from src.physics import SimulationState
 from src.presets import load_builtin_solar_systems
-from src.scales import derived_max_step_s, focus_target_body_indices, focused_visible_step_s
+from src.scales import (
+    derived_max_step_s,
+    focus_target_body_indices,
+    focus_target_contains_body,
+    focus_target_contains_group,
+    focused_trail_reference_indices,
+    focused_trail_reference_position,
+    focused_visible_step_s,
+)
 
 
 class PlaybackTests(unittest.TestCase):
@@ -154,6 +162,50 @@ class PlaybackTests(unittest.TestCase):
         self.assertEqual(decision.display_indices, [1, 2])
         self.assertEqual(decision.physics_memberships, [[1], [2]])
 
+    def test_focus_target_containment_includes_descendant_bodies_and_groups(self):
+        bodies = [
+            _body("sun", kind="star", mass=10.0),
+            _body("earth", mass=2.0, position=[10.0, 0.0, 0.0], parent_id="sun"),
+            _body("moon", kind="moon", position=[11.0, 0.0, 0.0], parent_id="earth"),
+            _body("other", kind="star", position=[100.0, 0.0, 0.0]),
+        ]
+        groups = [
+            SystemGroup(id="root", name="Root", kind="system", body_ids=[]),
+            SystemGroup(
+                id="inner",
+                name="Inner",
+                kind="planetary_system",
+                body_ids=["sun"],
+                parent_group_id="root",
+            ),
+            SystemGroup(
+                id="outer",
+                name="Outer",
+                kind="stellar_system",
+                body_ids=["other"],
+                parent_group_id="root",
+            ),
+        ]
+
+        self.assertTrue(focus_target_contains_body(bodies, groups, "body:earth", 2))
+        self.assertFalse(focus_target_contains_body(bodies, groups, "body:earth", 0))
+        self.assertTrue(focus_target_contains_group(bodies, groups, "group:root", "inner"))
+        self.assertFalse(focus_target_contains_group(bodies, groups, "group:inner", "outer"))
+
+    def test_focused_trail_reference_uses_body_or_group_barycenter(self):
+        bodies = [
+            _body("sun", kind="star", mass=3.0, position=[0.0, 0.0, 0.0]),
+            _body("planet", mass=1.0, position=[4.0, 0.0, 0.0], parent_id="sun"),
+        ]
+        groups = [
+            SystemGroup(id="system", name="System", kind="planetary_system", body_ids=["sun"])
+        ]
+
+        self.assertEqual(focused_trail_reference_indices(bodies, groups, "body:sun"), [0])
+        self.assertEqual(focused_trail_reference_position(bodies, groups, "body:sun"), (0.0, 0.0))
+        self.assertEqual(focused_trail_reference_indices(bodies, groups, "group:system"), [0, 1])
+        self.assertEqual(focused_trail_reference_position(bodies, groups, "group:system"), (1.0, 0.0))
+
     def test_proxy_state_conserves_mass_barycenter_and_momentum(self):
         state = SimulationState(
             masses_kg=np.array([10.0, 3.0, 1.0]),
@@ -199,7 +251,7 @@ class PlaybackTests(unittest.TestCase):
 
         self.assertEqual(bodies[2].position_m[0] - bodies[1].position_m[0], 4.0)
         self.assertEqual(bodies[2].velocity_mps[0] - bodies[1].velocity_mps[0], 4.0)
-        self.assertEqual(session.trails[1], [(20.0, 0.0)])
+        self.assertEqual(session.trails[1], [(10.0, 0.0)])
         self.assertEqual(session.trails[2], [])
 
     def test_work_estimate_uses_absolute_substeps_and_body_count_squared(self):
@@ -357,6 +409,23 @@ class PlaybackTests(unittest.TestCase):
         self.assertEqual(last_elapsed, 0.0)
         self.assertEqual([float(sample[0][0]) for sample in selected], [3.0, 2.0, 1.0])
 
+    def test_relative_position_samples_follow_moving_body_and_group_barycenter(self):
+        samples = [
+            np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [12.0, 1.0, 0.0]]),
+            np.array([[1.0, 0.0, 0.0], [15.0, 0.0, 0.0], [18.0, 1.0, 0.0]]),
+        ]
+        masses = np.array([4.0, 3.0, 1.0])
+
+        body_relative = playback.relative_position_samples(samples, masses, [1])
+        group_relative = playback.relative_position_samples(samples, masses, [1, 2])
+
+        self.assertEqual(body_relative[0][1].tolist(), [0.0, 0.0, 0.0])
+        self.assertEqual(body_relative[1][2].tolist(), [3.0, 1.0, 0.0])
+        np.testing.assert_allclose(
+            np.average(group_relative[1][[1, 2]], axis=0, weights=masses[[1, 2]]),
+            np.zeros(3),
+        )
+
     def test_stale_generation_results_are_discarded(self):
         self.assertTrue(playback.should_apply_generation(4, 4))
         self.assertFalse(playback.should_apply_generation(3, 4))
@@ -497,6 +566,79 @@ class PlaybackTests(unittest.TestCase):
         self.assertEqual(bodies[1].position_m[0], 20.0)
         self.assertEqual(session.trails[0], [(10.0, 0.0)])
         self.assertEqual(session.trails[1], [(20.0, 0.0)])
+
+    def test_focused_parent_frame_records_moon_relative_to_planet(self):
+        bodies = [
+            _body("sun", kind="star", mass=10.0),
+            _body("earth", mass=2.0, position=[10.0, 0.0, 0.0], parent_id="sun"),
+            _body("moon", kind="moon", position=[11.0, 0.0, 0.0], parent_id="earth"),
+        ]
+        settings = SystemSettings(
+            simulation_scope="full_nbody",
+            trail_sample_interval_s=1.0,
+        )
+        session = playback.SimulationSession.from_bodies(bodies)
+        job = session.create_job(bodies, [], settings, 1, None, "body:earth", 1.0)
+        positions = np.array(
+            [[100.0, 0.0, 0.0], [110.0, 0.0, 0.0], [115.0, 2.0, 0.0]]
+        )
+        result = playback.SimulationJobResult(
+            job.plan,
+            _state(positions.tolist(), elapsed_s=1.0),
+            [positions],
+        )
+
+        self.assertEqual(job.plan.trail_reference_indices, [1])
+        self.assertTrue(session.apply_result(result, bodies, [], settings))
+        self.assertEqual(session.trails[1], [])
+        self.assertEqual(session.trails[2], [(5.0, 2.0)])
+
+    def test_focused_parent_frame_records_relative_trails_while_stepping_backward(self):
+        bodies = [
+            _body("earth", mass=2.0),
+            _body("moon", kind="moon", position=[1.0, 0.0, 0.0], parent_id="earth"),
+        ]
+        settings = SystemSettings(
+            simulation_scope="full_nbody",
+            trail_sample_interval_s=1.0,
+        )
+        session = playback.SimulationSession.from_bodies(bodies)
+        session.state.elapsed_s = 2.0
+        session.clear_dynamic(bodies)
+        job = session.create_job(bodies, [], settings, 0, None, "body:earth", -1.0)
+        positions = np.array([[8.0, 0.0, 0.0], [10.0, 1.0, 0.0]])
+        result = playback.SimulationJobResult(
+            job.plan,
+            _state(positions.tolist(), elapsed_s=1.0),
+            [positions],
+        )
+
+        self.assertTrue(session.apply_result(result, bodies, [], settings))
+        self.assertEqual(session.trails[1], [(2.0, 1.0)])
+
+    def test_system_inertial_frame_records_absolute_focused_trails(self):
+        bodies = [
+            _body("earth", mass=2.0),
+            _body("moon", kind="moon", position=[1.0, 0.0, 0.0], parent_id="earth"),
+        ]
+        settings = SystemSettings(
+            simulation_scope="full_nbody",
+            trail_sample_interval_s=1.0,
+            trail_frame="system_inertial",
+        )
+        session = playback.SimulationSession.from_bodies(bodies)
+        job = session.create_job(bodies, [], settings, 0, None, "body:earth", 1.0)
+        positions = np.array([[10.0, 0.0, 0.0], [12.0, 1.0, 0.0]])
+        result = playback.SimulationJobResult(
+            job.plan,
+            _state(positions.tolist(), elapsed_s=1.0),
+            [positions],
+        )
+
+        self.assertIsNone(job.plan.trail_reference_indices)
+        self.assertTrue(session.apply_result(result, bodies, [], settings))
+        self.assertEqual(session.trails[0], [(10.0, 0.0)])
+        self.assertEqual(session.trails[1], [(12.0, 1.0)])
 
     def test_session_applies_system_overview_without_mutating_body_positions(self):
         bodies = [

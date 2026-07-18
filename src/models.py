@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from .constants import DAY
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 ACCURACY_PROFILES = {"high", "balanced", "fast"}
 BODY_KINDS = frozenset({"star", "planet", "dwarf planet", "moon", "comet", "asteroid"})
@@ -21,6 +21,7 @@ STATE_ORIGINS = frozenset({"cartesian", "orbital", "horizons"})
 REFERENCE_FRAME_SOURCES = frozenset({"app_local", "horizons"})
 DISTANCE_UNITS = {"km", "AU", "kAU", "ly"}
 VIEW_MODES = {"fit_system", "follow_selected", "log_overview"}
+TRAIL_FRAMES = {"focused_parent", "system_inertial"}
 SIMULATION_SCOPES = {
     "auto",
     "full_nbody",
@@ -410,6 +411,7 @@ class SystemSettings:
     view_mode: str = "fit_system"
     simulation_scope: str = "auto"
     trail_sample_interval_s: float = DAY
+    trail_frame: str = "focused_parent"
 
     @classmethod
     def default_for_system(cls, system_id: str) -> "SystemSettings":
@@ -431,6 +433,7 @@ class SystemSettings:
             trail_sample_interval_s=float(
                 data.get("trail_sample_interval_s", defaults.trail_sample_interval_s)
             ),
+            trail_frame=str(data.get("trail_frame", defaults.trail_frame)),
         )
         settings.validate()
         return settings
@@ -448,6 +451,8 @@ class SystemSettings:
             raise ModelError(f"unsupported view_mode {self.view_mode}")
         if self.simulation_scope not in SIMULATION_SCOPES:
             raise ModelError(f"unsupported simulation_scope {self.simulation_scope}")
+        if self.trail_frame not in TRAIL_FRAMES:
+            raise ModelError(f"unsupported trail_frame {self.trail_frame}")
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -458,6 +463,7 @@ class SystemSettings:
             "view_mode": self.view_mode,
             "simulation_scope": self.simulation_scope,
             "trail_sample_interval_s": self.trail_sample_interval_s,
+            "trail_frame": self.trail_frame,
         }
 
 

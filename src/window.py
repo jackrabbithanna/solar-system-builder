@@ -50,7 +50,10 @@ from .scales import (
     effective_focus_settings,
     focused_visible_step_s,
     focus_overview_entity,
+    focus_target_contains_body,
+    focus_target_contains_group,
     focus_target_body_indices,
+    focused_trail_reference_position,
     format_elapsed_time,
     recommended_trail_sample_interval_s,
     unit_factor,
@@ -101,6 +104,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     accuracy_dropdown = Gtk.Template.Child()
     view_mode_dropdown = Gtk.Template.Child()
     simulation_scope_dropdown = Gtk.Template.Child()
+    trail_frame_dropdown = Gtk.Template.Child()
     time_label = Gtk.Template.Child()
     window_title = Gtk.Template.Child()
     system_name_entry = Gtk.Template.Child()
@@ -220,6 +224,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.accuracy_dropdown,
             self.view_mode_dropdown,
             self.simulation_scope_dropdown,
+            self.trail_frame_dropdown,
             self.distance_unit_dropdown,
         )
         self.body_inspector = BodyInspectorPanel(
@@ -317,6 +322,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.system_panel.connect("accuracy-changed", self._on_accuracy_changed)
         self.system_panel.connect("view-mode-changed", self._on_view_mode_changed)
         self.system_panel.connect("simulation-scope-changed", self._on_simulation_scope_changed)
+        self.system_panel.connect("trail-frame-changed", self._on_trail_frame_changed)
         self.system_panel.connect("distance-unit-changed", self._on_distance_unit_changed)
         self.system_panel.connect("system-description-edited", self._on_system_description_edit)
         self.body_inspector.connect("body-edited", self._on_body_edit)
@@ -520,8 +526,13 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _select_body(self, index: int) -> None:
         if not self.system.bodies:
             return
-        self.selected_index = max(0, min(index, len(self.system.bodies) - 1))
-        self.focus_group_id = self._group_id_for_body_index(self.selected_index)
+        selected_index = max(0, min(index, len(self.system.bodies) - 1))
+        preserve_focus = self._focus_contains_body(selected_index)
+        if self.focus_state is not None and not preserve_focus:
+            self._exit_focus()
+        self.selected_index = selected_index
+        if not preserve_focus:
+            self.focus_group_id = self._group_id_for_body_index(self.selected_index)
         self.selected_group_id = None
         self.body_list.select_body(self.selected_index)
         self._load_body_editor(self.system.bodies[self.selected_index])
@@ -530,9 +541,13 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _select_group(self, group_id: str) -> None:
         if self._group_by_id(group_id) is None:
             return
+        preserve_focus = self._focus_contains_group(group_id)
+        if self.focus_state is not None and not preserve_focus:
+            self._exit_focus()
         self.body_list.select_group(group_id)
         if self.selected_group_id != group_id:
-            self.focus_target = None
+            if not preserve_focus:
+                self.focus_target = None
             self.selected_group_id = group_id
             self._load_group_focus(group_id)
             self._update_title()
@@ -552,7 +567,12 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             [candidate for candidate in self.system.bodies if candidate.id != body.id],
             body.parent_id,
         )
-        self._configure_focus_button(self._body_focus_target(body))
+        focus_button_target = (
+            self.focus_state.target
+            if self._focus_contains_body(self.selected_index)
+            else self._body_focus_target(body)
+        )
+        self._configure_focus_button(focus_button_target)
         self._populate_selected_distance_list(body)
         self._load_orbit_editor(body)
         self._configure_position_spins()
@@ -563,7 +583,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         group = self._group_by_id(group_id)
         if group is None:
             return
-        self.focus_group_id = group.id
+        if not self._focus_contains_group(group.id):
+            self.focus_group_id = group.id
         self.body_inspector.set_editing(True)
         self.body_inspector.show_group_properties(True)
         self._set_body_editor_sensitive(False)
@@ -580,7 +601,12 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             parent_options,
             self._current_system_editable(),
         )
-        self._configure_focus_button(f"group:{group.id}")
+        focus_button_target = (
+            self.focus_state.target
+            if self._focus_contains_group(group.id)
+            else f"group:{group.id}"
+        )
+        self._configure_focus_button(focus_button_target)
         self.body_inspector.hide_distance_list()
         self._load_group_orbit_editor(group)
         self.body_inspector.clear_body_values()
@@ -597,6 +623,22 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         if any(candidate.parent_id == body.id for candidate in self.system.bodies):
             return f"body:{body.id}"
         return None
+
+    def _focus_contains_body(self, body_index: int) -> bool:
+        return self.focus_state is not None and focus_target_contains_body(
+            self.system.bodies,
+            self.system.groups,
+            self.focus_state.target,
+            body_index,
+        )
+
+    def _focus_contains_group(self, group_id: str) -> bool:
+        return self.focus_state is not None and focus_target_contains_group(
+            self.system.bodies,
+            self.system.groups,
+            self.focus_state.target,
+            group_id,
+        )
 
     def _clear_dynamic_simulation_state(self) -> None:
         self.simulation.increment_generation()
@@ -1165,6 +1207,15 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self._prompt_reset_for_full_physics()
             return
         self.system.settings.simulation_scope = simulation_scope
+        self._mark_dirty_if_editable()
+        self._clear_dynamic_simulation_state()
+        self._update_title()
+        self._refresh_canvas()
+
+    def _on_trail_frame_changed(self, _panel, trail_frame: str) -> None:
+        if trail_frame == self.system.settings.trail_frame:
+            return
+        self.system.settings.trail_frame = trail_frame
         self._mark_dirty_if_editable()
         self._clear_dynamic_simulation_state()
         self._update_title()
@@ -2315,17 +2366,20 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.delete_selected_button.set_sensitive(editable and has_bodies)
 
     def _on_focus_clicked(self, _button) -> None:
+        if self.focus_state is not None:
+            self._exit_focus()
+            target = f"group:{self.selected_group_id}" if self.selected_group_id is not None else None
+            if target is None and self.system.bodies:
+                target = self._body_focus_target(self.system.bodies[self.selected_index])
+            self._configure_focus_button(target)
+            self._update_title()
+            self._refresh_canvas()
+            return
+
         target = f"group:{self.selected_group_id}" if self.selected_group_id is not None else None
         if target is None and self.system.bodies:
             target = self._body_focus_target(self.system.bodies[self.selected_index])
         if target is None:
-            return
-
-        if self.focus_state is not None and self.focus_state.target == target:
-            self._exit_focus()
-            self._configure_focus_button(target)
-            self._update_title()
-            self._refresh_canvas()
             return
 
         active_indices = focus_target_body_indices(self.system.bodies, self.system.groups, target)
@@ -2363,21 +2417,13 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
 
     def _on_hierarchy_body_selected(self, _list_box: BodyHierarchyList, body_index: int) -> None:
         if body_index != self.selected_index or self.selected_group_id is not None:
-            self._exit_focus()
-            self.selected_group_id = None
-            self.selected_index = body_index
-            self.focus_group_id = self._group_id_for_body_index(body_index)
-            self._load_body_editor(self.system.bodies[body_index])
+            self._select_body(body_index)
             self._update_title()
             self._refresh_canvas()
 
     def _on_hierarchy_group_selected(self, _list_box: BodyHierarchyList, group_id: str) -> None:
         if group_id != self.selected_group_id:
-            self._exit_focus()
-            self.selected_group_id = group_id
-            self._load_group_focus(group_id)
-            self._update_title()
-            self._refresh_canvas()
+            self._select_group(group_id)
 
     def _on_play_clicked(self, _button) -> None:
         self.playing = not self.playing
@@ -2402,12 +2448,11 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._set_zoom_factor(self.zoom_factor * 1.5)
 
     def _on_canvas_body_selected(self, _canvas: SolarSystemCanvas, body_index: int) -> None:
-        self._exit_focus()
         self._select_body(body_index)
+        self._update_title()
         self._refresh_canvas()
 
     def _on_canvas_group_selected(self, _canvas: SolarSystemCanvas, group_id: str) -> None:
-        self._exit_focus()
         self._select_group(group_id)
 
     def _on_canvas_focus_target_selected(self, _canvas: SolarSystemCanvas, target: str) -> None:
@@ -2607,6 +2652,15 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         settings = self._effective_settings()
         active_indices = self._active_body_indices()
         using_hybrid_focus = self._using_hybrid_focus()
+        trail_reference_position = (
+            focused_trail_reference_position(
+                self.system.bodies,
+                self.system.groups,
+                self.focus_state.target,
+            )
+            if self.focus_state is not None and settings.trail_frame == "focused_parent"
+            else None
+        )
         selected_group_center = (
             self._group_center(self.selected_group_id)
             if settings.view_mode == "follow_selected" and self.selected_group_id is not None
@@ -2625,6 +2679,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             using_focused_fit=self.focus_state is not None,
             focused_fit_session=self.focus_fit_session,
             selected_group_center=selected_group_center,
+            trail_reference_position=trail_reference_position,
             trails=list(self.simulation.trails),
             overview_entities=self._overview_entities(),
             overview_positions=self._overview_positions(),

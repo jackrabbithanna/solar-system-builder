@@ -27,7 +27,7 @@ Completed results are applied by `SimulationSession.apply_result(...)` on the GT
 - overview/context state caches and trails
 - the session elapsed time
 
-After a result applies, `window.py` refreshes GTK widgets: relationship labels, selected editor fields, the time label, and the canvas scene. Trails are appended on the GTK main thread from the sampled positions returned by `advance_with_samples()`. The trail selection, capping, and storage logic lives in `playback.py`.
+After a result applies, `window.py` refreshes GTK widgets: relationship labels, selected editor fields, the time label, and the canvas scene. Trails are appended on the GTK main thread from the sampled positions returned by `advance_with_samples()`. The trail selection, capping, and inertial-to-focused-frame translation logic lives in `playback.py`.
 
 JPL Horizons import and whole-system refresh share a separate single-worker executor. Refresh progress and completion are marshalled with `GLib.idle_add`; the worker only constructs immutable data. Cancellation and generation checks prevent stale batches from touching GTK or the active model, and a validated replacement system is installed on the GTK main thread only after every request succeeds.
 
@@ -37,7 +37,7 @@ At star-scale detail, Auto and scoped body policies send planet-and-moon members
 
 ## Stale Result Guard
 
-`SimulationSession.generation` protects user edits, resets, and system loads from stale worker results. Increment it whenever the base simulation state is replaced because of user edits, loading a different system, resetting state, or saving a new baseline.
+`SimulationSession.generation` protects user edits, resets, system loads, and trail-frame switches from stale worker results. Increment it whenever the base simulation state is replaced because of user edits, loading a different system, resetting state, saving a new baseline, or selecting a different trail coordinate frame.
 
 Worker results should only apply when their captured generation still matches the current generation.
 

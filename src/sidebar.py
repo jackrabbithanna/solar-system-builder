@@ -25,6 +25,7 @@ from .scales import (
     TIME_UNITS,
     VIEW_MODE_LABELS,
     SIMULATION_SCOPE_LABELS,
+    TRAIL_FRAME_LABELS,
     time_unit_for_seconds,
     unit_factor,
     unit_index,
@@ -182,6 +183,7 @@ class SystemPropertiesPanel(GObject.GObject):
         "accuracy-changed": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
         "view-mode-changed": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
         "simulation-scope-changed": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
+        "trail-frame-changed": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
         "distance-unit-changed": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
     }
 
@@ -197,6 +199,7 @@ class SystemPropertiesPanel(GObject.GObject):
         accuracy_dropdown,
         view_mode_dropdown,
         simulation_scope_dropdown,
+        trail_frame_dropdown,
         distance_unit_dropdown,
     ):
         super().__init__()
@@ -210,6 +213,7 @@ class SystemPropertiesPanel(GObject.GObject):
         self.accuracy_dropdown = accuracy_dropdown
         self.view_mode_dropdown = view_mode_dropdown
         self.simulation_scope_dropdown = simulation_scope_dropdown
+        self.trail_frame_dropdown = trail_frame_dropdown
         self.distance_unit_dropdown = distance_unit_dropdown
         self.editing = False
 
@@ -217,6 +221,7 @@ class SystemPropertiesPanel(GObject.GObject):
         self._setup_dropdown(self.accuracy_dropdown, ACCURACY_LABELS)
         self._setup_dropdown(self.view_mode_dropdown, VIEW_MODE_LABELS)
         self._setup_dropdown(self.simulation_scope_dropdown, SIMULATION_SCOPE_LABELS)
+        self._setup_dropdown(self.trail_frame_dropdown, TRAIL_FRAME_LABELS)
         self._setup_dropdown(self.distance_unit_dropdown, DISTANCE_UNITS)
 
         self.system_name_entry.connect("activate", self._on_system_name_edit)
@@ -232,6 +237,7 @@ class SystemPropertiesPanel(GObject.GObject):
         self.accuracy_dropdown.connect("notify::selected", self._on_accuracy_changed)
         self.view_mode_dropdown.connect("notify::selected", self._on_view_mode_changed)
         self.simulation_scope_dropdown.connect("notify::selected", self._on_simulation_scope_changed)
+        self.trail_frame_dropdown.connect("notify::selected", self._on_trail_frame_changed)
         self.distance_unit_dropdown.connect("notify::selected", self._on_distance_unit_changed)
 
     def load_system(self, system: SolarSystem, editable: bool) -> None:
@@ -267,6 +273,7 @@ class SystemPropertiesPanel(GObject.GObject):
             self.accuracy_dropdown.set_selected(unit_index(ACCURACY_LABELS, settings.accuracy_profile))
             self.view_mode_dropdown.set_selected(unit_index(VIEW_MODE_LABELS, settings.view_mode))
             self.simulation_scope_dropdown.set_selected(unit_index(SIMULATION_SCOPE_LABELS, settings.simulation_scope))
+            self.trail_frame_dropdown.set_selected(unit_index(TRAIL_FRAME_LABELS, settings.trail_frame))
             self.distance_unit_dropdown.set_selected(unit_index(DISTANCE_UNITS, settings.distance_unit))
         finally:
             self.editing = False
@@ -316,6 +323,12 @@ class SystemPropertiesPanel(GObject.GObject):
             selected = dropdown.get_selected()
             if selected < len(SIMULATION_SCOPE_LABELS):
                 self.emit("simulation-scope-changed", SIMULATION_SCOPE_LABELS[selected][1])
+
+    def _on_trail_frame_changed(self, dropdown, _param) -> None:
+        if not self.editing:
+            selected = dropdown.get_selected()
+            if selected < len(TRAIL_FRAME_LABELS):
+                self.emit("trail-frame-changed", TRAIL_FRAME_LABELS[selected][1])
 
     def _on_distance_unit_changed(self, dropdown, _param) -> None:
         if not self.editing:

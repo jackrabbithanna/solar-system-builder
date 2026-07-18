@@ -43,6 +43,11 @@ VIEW_MODE_LABELS: tuple[tuple[str, str], ...] = (
     ("Log Overview", "log_overview"),
 )
 
+TRAIL_FRAME_LABELS: tuple[tuple[str, str], ...] = (
+    ("Focused Parent", "focused_parent"),
+    ("System / Inertial", "system_inertial"),
+)
+
 SIMULATION_SCOPE_LABELS: tuple[tuple[str, str], ...] = (
     ("Auto", "auto"),
     ("Full N-body", "full_nbody"),
@@ -270,6 +275,62 @@ def focus_target_body_indices(
     if target_type == "body":
         return _body_descendant_indices(bodies, target_id)
     return []
+
+
+def focus_target_contains_body(
+    bodies: list[Body],
+    groups: list[SystemGroup],
+    focus_target: str | None,
+    body_index: int,
+) -> bool:
+    return body_index in focus_target_body_indices(bodies, groups, focus_target)
+
+
+def focus_target_contains_group(
+    bodies: list[Body],
+    groups: list[SystemGroup],
+    focus_target: str | None,
+    group_id: str,
+) -> bool:
+    focused = set(focus_target_body_indices(bodies, groups, focus_target))
+    candidate = set(focus_target_body_indices(bodies, groups, f"group:{group_id}"))
+    return bool(focused and candidate and candidate <= focused)
+
+
+def focused_trail_reference_indices(
+    bodies: list[Body],
+    groups: list[SystemGroup],
+    focus_target: str | None,
+) -> list[int]:
+    target_type, _, target_id = (focus_target or "").partition(":")
+    if target_type == "body":
+        return [
+            index
+            for index, body in enumerate(bodies)
+            if body.id == target_id
+        ]
+    if target_type == "group":
+        return focus_target_body_indices(bodies, groups, focus_target)
+    return []
+
+
+def focused_trail_reference_position(
+    bodies: list[Body],
+    groups: list[SystemGroup],
+    focus_target: str | None,
+) -> tuple[float, float] | None:
+    indices = focused_trail_reference_indices(bodies, groups, focus_target)
+    if not indices:
+        return None
+    total_mass = sum(bodies[index].mass_kg for index in indices)
+    if total_mass <= 0.0:
+        return None
+    return (
+        sum(bodies[index].mass_kg * bodies[index].position_m[0] for index in indices)
+        / total_mass,
+        sum(bodies[index].mass_kg * bodies[index].position_m[1] for index in indices)
+        / total_mass,
+    )
 
 
 def focused_visible_step_s(bodies: list[Body], accuracy_profile: str) -> float:

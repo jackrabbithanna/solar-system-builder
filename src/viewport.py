@@ -102,6 +102,16 @@ def project(
     return origin_x + x_delta * scale, origin_y - y_delta * scale
 
 
+def trail_point_in_system_frame(
+    x_m: float,
+    y_m: float,
+    reference_position: tuple[float, float] | None,
+) -> tuple[float, float]:
+    if reference_position is None:
+        return x_m, y_m
+    return x_m + reference_position[0], y_m + reference_position[1]
+
+
 def view_distance(
     x_m: float,
     y_m: float,
