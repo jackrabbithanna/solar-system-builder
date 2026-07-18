@@ -316,6 +316,12 @@
                       </object>
                     </child>
                     <child>
+                      <object class="GtkButton" id="horizons_refresh_button">
+                        <property name="label" translatable="yes">Refresh from JPL Horizons</property>
+                        <property name="tooltip-text" translatable="yes">Update all JPL Horizons bodies to the current instant</property>
+                      </object>
+                    </child>
+                    <child>
                       <object class="GtkBox" id="preset_edit_box">
                         <property name="orientation">horizontal</property>
                         <property name="spacing">8</property>

@@ -12,9 +12,9 @@ import math
 import re
 import threading
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import urlopen
 
 from .constants import AU, DAY, G
@@ -154,6 +154,28 @@ class HorizonsImportDraft:
         return tuple(missing)
 
 
+@dataclass(frozen=True)
+class HorizonsBodyRefresh:
+    """One canonical body-state replacement returned by a system refresh."""
+
+    body_id: str
+    command: str
+    position_m: tuple[float, float, float]
+    velocity_mps: tuple[float, float, float]
+    orbit: OrbitData | None
+    data_source: DataSource
+
+
+@dataclass(frozen=True)
+class HorizonsSystemRefresh:
+    """A complete, single-epoch Horizons refresh that is safe to apply atomically."""
+
+    system_id: str
+    utc_epoch: str
+    tdb_epoch: str
+    bodies: tuple[HorizonsBodyRefresh, ...]
+
+
 def parse_required_physical_value(value: str, field_name: str) -> float:
     cleaned = value.strip()
     if not cleaned:
@@ -176,6 +198,22 @@ def parse_horizons_vector(result_text: str) -> StateVector:
     except ValueError as error:
         raise HorizonsError("Horizons vector row contains invalid numbers") from error
     return StateVector(position_m=values[:3], velocity_mps=values[3:])
+
+
+def parse_horizons_vector_with_delta_t(result_text: str) -> tuple[StateVector, float]:
+    """Parse a vector row emitted with ``VEC_DELTA_T=YES``."""
+
+    row = _first_csv_ephemeris_row(result_text)
+    if len(row) < 9:
+        raise HorizonsError("Horizons vector row is missing TDB-UT")
+    try:
+        delta_t_s = float(row[2])
+        values = [float(item) * KM_TO_M for item in row[3:9]]
+    except ValueError as error:
+        raise HorizonsError("Horizons vector row contains invalid numbers") from error
+    if not math.isfinite(delta_t_s):
+        raise HorizonsError("Horizons vector row contains invalid TDB-UT")
+    return StateVector(position_m=values[:3], velocity_mps=values[3:]), delta_t_s
 
 
 def parse_horizons_elements(result_text: str) -> OrbitalElements:
@@ -346,13 +384,46 @@ def horizons_command_for_result(
     return result.spkid
 
 
+def horizons_command_for_body(body: Body) -> str:
+    """Recover the exact Horizons command saved for an existing body."""
+
+    source = body.data_source
+    if source is not None and source.source_name.casefold() == "jpl horizons":
+        parsed = urlparse(source.source_url.strip())
+        if (
+            parsed.scheme == "https"
+            and parsed.hostname in {"ssd.jpl.nasa.gov", "ssd-api.jpl.nasa.gov"}
+            and parsed.path.rstrip("/") == "/api/horizons.api"
+        ):
+            for key, values in parse_qs(parsed.query, keep_blank_values=True).items():
+                if key.casefold() != "command" or not values:
+                    continue
+                command = values[0].strip()
+                if len(command) >= 2 and command[0] == command[-1] and command[0] in "'\"":
+                    command = command[1:-1].strip()
+                if command:
+                    return command
+        catalog_id = source.catalog_id.strip()
+        if catalog_id:
+            return catalog_id
+    if body.kind == "star" and body.name.casefold() in {"sun", "sol"}:
+        return "10"
+    raise ModelError(f"{body.name} does not have a reusable JPL Horizons command")
+
+
 def build_vector_url(
     target_id: str,
     frame: SystemReferenceFrame,
     *,
     center_catalog_id: str | None = None,
+    time_type: str | None = None,
+    include_delta_t: bool = False,
+    include_object_data: bool = True,
 ) -> str:
     _validate_horizons_frame(frame)
+    selected_time_type = time_type or frame.time_scale
+    if selected_time_type not in {"UT", "TT", "TDB"}:
+        raise ModelError("Horizons vector time type must be UT, TT, or TDB")
     center_id = frame.center_id
     if center_catalog_id is not None:
         cleaned_center = center_catalog_id.strip()
@@ -362,13 +433,14 @@ def build_vector_url(
     params = {
         "format": "json",
         "COMMAND": f"'{target_id}'",
-        "OBJ_DATA": "YES",
+        "OBJ_DATA": "YES" if include_object_data else "NO",
         "MAKE_EPHEM": "YES",
         "EPHEM_TYPE": "VECTORS",
         "CENTER": f"'{center_id}'",
         "TLIST": f"'{frame.epoch}'",
         "TLIST_TYPE": "CAL",
-        "TIME_TYPE": frame.time_scale,
+        "TIME_TYPE": selected_time_type,
+        "TIME_DIGITS": "FRACSEC",
         "REF_PLANE": frame.reference_plane,
         "REF_SYSTEM": frame.reference_system,
         "OUT_UNITS": "KM-S",
@@ -377,6 +449,8 @@ def build_vector_url(
         "VEC_CORR": "NONE",
         "CSV_FORMAT": "YES",
     }
+    if include_delta_t:
+        params["VEC_DELTA_T"] = "YES"
     return f"{HORIZONS_URL}?{urlencode(params)}"
 
 
@@ -419,6 +493,7 @@ def build_elements_url(
         "TLIST": f"'{frame.epoch}'",
         "TLIST_TYPE": "CAL",
         "TIME_TYPE": frame.time_scale,
+        "TIME_DIGITS": "FRACSEC",
         "REF_PLANE": frame.reference_plane,
         "REF_SYSTEM": frame.reference_system,
         "OUT_UNITS": "AU-D",
@@ -541,6 +616,136 @@ class HorizonsClient:
             warning=warning,
         )
 
+    def fetch_system_refresh(
+        self,
+        system: SolarSystem,
+        utc_now: datetime,
+        *,
+        cancel_event: threading.Event | None = None,
+        progress: Callable[[int, int, str, str], None] | None = None,
+    ) -> HorizonsSystemRefresh:
+        """Fetch every Horizons-backed body without mutating ``system``."""
+
+        frame = system.reference_frame
+        if frame is None or not frame.horizons_compatible:
+            raise ModelError("system reference frame is not compatible with Horizons refresh")
+        bodies = horizons_refreshable_bodies(system)
+        if not bodies:
+            raise ModelError("system does not contain any JPL Horizons bodies")
+        if utc_now.tzinfo is None:
+            raise ModelError("current refresh time must include a UTC offset")
+        captured_utc = utc_now.astimezone(timezone.utc).replace(microsecond=0)
+        utc_calendar = captured_utc.replace(tzinfo=None).isoformat(
+            sep=" ", timespec="seconds"
+        )
+        utc_frame = replace(frame, epoch=utc_calendar)
+
+        commands: dict[str, str] = {}
+        parent_catalog_ids: dict[str, str] = {}
+        bodies_by_id = {body.id: body for body in system.bodies}
+        for body in bodies:
+            commands[body.id] = horizons_command_for_body(body)
+            if body.parent_id is None:
+                continue
+            parent = bodies_by_id.get(body.parent_id)
+            if parent is None:
+                raise ModelError(f"{body.name} parent body does not exist")
+            parent_catalog_id = horizons_catalog_id(parent)
+            if parent_catalog_id is None:
+                raise ModelError(
+                    f"{body.name} parent {parent.name} does not have a JPL Horizons catalog id"
+                )
+            parent_catalog_ids[body.id] = parent_catalog_id
+
+        total = len(bodies) + len(parent_catalog_ids)
+        completed = 0
+        vectors: dict[str, tuple[StateVector, str]] = {}
+        delta_t_s: float | None = None
+        for body in bodies:
+            _raise_if_refresh_cancelled(cancel_event)
+            if progress is not None:
+                progress(completed, total, body.name, "Fetching current state")
+            vector_url = build_vector_url(
+                commands[body.id],
+                utc_frame,
+                time_type="UT",
+                include_delta_t=True,
+                include_object_data=False,
+            )
+            try:
+                payload = self._get_json(vector_url, api_name="Horizons")
+                vector, body_delta_t_s = parse_horizons_vector_with_delta_t(
+                    _result_text(payload, commands[body.id])
+                )
+            except HorizonsError as error:
+                raise HorizonsError(f"{body.name}: {error}") from error
+            if delta_t_s is None:
+                delta_t_s = body_delta_t_s
+            elif abs(body_delta_t_s - delta_t_s) > 1.0e-3:
+                raise HorizonsError("Horizons returned inconsistent TDB-UT offsets")
+            vectors[body.id] = (vector, vector_url)
+            completed += 1
+
+        if delta_t_s is None:
+            raise HorizonsError("Horizons refresh did not return a TDB-UT offset")
+        tdb_datetime = captured_utc.replace(tzinfo=None) + timedelta(seconds=delta_t_s)
+        tdb_epoch = _format_horizons_epoch(tdb_datetime)
+        tdb_frame = replace(frame, epoch=tdb_epoch)
+
+        updates: list[HorizonsBodyRefresh] = []
+        for body in bodies:
+            orbit = None
+            parent_catalog_id = parent_catalog_ids.get(body.id)
+            if parent_catalog_id is not None:
+                _raise_if_refresh_cancelled(cancel_event)
+                if progress is not None:
+                    progress(completed, total, body.name, "Fetching orbital elements")
+                try:
+                    elements_url = build_elements_url(
+                        commands[body.id],
+                        tdb_frame,
+                        parent_catalog_id,
+                    )
+                    elements_payload = self._get_json(elements_url, api_name="Horizons")
+                    elements = parse_horizons_elements(
+                        _result_text(elements_payload, commands[body.id])
+                    )
+                except HorizonsError as error:
+                    raise HorizonsError(f"{body.name}: {error}") from error
+                orbit = elements.to_orbit_data(tdb_epoch)
+                completed += 1
+            vector, vector_url = vectors[body.id]
+            catalog_id = horizons_catalog_id(body) or commands[body.id]
+            citation = "JPL Horizons state vector"
+            if orbit is not None:
+                citation += " and osculating elements"
+            updates.append(
+                HorizonsBodyRefresh(
+                    body_id=body.id,
+                    command=commands[body.id],
+                    position_m=tuple(vector.position_m),
+                    velocity_mps=tuple(vector.velocity_mps),
+                    orbit=orbit,
+                    data_source=DataSource(
+                        source_name="JPL Horizons",
+                        source_url=vector_url,
+                        catalog_id=catalog_id,
+                        retrieved_at=captured_utc.date().isoformat(),
+                        citation=f"{citation}.",
+                    ),
+                )
+            )
+
+        _raise_if_refresh_cancelled(cancel_event)
+        if progress is not None:
+            progress(total, total, "JPL Horizons", "Finishing refresh")
+        return HorizonsSystemRefresh(
+            system_id=system.id,
+            utc_epoch=captured_utc.isoformat(timespec="seconds").replace("+00:00", "Z"),
+            tdb_epoch=tdb_epoch,
+            bodies=tuple(updates),
+        )
+
     def _get_json(self, url: str, *, api_name: str) -> dict[str, Any]:
         try:
             with self._request_lock:
@@ -571,6 +776,27 @@ def horizons_import_available(system: SolarSystem) -> bool:
         )
         for body in system.bodies
     )
+
+
+def horizons_refreshable_bodies(system: SolarSystem) -> list[Body]:
+    """Return bodies whose canonical state can be refreshed from Horizons."""
+
+    frame = system.reference_frame
+    if frame is None or not frame.horizons_compatible:
+        return []
+    return [
+        body
+        for body in system.bodies
+        if (
+            body.data_source is not None
+            and body.data_source.source_name.casefold() == "jpl horizons"
+        )
+        or (body.kind == "star" and body.name.casefold() in {"sun", "sol"})
+    ]
+
+
+def horizons_refresh_available(system: SolarSystem) -> bool:
+    return bool(horizons_refreshable_bodies(system))
 
 
 def horizons_catalog_id(body: Body) -> str | None:
@@ -655,10 +881,58 @@ def add_imported_body(
     return body.id
 
 
+def apply_system_refresh(
+    system: SolarSystem,
+    refresh: HorizonsSystemRefresh,
+) -> SolarSystem:
+    """Return a validated clone with an all-or-nothing refresh applied."""
+
+    if refresh.system_id != system.id:
+        raise ModelError("Horizons refresh belongs to a different system")
+    current_bodies = horizons_refreshable_bodies(system)
+    current_ids = {body.id for body in current_bodies}
+    update_ids = {update.body_id for update in refresh.bodies}
+    if current_ids != update_ids or len(update_ids) != len(refresh.bodies):
+        raise ModelError("system bodies changed while Horizons refresh was running")
+
+    candidate = SolarSystem.from_dict(system.to_dict())
+    candidate_by_id = {body.id: body for body in candidate.bodies}
+    for update in refresh.bodies:
+        body = candidate_by_id[update.body_id]
+        if horizons_command_for_body(body) != update.command:
+            raise ModelError(f"{body.name} Horizons source changed during refresh")
+        body.position_m = list(update.position_m)
+        body.velocity_mps = list(update.velocity_mps)
+        body.orbit = update.orbit
+        body.data_source = update.data_source
+        body.state_origin = "horizons"
+
+    frame = candidate.reference_frame
+    if frame is None:
+        raise ModelError("Horizons refresh requires a system reference frame")
+    frame.epoch = refresh.tdb_epoch
+    center_label = (
+        "heliocentric" if frame.center_id == "500@10" else "solar-system barycentric"
+    )
+    candidate.epoch = f"{refresh.tdb_epoch} TDB, JPL Horizons, {center_label}"
+    candidate.validate()
+    return candidate
+
+
 def _validate_horizons_frame(frame: SystemReferenceFrame) -> None:
     frame.validate()
     if not frame.horizons_compatible:
         raise ModelError("system reference frame is not compatible with Horizons import")
+
+
+def _format_horizons_epoch(epoch: datetime) -> str:
+    timespec = "microseconds" if epoch.microsecond else "seconds"
+    return epoch.isoformat(sep=" ", timespec=timespec)
+
+
+def _raise_if_refresh_cancelled(cancel_event: threading.Event | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise HorizonsError("Horizons refresh cancelled")
 
 
 def _validate_signature(payload: dict[str, Any], api_name: str) -> None:

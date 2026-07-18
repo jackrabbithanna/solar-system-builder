@@ -1,8 +1,10 @@
 import io
 import json
 import math
+import threading
 import unittest
 from collections import deque
+from datetime import datetime, timezone
 
 from src.horizons import (
     HorizonsClient,
@@ -10,15 +12,20 @@ from src.horizons import (
     HorizonsImportDraft,
     HorizonsSearchResult,
     add_imported_body,
+    apply_system_refresh,
     build_elements_url,
     build_lookup_url,
     build_sbdb_url,
     build_vector_url,
     horizons_command_for_result,
+    horizons_command_for_body,
     horizons_import_available,
+    horizons_refresh_available,
+    horizons_refreshable_bodies,
     parse_horizons_elements,
     parse_horizons_physical_properties,
     parse_horizons_vector,
+    parse_horizons_vector_with_delta_t,
     parse_required_physical_value,
     parse_sbdb_physical_properties,
     shift_horizons_frame_epoch,
@@ -32,6 +39,32 @@ VECTOR_RESULT = """
 Target body name: Mars (499)
 $$SOE
 2461205.500000000, A.D. 2026-Jun-14 00:00:00.0000, -2.014, 3.125, 0.042, -0.001, -0.002, 0.003
+$$EOE
+"""
+
+VECTOR_WITH_DELTA_RESULT = """
+Target body name: Earth (399)
+$$SOE
+2461239.500000000, A.D. 2026-Jul-18 00:00:00.0000, 69.183656, 6.4E+07, -1.3E+08, 8.0E+03, 2.6E+01, 1.2E+01, 2.2E-04,
+$$EOE
+"""
+
+SECOND_VECTOR_WITH_DELTA_RESULT = """
+Target body name: Mars (499)
+$$SOE
+2461239.500000000, A.D. 2026-Jul-18 00:00:00.0000, 69.183656, 2.0E+08, -3.0E+08, 4.0E+07, 5.0E+00, 6.0E+00, 7.0E+00,
+$$EOE
+"""
+
+
+def _vector_with_delta_result(name, position_km, velocity_kmps=(0.0, 0.0, 0.0)):
+    values = ", ".join(
+        str(value) for value in (*position_km, *velocity_kmps)
+    )
+    return f"""
+Target body name: {name}
+$$SOE
+2461239.500000000, A.D. 2026-Jul-18 00:00:00.0000, 69.183656, {values},
 $$EOE
 """
 
@@ -98,6 +131,15 @@ class HorizonsTests(unittest.TestCase):
         self.assertEqual(vector.velocity_mps, [-1.0, -2.0, 3.0])
         self.assertGreater(elements.semi_major_axis_m, 1.0e11)
         self.assertGreater(elements.orbital_period_s, 3.0e7)
+
+    def test_vector_delta_t_parser_handles_horizons_trailing_csv_field(self):
+        vector, delta_t_s = parse_horizons_vector_with_delta_t(
+            VECTOR_WITH_DELTA_RESULT
+        )
+
+        self.assertAlmostEqual(delta_t_s, 69.183656)
+        self.assertEqual(vector.position_m, [6.4e10, -1.3e11, 8.0e6])
+        self.assertEqual(vector.velocity_mps, [2.6e4, 1.2e4, 0.22])
 
     def test_horizons_physical_parser_prefers_gm_and_mean_radius(self):
         physical = parse_horizons_physical_properties(JUPITER_RESULT)
@@ -200,6 +242,26 @@ class HorizonsTests(unittest.TestCase):
             "DES=A898 PA;",
         )
 
+    def test_existing_body_recovers_exact_horizons_command_before_catalog_fallback(self):
+        system = create_system("Sol Test", "sol", epoch="2026-06-14 00:00:00")
+        body = system.bodies[0]
+        body.data_source = DataSource(
+            source_name="JPL Horizons",
+            source_url=(
+                "https://ssd.jpl.nasa.gov/api/horizons.api?"
+                "format=json&COMMAND=%27DES%3D1P%3B+CAP+%3C+2026%3B%27"
+            ),
+            catalog_id="1000036",
+        )
+
+        self.assertEqual(
+            horizons_command_for_body(body),
+            "DES=1P; CAP < 2026;",
+        )
+
+        body.data_source.source_url = "https://ssd.jpl.nasa.gov/horizons/"
+        self.assertEqual(horizons_command_for_body(body), "1000036")
+
     def test_search_handles_no_matches_and_rejects_new_api_major(self):
         no_match = FakeOpener(
             _payload(source="NASA/JPL Horizons Lookup API", version="1.1", count="0")
@@ -289,6 +351,201 @@ class HorizonsTests(unittest.TestCase):
         self.assertIsNone(draft.orbit)
         self.assertIn("orbital elements unavailable", draft.warning)
         self.assertEqual(draft.data_source.citation, "JPL Horizons state vector.")
+
+    def test_system_refresh_uses_one_shared_utc_frame_and_matching_tdb_elements(self):
+        system = create_system("Sol Test", "sol", epoch="2026-06-14 00:00:00")
+        sun = system.bodies[0]
+        mars = add_body_from_state(
+            system,
+            BodyStateInput(
+                name="Mars",
+                kind="planet",
+                mass_kg=6.4e23,
+                radius_m=3.4e6,
+                position_m=(1.0, 2.0, 3.0),
+                velocity_mps=(4.0, 5.0, 6.0),
+                color="#ffffff",
+                parent_id=sun.id,
+            ),
+        )
+        mars.data_source = DataSource(
+            source_name="JPL Horizons",
+            source_url=(
+                "https://ssd.jpl.nasa.gov/api/horizons.api?"
+                "COMMAND=%27499%27&EPHEM_TYPE=ELEMENTS"
+            ),
+            catalog_id="499",
+        )
+        opener = FakeOpener(
+            _payload(VECTOR_WITH_DELTA_RESULT),
+            _payload(SECOND_VECTOR_WITH_DELTA_RESULT),
+            _payload(ELEMENTS_RESULT),
+        )
+        progress = []
+
+        refresh = HorizonsClient(opener=opener).fetch_system_refresh(
+            system,
+            datetime(2026, 7, 18, 0, 0, 0, 987654, tzinfo=timezone.utc),
+            progress=lambda *values: progress.append(values),
+        )
+
+        self.assertEqual(refresh.utc_epoch, "2026-07-18T00:00:00Z")
+        self.assertEqual(refresh.tdb_epoch, "2026-07-18 00:01:09.183656")
+        self.assertEqual([item.body_id for item in refresh.bodies], [sun.id, mars.id])
+        vector_urls = [url for url, _timeout in opener.urls[:2]]
+        self.assertTrue(all("CENTER=%27500%4010%27" in url for url in vector_urls))
+        self.assertTrue(all("TIME_TYPE=UT" in url for url in vector_urls))
+        self.assertTrue(all("TIME_DIGITS=FRACSEC" in url for url in vector_urls))
+        self.assertTrue(all("VEC_DELTA_T=YES" in url for url in vector_urls))
+        self.assertIn("TIME_TYPE=TDB", opener.urls[2][0])
+        self.assertIn("TIME_DIGITS=FRACSEC", opener.urls[2][0])
+        self.assertIn("CENTER=%27500%4010%27", opener.urls[2][0])
+        self.assertEqual(progress[-1][:2], (3, 3))
+
+    def test_apply_system_refresh_preserves_non_horizons_and_physical_properties(self):
+        system = create_system("Sol Test", "sol", epoch="2026-06-14 00:00:00")
+        sun = system.bodies[0]
+        manual = add_body_from_state(
+            system,
+            BodyStateInput(
+                name="Manual Planet",
+                kind="planet",
+                mass_kg=7.0,
+                radius_m=8.0,
+                position_m=(9.0, 10.0, 11.0),
+                velocity_mps=(12.0, 13.0, 14.0),
+                color="#123456",
+                parent_id=sun.id,
+            ),
+        )
+        opener = FakeOpener(_payload(VECTOR_WITH_DELTA_RESULT))
+        refresh = HorizonsClient(opener=opener).fetch_system_refresh(
+            system,
+            datetime(2026, 7, 18, tzinfo=timezone.utc),
+        )
+
+        updated = apply_system_refresh(system, refresh)
+
+        self.assertIsNot(updated, system)
+        self.assertEqual(system.reference_frame.epoch, "2026-06-14 00:00:00")
+        self.assertEqual(updated.reference_frame.epoch, "2026-07-18 00:01:09.183656")
+        self.assertEqual(updated.bodies[0].mass_kg, sun.mass_kg)
+        self.assertEqual(updated.bodies[0].radius_m, sun.radius_m)
+        updated_manual = next(body for body in updated.bodies if body.id == manual.id)
+        self.assertEqual(updated_manual.position_m, manual.position_m)
+        self.assertEqual(updated_manual.velocity_mps, manual.velocity_mps)
+        self.assertEqual(updated_manual.color, "#123456")
+        self.assertEqual(updated.bodies[0].state_origin, "horizons")
+        self.assertIn("JPL Horizons", updated.epoch)
+
+    def test_system_refresh_keeps_enceladus_closer_to_saturn_than_titan(self):
+        system = create_system("Saturn with Moons", "sol", epoch="2026-06-14 00:00:00")
+        sun = system.bodies[0]
+
+        def add_horizons_body(name, kind, catalog_id, parent, distance_km):
+            body = add_body_from_state(
+                system,
+                BodyStateInput(
+                    name=name,
+                    kind=kind,
+                    mass_kg=1.0e20,
+                    radius_m=1.0e5,
+                    position_m=(distance_km * 1000.0, 0.0, 0.0),
+                    velocity_mps=(0.0, 0.0, 0.0),
+                    color="#ffffff",
+                    parent_id=parent.id,
+                ),
+            )
+            body.data_source = DataSource(
+                source_name="JPL Horizons",
+                catalog_id=catalog_id,
+            )
+            return body
+
+        saturn = add_horizons_body("Saturn", "planet", "699", sun, 1.4e9)
+        titan = add_horizons_body("Titan", "moon", "606", saturn, 1.4e9)
+        enceladus = add_horizons_body("Enceladus", "moon", "602", saturn, 1.4e9)
+        saturn_x_km = 1.4e9
+        opener = FakeOpener(
+            _payload(_vector_with_delta_result("Sun", (0.0, 0.0, 0.0))),
+            _payload(_vector_with_delta_result("Saturn", (saturn_x_km, 0.0, 0.0))),
+            _payload(
+                _vector_with_delta_result(
+                    "Titan",
+                    (saturn_x_km + 1_221_870.0, 0.0, 0.0),
+                )
+            ),
+            _payload(
+                _vector_with_delta_result(
+                    "Enceladus",
+                    (saturn_x_km + 237_948.0, 0.0, 0.0),
+                )
+            ),
+            _payload(ELEMENTS_RESULT),
+            _payload(ELEMENTS_RESULT),
+            _payload(ELEMENTS_RESULT),
+        )
+
+        refresh = HorizonsClient(opener=opener).fetch_system_refresh(
+            system,
+            datetime(2026, 7, 18, tzinfo=timezone.utc),
+        )
+        updated = apply_system_refresh(system, refresh)
+        by_id = {body.id: body for body in updated.bodies}
+        enceladus_distance = math.dist(
+            by_id[enceladus.id].position_m,
+            by_id[saturn.id].position_m,
+        )
+        titan_distance = math.dist(
+            by_id[titan.id].position_m,
+            by_id[saturn.id].position_m,
+        )
+
+        self.assertAlmostEqual(enceladus_distance, 237_948_000.0)
+        self.assertAlmostEqual(titan_distance, 1_221_870_000.0)
+        self.assertLess(enceladus_distance, titan_distance)
+        self.assertTrue(
+            all(
+                "CENTER=%27500%4010%27" in url
+                for url, _timeout in opener.urls[:4]
+            )
+        )
+
+    def test_system_refresh_cancel_and_failure_leave_source_model_unchanged(self):
+        system = create_system("Sol Test", "sol", epoch="2026-06-14 00:00:00")
+        before = system.to_dict()
+        cancelled = threading.Event()
+        cancelled.set()
+        opener = FakeOpener(_payload(VECTOR_WITH_DELTA_RESULT))
+
+        with self.assertRaisesRegex(HorizonsError, "cancelled"):
+            HorizonsClient(opener=opener).fetch_system_refresh(
+                system,
+                datetime(2026, 7, 18, tzinfo=timezone.utc),
+                cancel_event=cancelled,
+            )
+        self.assertEqual(opener.urls, [])
+        self.assertEqual(system.to_dict(), before)
+
+        failing = FakeOpener(_payload("No ephemeris table"))
+        with self.assertRaisesRegex(HorizonsError, "Sun"):
+            HorizonsClient(opener=failing).fetch_system_refresh(
+                system,
+                datetime(2026, 7, 18, tzinfo=timezone.utc),
+            )
+        self.assertEqual(system.to_dict(), before)
+
+    def test_refresh_availability_requires_compatible_frame_and_provenance(self):
+        system = create_system("Sol Test", "sol", epoch="2026-06-14 00:00:00")
+        self.assertTrue(horizons_refresh_available(system))
+        self.assertEqual(horizons_refreshable_bodies(system), [system.bodies[0]])
+
+        custom = create_system("Custom")
+        custom.bodies[0].data_source = DataSource(
+            source_name="JPL Horizons",
+            catalog_id="10",
+        )
+        self.assertFalse(horizons_refresh_available(custom))
 
     def test_add_imported_body_is_atomic_and_prevents_duplicates(self):
         system = create_system("Sol Test", "sol", epoch="2026-06-14 00:00:00")

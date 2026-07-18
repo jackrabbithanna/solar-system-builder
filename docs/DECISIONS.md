@@ -38,6 +38,8 @@ Cartesian body vectors are canonical. Orbital elements and sources are provenanc
 
 Live JPL Horizons import is limited to Sol systems with a compatible frame. Requests use one executor and a serialized client, validate the API signature and major version, and return immutable drafts. Playback stops before the request; its elapsed time offsets the request epoch. Vectors use the selected cataloged parent as their center and are translated onto the parent's current shared-frame state on the GTK main thread, preventing fixed-epoch imports from being mixed with advanced parent states. Horizons object data prefills mean radius and mass when present; mass is derived from GM in SI units when GM is the available value. Small bodies may use structured JPL SBDB GM and diameter data as a fallback. Unavailable physical fields remain required in the review dialog. Only reviewed drafts are applied to the model on the GTK main thread.
 
+Whole-system refresh is a separate atomic operation. It captures one UTC instant, fetches every canonical vector directly in the system's shared center, uses Horizons' reported TDB-UT offset for the stored TDB epoch, and fetches parent-centered elements only as metadata. Any request failure or cancellation discards the batch. Bundled presets remain immutable; refreshing one produces a saved editable copy.
+
 ## Main-Thread GTK Updates
 
 Background workers may compute physics, but GTK updates must happen on the main thread through `GLib.idle_add`.

@@ -122,6 +122,8 @@ The system menu in the header switches between bundled presets and saved systems
 
 The System Name and Description fields edit user-saved metadata. The reference-frame summary shows the shared epoch, time scale, center, plane, and reference system. Existing frame metadata is read-only because changing it correctly requires transforming every body vector.
 
+Refresh from JPL Horizons updates all Horizons-backed bodies to one current instant. It works directly on editable systems and marks them dirty. For a bundled preset, it creates, saves, and selects an editable `<Preset Name> Updated` copy; installed preset files remain unchanged. Systems without compatible Horizons frame metadata or bodies disable the action.
+
 The title shows `*` while a saved system has unsaved changes. Switching systems, creating another system, closing, or resetting offers Save, Discard, and Cancel. The header Save button writes changes without leaving the current system. Reset then restores the loaded or last-saved snapshot and clears unsaved edits.
 
 ### Creation Workflows
@@ -188,6 +190,8 @@ Search JPL Horizons appears in the Add menu for editable Sol systems with compat
 Starting a Horizons search pauses playback and invalidates any unfinished playback step. Requests use the system epoch plus the displayed elapsed simulation time. When the selected parent has a Horizons catalog id, vectors are fetched relative to that parent and translated onto its current system-frame position and velocity; moon imports require such a cataloged parent. Adding the body preserves the displayed elapsed time.
 
 The review dialog shows the resolved body, type, parent, parent-relative and resulting system-frame XYZ/velocity vectors, source, and SPK catalog id. It prefills mass and radius when JPL supplies GM, mean-radius, radius, or small-body diameter data; GM is converted to mass and diameter to radius in SI units. Any unavailable physical value remains required before Add Body. Imported bodies retain their Horizons source, retrieval date, catalog id, optional osculating elements, and `horizons` canonical-state origin. Duplicate catalog ids are rejected.
+
+After any body or star-system addition, compatible systems offer to refresh all Horizons bodies. The same workflow is available from the system-level Refresh button. It stops playback, shows cancellable per-request progress, fetches every vector in the shared system frame at one captured current UTC instant, converts that instant to the Horizons TDB epoch, and resets playback to zero elapsed time after a successful atomic update. A failed or cancelled body request applies nothing. Mass, radius, colors, visibility, trail settings, names, and hierarchy are preserved; non-Horizons bodies keep their entered Cartesian state.
 
 ## Narrow Windows
 

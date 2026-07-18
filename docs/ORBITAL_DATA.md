@@ -81,4 +81,8 @@ Sun-only systems created with the Sol workflow can search JPL Horizons. The clie
 
 Horizons does not provide every physical field required by the simulator, so the review step requires the user to supply mass and radius. Imports record source URL, catalog id, retrieval date, and citation. Network requests are serialized on a background worker and stale/cancelled results are ignored on the GTK main thread.
 
+The system-level Refresh from JPL Horizons action updates every Horizons-backed body at one captured current instant. Cartesian vectors use the system's shared heliocentric or solar-system-barycentric center rather than each body's parent; parent-centered requests are used only for refreshed osculating elements. Horizons supplies the TDB-UT offset used to store the exact shared TDB epoch. The client returns an immutable batch, and the app validates a cloned system before applying any result, so one failed or cancelled request leaves the entire system unchanged.
+
+Refresh changes positions, velocities, orbital elements, epochs, and Horizons provenance. It preserves physical and display properties. Non-Horizons bodies keep their user-entered Cartesian states at the new epoch.
+
 NASA Exoplanet Archive import remains out of scope. Its data can still be entered manually with source metadata.

@@ -7,9 +7,10 @@
 from __future__ import annotations
 
 import math
+import threading
 import traceback
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import date
+from datetime import date, datetime, timezone
 
 import gi
 
@@ -26,8 +27,11 @@ from .horizons import (
     HorizonsImportDraft,
     HorizonsSearchResult,
     add_imported_body,
+    apply_system_refresh,
     horizons_catalog_id,
     horizons_import_available,
+    horizons_refresh_available,
+    horizons_refreshable_bodies,
     parse_required_physical_value,
     shift_horizons_frame_epoch,
 )
@@ -102,6 +106,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     system_name_entry = Gtk.Template.Child()
     system_description_entry = Gtk.Template.Child()
     reference_frame_label = Gtk.Template.Child()
+    horizons_refresh_button = Gtk.Template.Child()
     preset_edit_box = Gtk.Template.Child()
     duplicate_to_edit_button = Gtk.Template.Child()
     delete_system_button = Gtk.Template.Child()
@@ -183,6 +188,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.horizons_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="horizons")
         self.horizons_client = HorizonsClient()
         self.horizons_generation = 0
+        self.horizons_refresh_cancel: threading.Event | None = None
+        self.horizons_refresh_in_progress = False
         self.zoom_factor = 1.0
         self.timer_id = GLib.timeout_add(33, self._tick)
         self.sidebar_resize_id = 0
@@ -290,6 +297,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.reset_zoom_button.connect("clicked", self._on_reset_zoom_clicked)
         self.zoom_in_button.connect("clicked", self._on_zoom_in_clicked)
         self.new_system_button.connect("clicked", self._on_new_system_clicked)
+        self.horizons_refresh_button.connect("clicked", self._on_refresh_horizons_clicked)
         self.duplicate_to_edit_button.connect("clicked", lambda *_args: self.duplicate_button.emit("clicked"))
         self.add_star_system_button.connect("clicked", self._on_add_star_system_clicked)
         self.add_star_button.connect("clicked", self._on_add_star_clicked)
@@ -346,6 +354,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             GLib.source_remove(self.sidebar_resize_id)
             self.sidebar_resize_id = 0
         self.simulation_executor.shutdown(wait=False, cancel_futures=True)
+        if self.horizons_refresh_cancel is not None:
+            self.horizons_refresh_cancel.set()
         self.horizons_generation += 1
         self.horizons_executor.shutdown(wait=False, cancel_futures=True)
         return False
@@ -393,6 +403,11 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         dialog.present(self)
 
     def _load_system(self, system: SolarSystem) -> None:
+        if self.horizons_refresh_cancel is not None:
+            self.horizons_refresh_cancel.set()
+            self.horizons_refresh_cancel = None
+        self.horizons_refresh_in_progress = False
+        self.horizons_generation += 1
         self.playing = False
         self.play_button.set_icon_name("media-playback-start-symbolic")
         self._replace_system(system, refresh_snapshot=True)
@@ -617,6 +632,214 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
 
     def _orbit_editor_widgets(self):
         return self.body_inspector.orbit_editor_widgets()
+
+    def _on_refresh_horizons_clicked(self, _button) -> None:
+        self._request_horizons_refresh(after_add=False)
+
+    def _request_horizons_refresh(self, *, after_add: bool) -> None:
+        if self.horizons_refresh_in_progress:
+            return
+        bodies = horizons_refreshable_bodies(self.system)
+        if not bodies:
+            self._show_error_dialog(
+                "Horizons Refresh Unavailable",
+                "This system does not contain refreshable JPL Horizons bodies in a compatible frame.",
+            )
+            return
+        preset = not self.system_library.is_user_saved(self.system)
+        manual_count = len(self.system.bodies) - len(bodies)
+        body_word = "body" if len(bodies) == 1 else "bodies"
+        if after_add:
+            title = "Refresh Horizons Bodies?"
+            message = (
+                f"Update {len(bodies)} JPL Horizons {body_word} to the current instant?"
+            )
+        else:
+            title = "Refresh from JPL Horizons?"
+            message = (
+                f"Fetch current positions, velocities, and orbital elements for "
+                f"{len(bodies)} JPL Horizons {body_word}."
+            )
+        if manual_count:
+            if manual_count == 1:
+                message += "\n\n1 non-Horizons body keeps its entered Cartesian state."
+            else:
+                message += (
+                    f"\n\n{manual_count} non-Horizons bodies keep their entered "
+                    "Cartesian states."
+                )
+        if preset:
+            message += "\n\nA saved editable copy of this bundled preset will be created."
+
+        dialog = Adw.AlertDialog.new(title, message)
+        dialog.add_response("cancel", "Not Now" if after_add else "Cancel")
+        dialog.add_response("refresh", "Refresh All")
+        dialog.set_close_response("cancel")
+        dialog.set_default_response("refresh")
+        dialog.set_response_appearance("refresh", Adw.ResponseAppearance.SUGGESTED)
+        dialog.connect(
+            "response",
+            lambda _dialog, response: (
+                self._start_horizons_refresh() if response == "refresh" else None
+            ),
+        )
+        dialog.present(self)
+
+    def _start_horizons_refresh(self) -> None:
+        if self.horizons_refresh_in_progress or not horizons_refresh_available(self.system):
+            return
+        self._stop_playback_for_structural_work()
+        snapshot = self._clone_system(self.system)
+        selected_body_id = (
+            self.system.bodies[self.selected_index].id if self.system.bodies else None
+        )
+        preset = not self.system_library.is_user_saved(self.system)
+        source_name = self.system.name
+        captured_utc = datetime.now(timezone.utc)
+
+        self.horizons_generation += 1
+        generation = self.horizons_generation
+        cancel_event = threading.Event()
+        self.horizons_refresh_cancel = cancel_event
+        self.horizons_refresh_in_progress = True
+        self._sync_structural_controls()
+
+        progress_dialog = Adw.AlertDialog.new(
+            "Refreshing JPL Horizons Bodies",
+            "Preparing requests...",
+        )
+        progress_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        progress_box.set_margin_top(12)
+        progress_box.set_margin_bottom(12)
+        spinner = Gtk.Spinner(spinning=True, halign=Gtk.Align.CENTER)
+        progress_label = Gtk.Label(label="Starting refresh", xalign=0.5, wrap=True)
+        progress_box.append(spinner)
+        progress_box.append(progress_label)
+        progress_dialog.set_extra_child(progress_box)
+        progress_dialog.add_response("cancel", "Cancel")
+        progress_dialog.set_close_response("cancel")
+        dialog_state = {"finishing": False}
+
+        def cancel_refresh(_dialog, _response: str) -> None:
+            if dialog_state["finishing"]:
+                return
+            cancel_event.set()
+            if generation == self.horizons_generation:
+                self.horizons_generation += 1
+            if self.horizons_refresh_cancel is cancel_event:
+                self.horizons_refresh_cancel = None
+            self.horizons_refresh_in_progress = False
+            self._sync_structural_controls()
+
+        progress_dialog.connect("response", cancel_refresh)
+        progress_dialog.present(self)
+
+        def report_progress(
+            completed: int,
+            total: int,
+            body_name: str,
+            stage: str,
+        ) -> None:
+            GLib.idle_add(
+                self._update_horizons_refresh_progress,
+                generation,
+                progress_label,
+                completed,
+                total,
+                body_name,
+                stage,
+            )
+
+        future = self.horizons_executor.submit(
+            self.horizons_client.fetch_system_refresh,
+            snapshot,
+            captured_utc,
+            cancel_event=cancel_event,
+            progress=report_progress,
+        )
+        future.add_done_callback(
+            lambda completed: GLib.idle_add(
+                self._finish_horizons_refresh,
+                completed,
+                generation,
+                progress_dialog,
+                dialog_state,
+                cancel_event,
+                preset,
+                source_name,
+                selected_body_id,
+            )
+        )
+
+    def _update_horizons_refresh_progress(
+        self,
+        generation: int,
+        label,
+        completed: int,
+        total: int,
+        body_name: str,
+        stage: str,
+    ) -> bool:
+        if self.closed or generation != self.horizons_generation:
+            return GLib.SOURCE_REMOVE
+        request_number = total if completed >= total else completed + 1
+        label.set_label(f"{stage}\n{body_name}\nRequest {request_number} of {total}")
+        return GLib.SOURCE_REMOVE
+
+    def _finish_horizons_refresh(
+        self,
+        future: Future,
+        generation: int,
+        progress_dialog,
+        dialog_state: dict,
+        cancel_event: threading.Event,
+        preset: bool,
+        source_name: str,
+        selected_body_id: str | None,
+    ) -> bool:
+        if self.closed or generation != self.horizons_generation:
+            return GLib.SOURCE_REMOVE
+        dialog_state["finishing"] = True
+        progress_dialog.close()
+        if self.horizons_refresh_cancel is cancel_event:
+            self.horizons_refresh_cancel = None
+        self.horizons_refresh_in_progress = False
+        try:
+            refresh = future.result()
+            updated = apply_system_refresh(self.system, refresh)
+        except Exception as error:
+            self._sync_structural_controls()
+            self._show_error_dialog("Horizons Refresh Failed", str(error))
+            return GLib.SOURCE_REMOVE
+
+        if preset:
+            updated = updated.duplicate(f"{source_name} Updated")
+            self.system_library.save_new_system(updated)
+            result_message = (
+                f"Created and selected the editable saved system '{updated.name}'."
+            )
+        else:
+            self._replace_system(
+                updated,
+                refresh_snapshot=False,
+                selected_body_id=selected_body_id,
+            )
+            self.system_library.refresh(self.system)
+            self._mark_dirty()
+            result_message = "The refreshed system has unsaved changes."
+        self._sync_structural_controls()
+        self._show_information_dialog(
+            "Horizons Refresh Complete",
+            f"Updated {len(refresh.bodies)} bodies at {refresh.tdb_epoch} TDB.\n\n{result_message}",
+        )
+        return GLib.SOURCE_REMOVE
+
+    def _show_information_dialog(self, title: str, message: str) -> None:
+        dialog = Adw.AlertDialog.new(title, message)
+        dialog.add_response("ok", "OK")
+        dialog.set_default_response("ok")
+        dialog.set_close_response("ok")
+        dialog.present(self)
 
     def _set_orbit_editor_sensitive(self, sensitive: bool) -> None:
         self.body_inspector.set_orbit_editor_sensitive(sensitive)
@@ -1386,7 +1609,10 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             except ModelError as error:
                 self._show_error_dialog("Cannot Add Horizons Body", str(error))
                 return
-            self._after_structural_edit(selected_body_id=body_id)
+            self._after_structural_edit(
+                selected_body_id=body_id,
+                offer_horizons_refresh=True,
+            )
 
         dialog.connect("response", add_reviewed)
         dialog.present(self)
@@ -1663,7 +1889,10 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         except ModelError as error:
             self._show_error_dialog("Cannot Add Star System", str(error))
             return
-        self._after_structural_edit(selected_group_id=group.id)
+        self._after_structural_edit(
+            selected_group_id=group.id,
+            offer_horizons_refresh=True,
+        )
 
     def _on_add_star_clicked(self, _button) -> None:
         self._show_manual_body_dialog("star", "Add Star", "New Star", [])
@@ -1865,7 +2094,10 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
                 self.simulation.replace_bodies(self.system.bodies)
             self._show_error_dialog("Cannot Add Body", str(error))
             return
-        self._after_structural_edit(selected_body_id=body.id)
+        self._after_structural_edit(
+            selected_body_id=body.id,
+            offer_horizons_refresh=True,
+        )
 
     def _dialog_spin(
         self,
@@ -2019,6 +2251,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self,
         selected_body_id: str | None = None,
         selected_group_id: str | None = None,
+        offer_horizons_refresh: bool = False,
     ) -> None:
         self.playing = False
         self.play_button.set_icon_name("media-playback-start-symbolic")
@@ -2040,6 +2273,13 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._refresh_canvas()
         self._sync_structural_controls()
         self._mark_dirty()
+        if offer_horizons_refresh and horizons_refresh_available(self.system):
+            GLib.idle_add(self._offer_horizons_refresh_after_add)
+
+    def _offer_horizons_refresh_after_add(self) -> bool:
+        if not self.closed and horizons_refresh_available(self.system):
+            self._request_horizons_refresh(after_add=True)
+        return GLib.SOURCE_REMOVE
 
     def _sync_structural_controls(self) -> None:
         has_bodies = bool(self.system.bodies)
@@ -2060,6 +2300,18 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.add_comet_button.set_sensitive(editable and bool(self._eligible_parent_options({"star"})))
         self.add_asteroid_button.set_sensitive(editable and bool(self._eligible_parent_options({"star"})))
         self.search_horizons_button.set_sensitive(editable and horizons_import_available(self.system))
+        refresh_available = horizons_refresh_available(self.system)
+        self.horizons_refresh_button.set_sensitive(
+            refresh_available and not self.horizons_refresh_in_progress
+        )
+        if refresh_available:
+            self.horizons_refresh_button.set_tooltip_text(
+                "Update all JPL Horizons bodies to the current instant"
+            )
+        else:
+            self.horizons_refresh_button.set_tooltip_text(
+                "Requires JPL Horizons bodies in a compatible Sol reference frame"
+            )
         self.delete_selected_button.set_sensitive(editable and has_bodies)
 
     def _on_focus_clicked(self, _button) -> None:
