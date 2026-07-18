@@ -554,6 +554,7 @@ class PlaybackTests(unittest.TestCase):
     def test_session_replace_bodies_resets_dynamic_state_and_generation(self):
         bodies = [_body("a")]
         session = playback.SimulationSession.from_bodies(bodies)
+        session.state.elapsed_s = 42.0
         session.trails[0].append((1.0, 1.0))
         session.overview_trails["x"] = [(2.0, 2.0)]
 
@@ -563,6 +564,11 @@ class PlaybackTests(unittest.TestCase):
         self.assertEqual(session.trails, [[]])
         self.assertEqual(session.overview_trails, {})
         self.assertEqual(session.state.positions_m[0][0], 3.0)
+        self.assertEqual(session.state.elapsed_s, 42.0)
+
+        session.replace_bodies(bodies, elapsed_s=0.0)
+
+        self.assertEqual(session.state.elapsed_s, 0.0)
 
 
 def _body(

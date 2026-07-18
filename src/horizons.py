@@ -11,14 +11,14 @@ import json
 import math
 import re
 import threading
-from dataclasses import dataclass
-from datetime import date
+from dataclasses import dataclass, replace
+from datetime import date, datetime, timedelta
 from typing import Any, Callable
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
 from .constants import AU, DAY, G
-from .models import DataSource, ModelError, OrbitData, SolarSystem, SystemReferenceFrame
+from .models import Body, DataSource, ModelError, OrbitData, SolarSystem, SystemReferenceFrame
 from .system_editing import BodyStateInput, add_body_from_state, default_body_state
 
 HORIZONS_URL = "https://ssd.jpl.nasa.gov/api/horizons.api"
@@ -138,6 +138,7 @@ class HorizonsImportDraft:
     velocity_mps: list[float]
     orbit: OrbitData | None
     data_source: DataSource
+    vector_center_catalog_id: str | None = None
     mass_kg: float | None = None
     radius_m: float | None = None
     physical_data_notes: tuple[str, ...] = ()
@@ -345,15 +346,26 @@ def horizons_command_for_result(
     return result.spkid
 
 
-def build_vector_url(target_id: str, frame: SystemReferenceFrame) -> str:
+def build_vector_url(
+    target_id: str,
+    frame: SystemReferenceFrame,
+    *,
+    center_catalog_id: str | None = None,
+) -> str:
     _validate_horizons_frame(frame)
+    center_id = frame.center_id
+    if center_catalog_id is not None:
+        cleaned_center = center_catalog_id.strip()
+        if not cleaned_center:
+            raise ModelError("Horizons vector center catalog id is required")
+        center_id = f"500@{cleaned_center}"
     params = {
         "format": "json",
         "COMMAND": f"'{target_id}'",
         "OBJ_DATA": "YES",
         "MAKE_EPHEM": "YES",
         "EPHEM_TYPE": "VECTORS",
-        "CENTER": f"'{frame.center_id}'",
+        "CENTER": f"'{center_id}'",
         "TLIST": f"'{frame.epoch}'",
         "TLIST_TYPE": "CAL",
         "TIME_TYPE": frame.time_scale,
@@ -366,6 +378,29 @@ def build_vector_url(target_id: str, frame: SystemReferenceFrame) -> str:
         "CSV_FORMAT": "YES",
     }
     return f"{HORIZONS_URL}?{urlencode(params)}"
+
+
+def shift_horizons_frame_epoch(
+    frame: SystemReferenceFrame,
+    elapsed_s: float,
+) -> SystemReferenceFrame:
+    """Return a compatible frame whose epoch includes simulation elapsed time."""
+
+    _validate_horizons_frame(frame)
+    if not math.isfinite(elapsed_s):
+        raise ModelError("simulation elapsed time must be finite")
+    if elapsed_s == 0.0:
+        return replace(frame)
+    try:
+        epoch = datetime.fromisoformat(frame.epoch.strip())
+    except ValueError as error:
+        raise ModelError(
+            "Horizons reference-frame epoch must be an ISO date and time "
+            "before playback can be offset"
+        ) from error
+    shifted = epoch + timedelta(seconds=elapsed_s)
+    timespec = "microseconds" if shifted.microsecond else "seconds"
+    return replace(frame, epoch=shifted.isoformat(sep=" ", timespec=timespec))
 
 
 def build_elements_url(
@@ -439,8 +474,13 @@ class HorizonsClient:
         kind = result.suggested_kind
         if kind is None:
             raise HorizonsError(f"{result.name} is not a supported physical body")
+        parent_catalog_id = parent_catalog_id.strip() if parent_catalog_id else None
         target_command = horizons_command_for_result(result, frame)
-        vector_url = build_vector_url(target_command, frame)
+        vector_url = build_vector_url(
+            target_command,
+            frame,
+            center_catalog_id=parent_catalog_id,
+        )
         vector_payload = self._get_json(vector_url, api_name="Horizons")
         vector_text = _result_text(vector_payload, result.spkid)
         vector = parse_horizons_vector(vector_text)
@@ -494,6 +534,7 @@ class HorizonsClient:
                 retrieved_at=date.today().isoformat(),
                 citation=f"{citation}.",
             ),
+            vector_center_catalog_id=parent_catalog_id,
             mass_kg=physical.mass_kg,
             radius_m=physical.radius_m,
             physical_data_notes=physical.notes,
@@ -532,6 +573,18 @@ def horizons_import_available(system: SolarSystem) -> bool:
     )
 
 
+def horizons_catalog_id(body: Body) -> str | None:
+    if (
+        body.data_source is not None
+        and body.data_source.source_name.casefold() == "jpl horizons"
+        and body.data_source.catalog_id.strip()
+    ):
+        return body.data_source.catalog_id.strip()
+    if body.kind == "star" and body.name.casefold() in {"sun", "sol"}:
+        return "10"
+    return None
+
+
 def add_imported_body(
     system: SolarSystem,
     draft: HorizonsImportDraft,
@@ -550,6 +603,31 @@ def add_imported_body(
     ):
         raise ModelError(f"{draft.name} is already present in this system")
     selected_kind = kind or draft.kind
+    parent = next((body for body in system.bodies if body.id == parent_id), None)
+    if parent is None:
+        raise ModelError("parent body does not exist")
+    position_m = list(draft.position_m)
+    velocity_mps = list(draft.velocity_mps)
+    if draft.vector_center_catalog_id is not None:
+        parent_catalog_id = horizons_catalog_id(parent)
+        if parent_catalog_id is None:
+            raise ModelError(
+                f"{parent.name} does not have a Horizons catalog id for relative-state import"
+            )
+        if parent_catalog_id != draft.vector_center_catalog_id:
+            raise ModelError(
+                "imported vector center does not match the selected parent body"
+            )
+        position_m = [
+            parent.position_m[axis] + draft.position_m[axis]
+            for axis in range(3)
+        ]
+        velocity_mps = [
+            parent.velocity_mps[axis] + draft.velocity_mps[axis]
+            for axis in range(3)
+        ]
+    elif selected_kind == "moon":
+        raise ModelError("Horizons moon import requires a parent with a Horizons catalog id")
     defaults = default_body_state(draft.name, selected_kind)
     body = add_body_from_state(
         system,
@@ -558,8 +636,8 @@ def add_imported_body(
             kind=selected_kind,
             mass_kg=mass_kg,
             radius_m=radius_m,
-            position_m=tuple(draft.position_m),
-            velocity_mps=tuple(draft.velocity_mps),
+            position_m=tuple(position_m),
+            velocity_mps=tuple(velocity_mps),
             color=color or defaults.color,
             parent_id=parent_id,
         ),

@@ -203,8 +203,16 @@ class SimulationSession:
     def from_bodies(cls, bodies: list[Body]) -> "SimulationSession":
         return cls(SimulationState.from_bodies(bodies))
 
-    def replace_bodies(self, bodies: list[Body], *, increment_generation: bool = True) -> None:
+    def replace_bodies(
+        self,
+        bodies: list[Body],
+        *,
+        elapsed_s: float | None = None,
+        increment_generation: bool = True,
+    ) -> None:
+        preserved_elapsed_s = self.state.elapsed_s if elapsed_s is None else elapsed_s
         self.state = SimulationState.from_bodies(bodies)
+        self.state.elapsed_s = preserved_elapsed_s
         if increment_generation:
             self.generation += 1
         self.auto_approximation_locked = False

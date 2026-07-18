@@ -1,5 +1,6 @@
 import io
 import json
+import math
 import unittest
 from collections import deque
 
@@ -20,10 +21,11 @@ from src.horizons import (
     parse_horizons_vector,
     parse_required_physical_value,
     parse_sbdb_physical_properties,
+    shift_horizons_frame_epoch,
 )
-from src.constants import G
+from src.constants import DAY, G
 from src.models import DataSource, ModelError, OrbitData
-from src.system_editing import create_system
+from src.system_editing import BodyStateInput, add_body_from_state, create_system
 
 
 VECTOR_RESULT = """
@@ -223,6 +225,7 @@ class HorizonsTests(unittest.TestCase):
 
         self.assertEqual(draft.kind, "planet")
         self.assertIsNotNone(draft.orbit)
+        self.assertEqual(draft.vector_center_catalog_id, "10")
         self.assertEqual(draft.missing_physical_fields, ("mass_kg", "radius_m"))
         self.assertIn("CENTER=%27500%4010%27", opener.urls[0][0])
         self.assertIn("EPHEM_TYPE=ELEMENTS", opener.urls[1][0])
@@ -320,6 +323,176 @@ class HorizonsTests(unittest.TestCase):
                 parent_id=sun.id,
             )
 
+    def test_parent_centered_import_translates_onto_current_parent_state(self):
+        system = create_system("Sol Test", "sol", epoch="2026-06-14 00:00:00")
+        sun = system.bodies[0]
+        sun.position_m = [100.0, 200.0, 300.0]
+        sun.velocity_mps = [10.0, 20.0, 30.0]
+        draft = HorizonsImportDraft(
+            name="Mars",
+            kind="planet",
+            catalog_id="499",
+            position_m=[1.0, 2.0, 3.0],
+            velocity_mps=[4.0, 5.0, 6.0],
+            orbit=None,
+            data_source=DataSource(source_name="JPL Horizons", catalog_id="499"),
+            vector_center_catalog_id="10",
+        )
+
+        body_id = add_imported_body(
+            system,
+            draft,
+            mass_kg=6.4e23,
+            radius_m=3.4e6,
+            parent_id=sun.id,
+        )
+
+        mars = next(body for body in system.bodies if body.id == body_id)
+        self.assertEqual(mars.position_m, [101.0, 202.0, 303.0])
+        self.assertEqual(mars.velocity_mps, [14.0, 25.0, 36.0])
+
+    def test_advanced_parent_regression_keeps_enceladus_closer_than_titan(self):
+        system = create_system("Sol Test", "sol", epoch="2026-06-14 00:00:00")
+        sun = system.bodies[0]
+        saturn = add_body_from_state(
+            system,
+            BodyStateInput(
+                name="Saturn",
+                kind="planet",
+                mass_kg=5.7e26,
+                radius_m=5.8e7,
+                position_m=(1.3e12, 5.3e11, -6.0e10),
+                velocity_mps=(-4.2e3, 8.9e3, 10.0),
+                color="#ffffff",
+                parent_id=sun.id,
+            ),
+        )
+        saturn.data_source = DataSource(source_name="JPL Horizons", catalog_id="699")
+        titan = add_body_from_state(
+            system,
+            BodyStateInput(
+                name="Titan",
+                kind="moon",
+                mass_kg=1.3e23,
+                radius_m=2.6e6,
+                position_m=(
+                    saturn.position_m[0] + 1.25e9,
+                    saturn.position_m[1],
+                    saturn.position_m[2],
+                ),
+                velocity_mps=tuple(saturn.velocity_mps),
+                color="#ffffff",
+                parent_id=saturn.id,
+            ),
+        )
+        draft = HorizonsImportDraft(
+            name="Enceladus",
+            kind="moon",
+            catalog_id="602",
+            position_m=[2.37e8, 0.0, 0.0],
+            velocity_mps=[0.0, 12_000.0, 0.0],
+            orbit=None,
+            data_source=DataSource(source_name="JPL Horizons", catalog_id="602"),
+            vector_center_catalog_id="699",
+        )
+
+        enceladus_id = add_imported_body(
+            system,
+            draft,
+            mass_kg=1.1e20,
+            radius_m=2.5e5,
+            parent_id=saturn.id,
+        )
+        enceladus = next(body for body in system.bodies if body.id == enceladus_id)
+
+        self.assertAlmostEqual(math.dist(enceladus.position_m, saturn.position_m), 2.37e8)
+        self.assertLess(
+            math.dist(enceladus.position_m, saturn.position_m),
+            math.dist(titan.position_m, saturn.position_m),
+        )
+
+    def test_parent_centered_import_rejects_wrong_or_missing_moon_parent_catalog(self):
+        system = create_system("Sol Test", "sol", epoch="2026-06-14 00:00:00")
+        sun = system.bodies[0]
+        saturn = add_body_from_state(
+            system,
+            BodyStateInput(
+                name="Manual Saturn",
+                kind="planet",
+                mass_kg=5.7e26,
+                radius_m=5.8e7,
+                position_m=(1.0, 0.0, 0.0),
+                velocity_mps=(0.0, 1.0, 0.0),
+                color="#ffffff",
+                parent_id=sun.id,
+            ),
+        )
+        relative_moon = HorizonsImportDraft(
+            name="Enceladus",
+            kind="moon",
+            catalog_id="602",
+            position_m=[2.0, 0.0, 0.0],
+            velocity_mps=[0.0, 2.0, 0.0],
+            orbit=None,
+            data_source=DataSource(source_name="JPL Horizons", catalog_id="602"),
+            vector_center_catalog_id="699",
+        )
+        absolute_moon = HorizonsImportDraft(
+            name="Enceladus",
+            kind="moon",
+            catalog_id="602",
+            position_m=[2.0, 0.0, 0.0],
+            velocity_mps=[0.0, 2.0, 0.0],
+            orbit=None,
+            data_source=DataSource(source_name="JPL Horizons", catalog_id="602"),
+        )
+
+        for draft in (relative_moon, absolute_moon):
+            with self.subTest(center=draft.vector_center_catalog_id):
+                with self.assertRaisesRegex(ModelError, "Horizons catalog id"):
+                    add_imported_body(
+                        system,
+                        draft,
+                        mass_kg=1.1e20,
+                        radius_m=2.5e5,
+                        parent_id=saturn.id,
+                    )
+
+        saturn.data_source = DataSource(
+            source_name="JPL Horizons",
+            catalog_id="799",
+        )
+        with self.assertRaisesRegex(ModelError, "does not match"):
+            add_imported_body(
+                system,
+                relative_moon,
+                mass_kg=1.1e20,
+                radius_m=2.5e5,
+                parent_id=saturn.id,
+            )
+
+    def test_shift_horizons_frame_epoch_applies_positive_and_negative_elapsed_time(self):
+        frame = create_system(
+            "Sol Test",
+            "sol",
+            epoch="2026-06-14 00:00:00",
+        ).reference_frame
+
+        forward = shift_horizons_frame_epoch(frame, DAY + 1.5)
+        backward = shift_horizons_frame_epoch(frame, -DAY)
+
+        self.assertEqual(forward.epoch, "2026-06-15 00:00:01.500000")
+        self.assertEqual(backward.epoch, "2026-06-13 00:00:00")
+        self.assertEqual(frame.epoch, "2026-06-14 00:00:00")
+
+    def test_shift_horizons_frame_epoch_rejects_invalid_offset_inputs(self):
+        frame = create_system("Sol Test", "sol", epoch="not-a-date").reference_frame
+
+        with self.assertRaisesRegex(ModelError, "ISO date"):
+            shift_horizons_frame_epoch(frame, 1.0)
+        with self.assertRaisesRegex(ModelError, "finite"):
+            shift_horizons_frame_epoch(frame, float("nan"))
+
     def test_invalid_import_metadata_rolls_back_body(self):
         system = create_system("Sol Test", "sol", epoch="2026-06-14 00:00:00")
         sun = system.bodies[0]
@@ -354,6 +527,10 @@ class HorizonsTests(unittest.TestCase):
         self.assertIn("sstr=1990+MU", build_lookup_url("1990 MU"))
         self.assertIn("sstr=1000036", build_sbdb_url("1000036"))
         self.assertIn("VEC_TABLE=2", build_vector_url("499", system.reference_frame))
+        self.assertIn(
+            "CENTER=%27500%40699%27",
+            build_vector_url("602", system.reference_frame, center_catalog_id="699"),
+        )
         self.assertIn("500%4010", build_elements_url("499", system.reference_frame, "10"))
 
 

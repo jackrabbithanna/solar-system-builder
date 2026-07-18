@@ -50,4 +50,4 @@ On close:
 
 ## Reset
 
-The reset button restores the current system from the loaded-state snapshot. That snapshot is refreshed when a system is loaded, duplicated, or saved. Reset stops playback, increments the session generation, clears trails, rebuilds simulation state, and redraws on the GTK main thread.
+The reset button restores the current system from the loaded-state snapshot. That snapshot is refreshed when a system is loaded, duplicated, or saved. Reset stops playback, increments the session generation, clears trails, rebuilds simulation state at zero elapsed time, and redraws on the GTK main thread. Structural edits rebuild the state while preserving the current elapsed time.

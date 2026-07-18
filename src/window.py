@@ -26,8 +26,10 @@ from .horizons import (
     HorizonsImportDraft,
     HorizonsSearchResult,
     add_imported_body,
+    horizons_catalog_id,
     horizons_import_available,
     parse_required_physical_value,
+    shift_horizons_frame_epoch,
 )
 from .models import Body, DataSource, ModelError, OrbitData, SolarSystem, SystemGroup, SystemSettings
 from .orbit_editing import (
@@ -405,7 +407,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         if refresh_snapshot:
             self.loaded_system_snapshot = self._clone_system(self.system)
             self._set_dirty(False)
-        self.simulation.replace_bodies(self.system.bodies)
+        self.simulation.replace_bodies(self.system.bodies, elapsed_s=0.0)
         self.selected_index = self._body_index_for_id(selected_body_id)
         self.focus_group_id = self._group_id_for_body_index(self.selected_index)
         self.focus_target = None
@@ -1079,6 +1081,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
                 "Create or duplicate a Sol system with a compatible reference frame first.",
             )
             return
+        self._stop_playback_for_structural_work()
         query_entry = Gtk.SearchEntry()
         search_button = Gtk.Button(label="Search")
         search_button.add_css_class("suggested-action")
@@ -1191,11 +1194,21 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             )
             return
         parent = parent_options[0]
-        parent_catalog_id = None
-        if parent.data_source is not None:
-            parent_catalog_id = parent.data_source.catalog_id or None
-        if parent_catalog_id is None and parent.name.casefold() in {"sun", "sol"}:
-            parent_catalog_id = "10"
+        parent_catalog_id = horizons_catalog_id(parent)
+        if result.suggested_kind == "moon" and parent_catalog_id is None:
+            self._show_error_dialog(
+                "Cannot Import Moon",
+                f"{parent.name} does not have a JPL Horizons catalog id.",
+            )
+            return
+        try:
+            request_frame = shift_horizons_frame_epoch(
+                self.system.reference_frame,
+                self.simulation.state.elapsed_s,
+            )
+        except ModelError as error:
+            self._show_error_dialog("Cannot Fetch Body", str(error))
+            return
         self.horizons_generation += 1
         generation = self.horizons_generation
         progress = Adw.AlertDialog.new("Fetching Horizons State", result.name)
@@ -1210,7 +1223,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         future = self.horizons_executor.submit(
             self.horizons_client.fetch_import,
             result,
-            self.system.reference_frame,
+            request_frame,
             parent_catalog_id=parent_catalog_id,
         )
         future.add_done_callback(
@@ -1261,11 +1274,34 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         radius_entry.set_placeholder_text("Required positive number")
         color_entry = Gtk.Entry(text=BODY_DEFAULTS[draft.kind][2])
         physical_status = Gtk.Label(xalign=0, wrap=True)
+        if draft.vector_center_catalog_id is None:
+            vector_text = (
+                "System-frame position (m): "
+                + ", ".join(f"{value:.6g}" for value in draft.position_m)
+                + "\nSystem-frame velocity (m/s): "
+                + ", ".join(f"{value:.6g}" for value in draft.velocity_mps)
+            )
+        else:
+            system_position = [
+                parent.position_m[axis] + draft.position_m[axis]
+                for axis in range(3)
+            ]
+            system_velocity = [
+                parent.velocity_mps[axis] + draft.velocity_mps[axis]
+                for axis in range(3)
+            ]
+            vector_text = (
+                f"Position relative to {parent.name} (m): "
+                + ", ".join(f"{value:.6g}" for value in draft.position_m)
+                + f"\nVelocity relative to {parent.name} (m/s): "
+                + ", ".join(f"{value:.6g}" for value in draft.velocity_mps)
+                + "\nSystem-frame position (m): "
+                + ", ".join(f"{value:.6g}" for value in system_position)
+                + "\nSystem-frame velocity (m/s): "
+                + ", ".join(f"{value:.6g}" for value in system_velocity)
+            )
         vector_label = Gtk.Label(
-            label=(
-                "Position (m): " + ", ".join(f"{value:.6g}" for value in draft.position_m)
-                + "\nVelocity (m/s): " + ", ".join(f"{value:.6g}" for value in draft.velocity_mps)
-            ),
+            label=vector_text,
             xalign=0,
             wrap=True,
             selectable=True,
@@ -1332,6 +1368,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
                     velocity_mps=draft.velocity_mps,
                     orbit=draft.orbit,
                     data_source=draft.data_source,
+                    vector_center_catalog_id=draft.vector_center_catalog_id,
                     mass_kg=mass,
                     radius_m=radius,
                     physical_data_notes=draft.physical_data_notes,
@@ -1972,6 +2009,11 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         if self.system_library.is_user_saved(self.system):
             return
         raise ModelError("Bundled presets are read-only. Use Duplicate to Edit first.")
+
+    def _stop_playback_for_structural_work(self) -> None:
+        self.playing = False
+        self.play_button.set_icon_name("media-playback-start-symbolic")
+        self.simulation.increment_generation()
 
     def _after_structural_edit(
         self,

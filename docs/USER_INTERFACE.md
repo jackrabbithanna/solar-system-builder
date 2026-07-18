@@ -185,7 +185,9 @@ If a published exoplanet record does not include orientation or phase, leave tho
 
 Search JPL Horizons appears in the Add menu for editable Sol systems with compatible frame metadata. Search results exclude unsupported records such as spacecraft and barycenters. Fetching runs in the background and shows progress.
 
-The review dialog shows the resolved body, type, parent, imported XYZ/velocity vector, source, and SPK catalog id. It prefills mass and radius when JPL supplies GM, mean-radius, radius, or small-body diameter data; GM is converted to mass and diameter to radius in SI units. Any unavailable physical value remains required before Add Body. Imported bodies retain their Horizons source, retrieval date, catalog id, optional osculating elements, and `horizons` canonical-state origin. Duplicate catalog ids are rejected.
+Starting a Horizons search pauses playback and invalidates any unfinished playback step. Requests use the system epoch plus the displayed elapsed simulation time. When the selected parent has a Horizons catalog id, vectors are fetched relative to that parent and translated onto its current system-frame position and velocity; moon imports require such a cataloged parent. Adding the body preserves the displayed elapsed time.
+
+The review dialog shows the resolved body, type, parent, parent-relative and resulting system-frame XYZ/velocity vectors, source, and SPK catalog id. It prefills mass and radius when JPL supplies GM, mean-radius, radius, or small-body diameter data; GM is converted to mass and diameter to radius in SI units. Any unavailable physical value remains required before Add Body. Imported bodies retain their Horizons source, retrieval date, catalog id, optional osculating elements, and `horizons` canonical-state origin. Duplicate catalog ids are rejected.
 
 ## Narrow Windows
 

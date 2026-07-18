@@ -77,7 +77,7 @@ Common exoplanet catalogs often lack enough information to know the true 3D orie
 
 ## JPL Horizons Import
 
-Sun-only systems created with the Sol workflow can search JPL Horizons. The client requests a Cartesian vector in the system's shared frame and parent-centered osculating elements when the parent has a Horizons catalog id. The vector remains canonical; the elements are explanatory provenance.
+Sun-only systems created with the Sol workflow can search JPL Horizons. The client requests a Cartesian vector and osculating elements centered on the selected Horizons parent at the system epoch plus current simulation elapsed time. On review, the app translates the relative position and velocity onto the parent's current shared-frame state; that translated vector becomes canonical while the elements remain explanatory provenance. Moons therefore require a parent with a Horizons catalog id.
 
 Horizons does not provide every physical field required by the simulator, so the review step requires the user to supply mass and radius. Imports record source URL, catalog id, retrieval date, and citation. Network requests are serialized on a background worker and stale/cancelled results are ignored on the GTK main thread.
 
