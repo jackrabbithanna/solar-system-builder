@@ -29,11 +29,13 @@ Binary pair generation is different: for a group with exactly two direct bodies,
 
 ## Stored Metadata
 
-Schema v8 stores optional orbital metadata on both bodies and groups:
+Schema v9 stores optional orbital metadata on both bodies and groups and records canonical-state provenance:
 
 - `orbit`: source orbital parameters used to generate a simulation seed.
 - `data_source`: source name, URL, catalog id, retrieval date, and citation metadata.
 - `orbit_target_type` and `orbit_target_id` on groups: the body or group that a group barycenter orbits.
+- `state_origin` on bodies: `cartesian`, `orbital`, or `horizons`.
+- `reference_frame` on systems: epoch, time scale, center, reference plane/system, and source.
 
 Old systems migrate without orbital metadata. Existing preset and saved-system vectors remain valid.
 
@@ -73,4 +75,10 @@ Generated exoplanet systems are approximate simulation seeds, not authoritative 
 
 Common exoplanet catalogs often lack enough information to know the true 3D orientation and current orbital phase. Transit and radial-velocity discoveries can provide period, radius, mass or minimum mass, semi-major axis, eccentricity, inclination, transit time, or argument of periastron, but not always all of them. When users leave fields at defaults, the generated system is deterministic and useful for exploration, but it should be labeled as approximate.
 
-Live import from JPL Horizons or NASA Exoplanet Archive is intentionally out of scope for this first pass. The app stores source links so manually entered data remains traceable.
+## JPL Horizons Import
+
+Sun-only systems created with the Sol workflow can search JPL Horizons. The client requests a Cartesian vector in the system's shared frame and parent-centered osculating elements when the parent has a Horizons catalog id. The vector remains canonical; the elements are explanatory provenance.
+
+Horizons does not provide every physical field required by the simulator, so the review step requires the user to supply mass and radius. Imports record source URL, catalog id, retrieval date, and citation. Network requests are serialized on a background worker and stale/cancelled results are ignored on the GTK main thread.
+
+NASA Exoplanet Archive import remains out of scope. Its data can still be entered manually with source metadata.

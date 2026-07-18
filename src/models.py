@@ -13,10 +13,12 @@ from uuid import uuid4
 
 from .constants import DAY
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 ACCURACY_PROFILES = {"high", "balanced", "fast"}
 BODY_KINDS = frozenset({"star", "planet", "dwarf planet", "moon", "comet", "asteroid"})
+STATE_ORIGINS = frozenset({"cartesian", "orbital", "horizons"})
+REFERENCE_FRAME_SOURCES = frozenset({"app_local", "horizons"})
 DISTANCE_UNITS = {"km", "AU", "kAU", "ly"}
 VIEW_MODES = {"fit_system", "follow_selected", "log_overview"}
 SIMULATION_SCOPES = {
@@ -64,8 +66,8 @@ def _vector3(value: Any, field_name: str) -> list[float]:
     if not isinstance(value, (list, tuple)) or len(value) != 3:
         raise ModelError(f"{field_name} must be a 3-value vector")
     vector = [float(component) for component in value]
-    if not all(component == component for component in vector):
-        raise ModelError(f"{field_name} cannot contain NaN")
+    if not all(math.isfinite(component) for component in vector):
+        raise ModelError(f"{field_name} must contain finite values")
     return vector
 
 
@@ -191,6 +193,60 @@ class DataSource:
 
 
 @dataclass
+class SystemReferenceFrame:
+    """Coordinate-frame metadata shared by every canonical body state."""
+
+    epoch: str = ""
+    time_scale: str = ""
+    center_id: str = "app-local"
+    reference_plane: str = "app-local XY"
+    reference_system: str = "app-local"
+    source: str = "app_local"
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "SystemReferenceFrame | None":
+        if data is None:
+            return None
+        frame = cls(
+            epoch=str(data.get("epoch", "")),
+            time_scale=str(data.get("time_scale", "")),
+            center_id=str(data.get("center_id", "app-local")),
+            reference_plane=str(data.get("reference_plane", "app-local XY")),
+            reference_system=str(data.get("reference_system", "app-local")),
+            source=str(data.get("source", "app_local")),
+        )
+        frame.validate()
+        return frame
+
+    def validate(self) -> None:
+        if self.source not in REFERENCE_FRAME_SOURCES:
+            raise ModelError(f"unsupported reference frame source {self.source}")
+        for field_name in ("center_id", "reference_plane", "reference_system"):
+            if not getattr(self, field_name).strip():
+                raise ModelError(f"reference frame {field_name} is required")
+        if self.source == "horizons":
+            if not self.epoch.strip():
+                raise ModelError("Horizons reference frame epoch is required")
+            if self.time_scale != "TDB":
+                raise ModelError("Horizons reference frame time_scale must be TDB")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return {
+            "epoch": self.epoch,
+            "time_scale": self.time_scale,
+            "center_id": self.center_id,
+            "reference_plane": self.reference_plane,
+            "reference_system": self.reference_system,
+            "source": self.source,
+        }
+
+    @property
+    def horizons_compatible(self) -> bool:
+        return self.source == "horizons" and self.center_id in {"500@0", "500@10"}
+
+
+@dataclass
 class Body:
     name: str
     kind: str
@@ -205,9 +261,20 @@ class Body:
     trail_enabled: bool = True
     orbit: OrbitData | None = None
     data_source: DataSource | None = None
+    state_origin: str = "cartesian"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Body":
+        orbit = OrbitData.from_dict(data.get("orbit"))
+        data_source = DataSource.from_dict(data.get("data_source"))
+        state_origin = data.get("state_origin")
+        if state_origin is None:
+            if data_source is not None and data_source.source_name.casefold() == "jpl horizons":
+                state_origin = "horizons"
+            elif orbit is not None:
+                state_origin = "orbital"
+            else:
+                state_origin = "cartesian"
         body = cls(
             id=str(data.get("id") or uuid4()),
             name=str(data["name"]),
@@ -220,8 +287,9 @@ class Body:
             parent_id=str(data["parent_id"]) if data.get("parent_id") is not None else None,
             visible=bool(data.get("visible", True)),
             trail_enabled=bool(data.get("trail_enabled", True)),
-            orbit=OrbitData.from_dict(data.get("orbit")),
-            data_source=DataSource.from_dict(data.get("data_source")),
+            orbit=orbit,
+            data_source=data_source,
+            state_origin=str(state_origin),
         )
         body.validate()
         return body
@@ -233,10 +301,12 @@ class Body:
             raise ModelError("body name is required")
         if self.kind not in BODY_KINDS:
             raise ModelError(f"{self.name} unsupported body kind {self.kind}")
-        if self.mass_kg <= 0.0:
+        if self.mass_kg <= 0.0 or not math.isfinite(self.mass_kg):
             raise ModelError(f"{self.name} mass must be positive")
-        if self.radius_m <= 0.0:
+        if self.radius_m <= 0.0 or not math.isfinite(self.radius_m):
             raise ModelError(f"{self.name} radius must be positive")
+        if self.state_origin not in STATE_ORIGINS:
+            raise ModelError(f"{self.name} unsupported state_origin {self.state_origin}")
         self.position_m = _vector3(self.position_m, "position_m")
         self.velocity_mps = _vector3(self.velocity_mps, "velocity_mps")
         if self.orbit is not None:
@@ -255,6 +325,7 @@ class Body:
             "color": self.color,
             "visible": self.visible,
             "trail_enabled": self.trail_enabled,
+            "state_origin": self.state_origin,
         }
         if self.parent_id is not None:
             data["parent_id"] = self.parent_id
@@ -400,6 +471,7 @@ class SolarSystem:
     schema_version: int = SCHEMA_VERSION
     settings: SystemSettings = field(default_factory=SystemSettings)
     groups: list[SystemGroup] = field(default_factory=list)
+    reference_frame: SystemReferenceFrame | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SolarSystem":
@@ -415,6 +487,16 @@ class SolarSystem:
             if version >= 5 and "groups" in data
             else cls._default_groups(system_id, str(data["name"]), bodies)
         )
+        reference_frame = SystemReferenceFrame.from_dict(data.get("reference_frame"))
+        if reference_frame is None:
+            reference_frame = cls._legacy_reference_frame(
+                system_id,
+                str(data.get("epoch", "")),
+            )
+        if reference_frame.source == "horizons":
+            for item, body in zip(data.get("bodies", []), bodies):
+                if "state_origin" not in item:
+                    body.state_origin = "horizons"
         system = cls(
             id=system_id,
             schema_version=SCHEMA_VERSION,
@@ -424,6 +506,7 @@ class SolarSystem:
             bodies=bodies,
             settings=SystemSettings.from_dict(data.get("settings"), system_id),
             groups=groups,
+            reference_frame=reference_frame,
         )
         system.validate()
         return system
@@ -460,6 +543,20 @@ class SolarSystem:
             )
         ]
 
+    @staticmethod
+    def _legacy_reference_frame(system_id: str, epoch_label: str) -> SystemReferenceFrame:
+        if system_id in {"builtin-solar-system", "builtin-dwarf-planets"}:
+            epoch = epoch_label.split(" TDB", 1)[0].strip()
+            return SystemReferenceFrame(
+                epoch=epoch,
+                time_scale="TDB",
+                center_id="500@0",
+                reference_plane="ECLIPTIC",
+                reference_system="ICRF",
+                source="horizons",
+            )
+        return SystemReferenceFrame(epoch=epoch_label)
+
     def validate(self) -> None:
         if not self.id:
             raise ModelError("system id is required")
@@ -468,6 +565,8 @@ class SolarSystem:
         if not self.bodies:
             raise ModelError("system must contain at least one body")
         self.settings.validate()
+        if self.reference_frame is not None:
+            self.reference_frame.validate()
         seen_ids: set[str] = set()
         for body in self.bodies:
             body.validate()
@@ -517,6 +616,7 @@ class SolarSystem:
 
     def _validate_groups(self, body_ids: set[str]) -> None:
         seen_group_ids: set[str] = set()
+        direct_body_owners: dict[str, str] = {}
         for group in self.groups:
             group.validate()
             if group.id in seen_group_ids:
@@ -529,6 +629,12 @@ class SolarSystem:
                 if body_id in seen_body_ids:
                     raise ModelError(f"{group.name} group contains duplicate body_id {body_id}")
                 seen_body_ids.add(body_id)
+                existing_owner = direct_body_owners.get(body_id)
+                if existing_owner is not None:
+                    raise ModelError(
+                        f"body_id {body_id} belongs directly to both {existing_owner} and {group.name}"
+                    )
+                direct_body_owners[body_id] = group.name
         for group in self.groups:
             if group.parent_group_id is None:
                 continue
@@ -604,7 +710,7 @@ class SolarSystem:
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
-        return {
+        data = {
             "schema_version": self.schema_version,
             "id": self.id,
             "name": self.name,
@@ -614,6 +720,9 @@ class SolarSystem:
             "groups": [group.to_dict() for group in self.groups],
             "bodies": [body.to_dict() for body in self.bodies],
         }
+        if self.reference_frame is not None:
+            data["reference_frame"] = self.reference_frame.to_dict()
+        return data
 
     def duplicate(self, name: str | None = None) -> "SolarSystem":
         data = self.to_dict()

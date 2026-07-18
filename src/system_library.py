@@ -35,6 +35,7 @@ class SystemLibraryController:
         load_system: Callable[[SolarSystem], None],
         system_saved: Callable[[SolarSystem], None],
         system_renamed: Callable[[], None],
+        activate_system: Callable[[SolarSystem], None] | None = None,
     ):
         self.parent = parent
         self.dropdown = dropdown
@@ -45,6 +46,7 @@ class SystemLibraryController:
         self.current_system = current_system
         self.prepare_for_save = prepare_for_save
         self.load_system = load_system
+        self.activate_system = activate_system or load_system
         self.system_saved = system_saved
         self.system_renamed = system_renamed
         self.systems: list[SolarSystem] = []
@@ -91,6 +93,12 @@ class SystemLibraryController:
         system = self.current_system()
         self.system_panel.load_system(system, self.is_user_saved(system))
 
+    def save_new_system(self, system: SolarSystem) -> None:
+        self.library.save(system)
+        self.activate_system(system)
+        self.refresh(system)
+        self.load_editor()
+
     def _on_system_selected(self, dropdown, _param) -> None:
         if self.updating_dropdown:
             return
@@ -113,21 +121,26 @@ class SystemLibraryController:
         self.refresh(system)
 
     def _on_save_clicked(self, _button) -> None:
+        self.save_current()
+
+    def save_current(self, *, refresh_dropdown: bool = True) -> SolarSystem | None:
         system = self.current_system()
         if not self.is_user_saved(system):
-            system = system.duplicate()
+            return None
         self.prepare_for_save(system)
         self.library.save(system)
         self.system_saved(system)
-        self.refresh(system)
+        if refresh_dropdown:
+            self.refresh(system)
         self.load_editor()
+        return system
 
     def _on_duplicate_clicked(self, _button) -> None:
         system = self.current_system()
         self.prepare_for_save(system)
         duplicate = system.duplicate()
         self.library.save(duplicate)
-        self.load_system(duplicate)
+        self.activate_system(duplicate)
         self.refresh(duplicate)
 
     def _on_delete_requested(self, *_args) -> None:
@@ -157,5 +170,5 @@ class SystemLibraryController:
             return
         self.library.delete(system_id)
         default = self.load_default()
-        self.load_system(default)
+        self.activate_system(default)
         self.refresh(default)

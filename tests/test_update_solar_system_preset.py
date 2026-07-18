@@ -90,6 +90,7 @@ class UpdateSolarSystemPresetTests(unittest.TestCase):
 
         self.assertEqual(preset, original)
         self.assertIn("2026-06-14 00:00:00 TDB", updated["epoch"])
+        self.assertEqual(updated["reference_frame"]["center_id"], "500@0")
         for body in updated["bodies"]:
             original_body = next(item for item in original["bodies"] if item["id"] == body["id"])
             self.assertEqual(body["name"], original_body["name"])
@@ -100,6 +101,7 @@ class UpdateSolarSystemPresetTests(unittest.TestCase):
             self.assertEqual(body.get("parent_id"), original_body.get("parent_id"))
             self.assertNotEqual(body["position_m"], original_body["position_m"])
             self.assertNotEqual(body["velocity_mps"], original_body["velocity_mps"])
+            self.assertEqual(body["state_origin"], "horizons")
 
     def test_apply_vectors_adds_orbital_metadata_when_elements_are_available(self):
         targets = update_solar_system_preset.SOLAR_SYSTEM_TARGETS

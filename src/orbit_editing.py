@@ -35,6 +35,7 @@ def generate_body_orbit(
 
     body.orbit = orbit
     body.data_source = data_source
+    body.state_origin = "orbital"
     body.position_m = position_m
     body.velocity_mps = velocity_mps
     simulation.replace_bodies(system.bodies)

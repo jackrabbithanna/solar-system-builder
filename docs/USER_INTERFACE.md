@@ -94,7 +94,7 @@ Auto starts with a hardware-neutral estimate and refines it from measured full-p
 
 The body list on the right shows groups and bodies in hierarchical order. Group rows show a group type and body count. Body rows show a color swatch, the body name, and relationship text such as the parent it orbits or the nearest other star.
 
-Selecting a body loads its editable properties. Selecting a group loads a group focus view and disables body-specific edit fields.
+Selecting a body loads its editable properties. Selecting a group loads a group focus view and disables body-specific edit fields. The selected name field can rename the selected body or star-system group.
 
 The Focus and Fit button appears when the selected body or group has a focusable subsystem. Activating it:
 
@@ -115,20 +115,41 @@ While focused, the fitted camera uses a rotation-independent radial extent with 
 
 The system menu in the header switches between bundled presets and saved systems.
 
-- Duplicate current system creates a saved copy of the current system.
-- Save current system writes the current system to the local library. Saving a bundled preset first creates a user-saved copy.
+- Create new system offers From Preset, Sol with JPL Horizons, and Custom System workflows.
+- Duplicate current system creates and selects an editable saved copy, including the current unsaved simulation state.
+- Save current system writes a dirty user system to the local library. Bundled presets require the explicit Duplicate to Edit action.
 - Delete saved system removes the selected user-saved system. Bundled presets cannot be deleted.
 
-The System Name field can rename user-saved systems. Bundled presets are read-only until saved or duplicated.
+The System Name and Description fields edit user-saved metadata. The reference-frame summary shows the shared epoch, time scale, center, plane, and reference system. Existing frame metadata is read-only because changing it correctly requires transforming every body vector.
+
+The title shows `*` while a saved system has unsaved changes. Switching systems, creating another system, closing, or resetting offers Save, Discard, and Cancel. The header Save button writes changes without leaving the current system. Reset then restores the loaded or last-saved snapshot and clears unsaved edits.
+
+### Creation Workflows
+
+- From Preset duplicates the selected bundled system under a unique user name.
+- Sol with JPL Horizons creates a Sun-only system in a heliocentric TDB/ICRF/ecliptic frame that can accept live Horizons bodies.
+- Custom System creates a single-star, binary-star, or hierarchical starter. Primary and secondary star controls accept name, mass, radius, XYZ position, and XYZ velocity.
+
+## Creation And Deletion
+
+The body hierarchy Add menu creates a nested star system, star, planet, dwarf planet, moon, comet, or asteroid. Manual creation collects physical and appearance fields, then accepts either complete Cartesian XYZ/velocity state or orbital inputs that generate the canonical vector.
+
+Adding a star system creates a semantic `SystemGroup` with one starter root star. Stars are roots. Planets, dwarf planets, comets, and asteroids require a star parent; moons require a planet or dwarf-planet parent.
+
+Deleting a selected body or star-system group shows a destructive confirmation with affected descendants. Confirming removes the selected item and its child planets, moons, and nested groups. A system must keep at least one body.
 
 ## Body Editor
 
 The right-side editor shows fields for the selected body.
 
-- Distance Unit changes the unit used by the X and Y position fields.
+- Name edits the selected body name. When a star-system group is selected, the same field edits the group name.
+- Distance Unit changes the unit used by the X, Y, and Z position fields.
+- Kind and Parent change the body type and valid orbital/display parent.
 - Mass (kg) edits the body mass in kilograms.
-- X and Y edit the body's 2D position in the selected distance unit.
-- VX and VY edit the body's velocity in meters per second.
+- Radius (m), Color, Visible, and Trail edit physical and display properties.
+- X, Y, and Z edit the body's 3D position in the selected distance unit.
+- VX, VY, and VZ edit the body's velocity in meters per second.
+- Apply Body Changes validates and commits the inspector fields atomically.
 
 Position units available in the editor:
 
@@ -137,9 +158,11 @@ Position units available in the editor:
 - kAU
 - ly
 
-Changing mass, position, or velocity rebuilds the simulation state and clears existing trails. The physics model stores values internally in SI units: kilograms, meters, meters per second, and seconds.
+Changing kind, parent, mass, radius, position, or velocity rebuilds simulation state, clears trails, and marks the canonical source Cartesian. The physics model stores values internally in SI units: kilograms, meters, meters per second, and seconds.
 
 When a body has a parent, the distance panel shows its distance to that parent. For root stars in multi-star systems, it shows distances to the other stars.
+
+Selecting a group replaces body fields with Group Properties. Kind and Parent Group can be changed, subject to hierarchy-cycle and orbit-target validation. Group names and orbital generation remain available in the same inspector.
 
 ## Orbital Data
 
@@ -157,6 +180,16 @@ Bodies and groups show an Orbital Data section. Use it to enter published orbita
 - If a selected root star belongs to a two-star group, edit the orbital fields there and use Generate Binary Pair; the single-body Generate State Vector action remains disabled because the star has no parent body.
 
 If a published exoplanet record does not include orientation or phase, leave those fields at their defaults. The resulting system is an approximate simulation seed, not a precise ephemeris.
+
+## JPL Horizons
+
+Search JPL Horizons appears in the Add menu for editable Sol systems with compatible frame metadata. Search results exclude unsupported records such as spacecraft and barycenters. Fetching runs in the background and shows progress.
+
+The review dialog shows the resolved body, type, parent, imported XYZ/velocity vector, source, and SPK catalog id. It prefills mass and radius when JPL supplies GM, mean-radius, radius, or small-body diameter data; GM is converted to mass and diameter to radius in SI units. Any unavailable physical value remains required before Add Body. Imported bodies retain their Horizons source, retrieval date, catalog id, optional osculating elements, and `horizons` canonical-state origin. Duplicate catalog ids are rejected.
+
+## Narrow Windows
+
+At widths up to 760 px, the canvas/editor split and the simulation-setting controls reflow vertically. The inspector remains scrollable.
 
 ## App Menu
 

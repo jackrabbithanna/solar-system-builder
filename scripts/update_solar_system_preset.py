@@ -7,10 +7,8 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import sys
-from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -22,11 +20,16 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.constants import AU, DAY  # noqa: E402
+from src.horizons import (  # noqa: E402
+    HORIZONS_URL,
+    OrbitalElements,
+    StateVector,
+    parse_horizons_elements,
+    parse_horizons_vector,
+)
 from src.models import SCHEMA_VERSION, SolarSystem  # noqa: E402
 
-HORIZONS_URL = "https://ssd.jpl.nasa.gov/api/horizons.api"
 DEFAULT_EPOCH = "2026-06-14 00:00:00"
-KM_TO_M = 1000.0
 
 SOLAR_SYSTEM_TARGETS = {
     "sun": "10",
@@ -86,92 +89,6 @@ PRESET_CONFIGS = {
 
 # Backwards-compatible alias for tests and direct imports.
 TARGETS = SOLAR_SYSTEM_TARGETS
-
-
-@dataclass(frozen=True)
-class StateVector:
-    position_m: list[float]
-    velocity_mps: list[float]
-
-
-@dataclass(frozen=True)
-class OrbitalElements:
-    semi_major_axis_m: float
-    orbital_period_s: float
-    eccentricity: float
-    inclination_deg: float
-    longitude_of_ascending_node_deg: float
-    argument_of_periapsis_deg: float
-    mean_anomaly_deg: float
-    reference_plane: str = "J2000 ecliptic"
-
-    def to_orbit_dict(self, epoch: str) -> dict[str, Any]:
-        return {
-            "semi_major_axis_m": self.semi_major_axis_m,
-            "orbital_period_s": self.orbital_period_s,
-            "eccentricity": self.eccentricity,
-            "inclination_deg": self.inclination_deg,
-            "longitude_of_ascending_node_deg": self.longitude_of_ascending_node_deg,
-            "argument_of_periapsis_deg": self.argument_of_periapsis_deg,
-            "mean_anomaly_deg": self.mean_anomaly_deg,
-            "epoch": f"{epoch} TDB",
-            "reference_plane": self.reference_plane,
-            "approximation_notes": (
-                "Horizons parent-centered osculating elements at the preset epoch; "
-                "the committed Cartesian state remains the simulation seed."
-            ),
-        }
-
-
-def parse_horizons_vector(result_text: str) -> StateVector:
-    """Parse the first CSV state-vector row between Horizons $$SOE/$$EOE."""
-    in_table = False
-    for line in result_text.splitlines():
-        stripped = line.strip()
-        if stripped == "$$SOE":
-            in_table = True
-            continue
-        if stripped == "$$EOE":
-            break
-        if not in_table or not stripped:
-            continue
-
-        row = next(csv.reader([stripped], skipinitialspace=True))
-        if len(row) < 8:
-            raise ValueError(f"Horizons vector row has too few columns: {stripped}")
-        values = [float(item) * KM_TO_M for item in row[2:8]]
-        return StateVector(position_m=values[:3], velocity_mps=values[3:])
-
-    raise ValueError("Horizons response did not contain a vector row")
-
-
-def parse_horizons_elements(result_text: str) -> OrbitalElements:
-    """Parse the first CSV osculating-elements row between Horizons $$SOE/$$EOE."""
-    in_table = False
-    for line in result_text.splitlines():
-        stripped = line.strip()
-        if stripped == "$$SOE":
-            in_table = True
-            continue
-        if stripped == "$$EOE":
-            break
-        if not in_table or not stripped:
-            continue
-
-        row = next(csv.reader([stripped], skipinitialspace=True))
-        if len(row) < 14:
-            raise ValueError(f"Horizons element row has too few columns: {stripped}")
-        return OrbitalElements(
-            eccentricity=float(row[2]),
-            inclination_deg=float(row[4]),
-            longitude_of_ascending_node_deg=float(row[5]),
-            argument_of_periapsis_deg=float(row[6]),
-            mean_anomaly_deg=float(row[9]),
-            semi_major_axis_m=float(row[11]) * AU,
-            orbital_period_s=float(row[13]) * DAY,
-        )
-
-    raise ValueError("Horizons response did not contain an element row")
 
 
 def build_horizons_url(target_id: str, epoch: str) -> str:
@@ -280,6 +197,14 @@ def apply_vectors(
     updated = json.loads(json.dumps(preset))
     updated["schema_version"] = SCHEMA_VERSION
     updated["epoch"] = f"{epoch} TDB, JPL Horizons, solar-system barycentric"
+    updated["reference_frame"] = {
+        "epoch": epoch,
+        "time_scale": "TDB",
+        "center_id": "500@0",
+        "reference_plane": "ECLIPTIC",
+        "reference_system": "ICRF",
+        "source": "horizons",
+    }
     if description is not None:
         updated["description"] = description
 
@@ -291,6 +216,7 @@ def apply_vectors(
         vector = vectors[body_id]
         body["position_m"] = vector.position_m
         body["velocity_mps"] = vector.velocity_mps
+        body["state_origin"] = "horizons"
         if elements is not None and body_id != "sun":
             body["orbit"] = elements[body_id].to_orbit_dict(epoch)
             body["data_source"] = {

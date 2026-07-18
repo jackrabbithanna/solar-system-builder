@@ -8,8 +8,10 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 - `src/window.py`: main GTK window coordinator, playback controls, body inspector, worker scheduling, and main-thread UI refreshes.
 - `src/canvas.py`: `SolarSystemCanvas` GTK drawing widget, canvas gestures/tooltips, zoom state, and body/group selection signals.
 - `src/sidebar.py`: sidebar hierarchy widget and panel controllers for system settings and body/orbit inspector state.
-- `src/models.py`: schema-versioned `Body`, `SystemGroup`, and `SolarSystem` dataclasses with validation, parent-body relationships, group hierarchy, migration, and JSON conversion.
+- `src/models.py`: schema-v9 `Body`, `SystemGroup`, `SystemReferenceFrame`, and `SolarSystem` dataclasses with validation, hierarchy, migration, canonical-state provenance, and JSON conversion.
 - `src/orbit_editing.py`: GTK-free body, group-barycenter, and binary-pair orbit mutations with playback-state rebuilding.
+- `src/system_editing.py`: GTK-free system starters and atomic create/update/delete helpers for complete 3D body state and group membership.
+- `src/horizons.py`: GTK-free, serialized JPL Horizons lookup/vector/element and SBDB physical-data client, response parsers, frame checks, and atomic import application.
 - `src/orbits.py`: pure Keplerian orbit conversion helpers for generating Cartesian simulation state from optional orbital metadata.
 - `src/physics.py`: NumPy-backed simulation state, acceleration, low-level `step()`, user-facing `advance()`, and sampled `advance_with_samples()`.
 - `src/scales.py`: pure scale helpers for time/distance units, elapsed-time formatting, adaptive internal step policy, approximation selection, and trail sampling cadence.
@@ -31,10 +33,14 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 6. Completed `SimulationJobResult` values are applied by `SimulationSession` on the GTK main thread; active body states are merged back into the full UI state, while temporary overview/context states update elapsed time and group trails without mutating bodies.
 7. `window.py` builds a `CanvasScene` snapshot from main-thread state and passes it to `SolarSystemCanvas`.
 8. `canvas.py` draws body positions/trails, system overview group positions/trails, or focused bodies with muted context markers, while delegating coordinate math and hit tests to `viewport.py`.
-9. Sidebar panel controllers emit edit/generate/settings intents; `window.py` collects editor input while GTK-free orbit editing helpers apply orbital model changes and rebuild simulation state on the GTK main thread.
-10. `SystemLibraryController` coordinates save/duplicate/delete actions and writes `SolarSystem` JSON through `storage.Library`.
+9. Sidebar panel controllers emit edit/generate/settings intents; `window.py` validates complete body/group edits through GTK-free editing helpers, then rebuilds playback state on the main thread.
+10. Creation supports preset duplication, a JPL-compatible Sun-only system, and custom single/binary/hierarchical star state. Manual bodies accept complete Cartesian state or orbital elements.
+11. Horizons lookup, ephemeris, and optional SBDB physical-data requests run on a dedicated single-worker executor. Import drafts prefill mass from GM and radius from mean-radius or diameter data when JPL supplies them. Completed drafts return through `GLib.idle_add`; only reviewed imports mutate the model on the GTK thread.
+12. `SystemLibraryController` coordinates explicit preset duplication, saved-system persistence, guarded selection, and deletion. `window.py` owns dirty-state prompts and loaded snapshots.
 
-`Body.parent_id` records local orbital/display parentage. Stars are roots; planets, dwarf planets, comets, and asteroids orbit stars; moons orbit planets or dwarf planets. Body descendant chains can be used as focus targets, including planet-and-moon systems. Optional `Body.orbit` and `Body.data_source` records preserve user-entered orbital/source metadata for generating approximate initial state vectors, but `position_m` and `velocity_mps` remain the canonical simulation state. `SystemGroup` records larger semantic hierarchy, such as a binary subsystem or a planetary system. Physics remains a flat N-body simulation over the active body set, so groups do not constrain gravity by themselves.
+`Body.parent_id` records local orbital/display parentage. Stars are roots; planets, dwarf planets, comets, and asteroids orbit stars; moons orbit planets or dwarf planets. `Body.state_origin` records whether the current canonical vector came from Cartesian entry, orbital generation, or Horizons. Optional `Body.orbit` and `Body.data_source` preserve provenance, while `position_m` and `velocity_mps` remain canonical. `SolarSystem.reference_frame` describes the shared epoch, time scale, center, plane, and reference system. `SystemGroup` records larger semantic hierarchy, but physics remains a flat N-body simulation over the active body set.
+
+Schema v9 migrates older body provenance and reference-frame metadata. The bundled Solar System and Dwarf Planets presets migrate to their known JPL solar-system-barycentric frame; other legacy systems migrate to an app-local frame. A body can have only one direct group owner.
 
 `SolarSystem.settings` stores per-system playback and view preferences. The UI exposes the visible time step, time unit, accuracy profile, view mode, physics policy (serialized under the compatibility key `simulation_scope`), and distance editor unit, while the physics layer still receives SI values only.
 
@@ -53,7 +59,9 @@ Tests live in `tests/` and are registered through `tests/meson.build`.
 - `test_viewport.py`: projection, zoom clamping, view-center, scale, and hit-test math.
 - `test_playback.py`: trail sampling/capping, generation checks, worker helpers, session job planning, copied worker state, and active/overview/hybrid result application.
 - `test_storage.py`: local library save/load/list/delete.
-- `test_system_library.py`: system-library controller save, duplicate, rename, selection, and delete behavior.
+- `test_system_editing.py`: starter workflows, full 3D state input/update, reparenting, atomic validation, cascades, and seeded circular orbits.
+- `test_horizons.py`: lookup and ephemeris parsing, URL/frame contracts, API compatibility, duplicates, and atomic import.
+- `test_system_library.py`: system-library controller new, save, duplicate, rename, selection, and delete behavior.
 - `test_update_solar_system_preset.py`: preset update script behavior.
 
 Run:

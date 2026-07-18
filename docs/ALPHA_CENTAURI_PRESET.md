@@ -105,7 +105,7 @@ objects. They should not be treated as confirmed discoveries.
 
 ## Simulation Settings
 
-The preset stores schema v5 settings:
+The preset stores playback settings that migrate through the current schema:
 
 - `visible_step_s`: `1` millennium
 - `accuracy_profile`: `fast`

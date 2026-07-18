@@ -13,6 +13,8 @@ from src.models import (
     ModelError,
     OrbitData,
     SolarSystem,
+    SystemGroup,
+    SystemReferenceFrame,
 )
 from src.presets import load_builtin_solar_system, load_builtin_solar_systems
 
@@ -43,6 +45,8 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(kinds_by_id["moon"], "moon")
         self.assertEqual(kinds_by_id["halley"], "comet")
         self.assertEqual(kinds_by_id["bennu"], "asteroid")
+        self.assertEqual(clone.bodies[0].state_origin, "horizons")
+        self.assertTrue(clone.reference_frame.horizons_compatible)
         self.assertEqual(
             BODY_KINDS,
             {"star", "planet", "dwarf planet", "moon", "comet", "asteroid"},
@@ -140,6 +144,57 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(system.schema_version, SCHEMA_VERSION)
         self.assertIsNone(system.bodies[1].orbit)
         self.assertIsNone(system.bodies[1].data_source)
+
+    def test_v8_data_migrates_state_origin_and_reference_frame(self):
+        data = _sample_system_data(schema_version=8)
+        data["bodies"][1]["orbit"] = {"semi_major_axis_m": 1.0}
+
+        system = SolarSystem.from_dict(data)
+
+        self.assertEqual(system.schema_version, SCHEMA_VERSION)
+        self.assertEqual(system.bodies[0].state_origin, "cartesian")
+        self.assertEqual(system.bodies[1].state_origin, "orbital")
+        self.assertEqual(system.reference_frame.source, "app_local")
+        self.assertEqual(system.reference_frame.epoch, system.epoch)
+
+    def test_state_origin_and_horizons_frame_round_trip(self):
+        data = _sample_system_data()
+        data["reference_frame"] = SystemReferenceFrame(
+            epoch="2026-07-18 00:00:00",
+            time_scale="TDB",
+            center_id="500@10",
+            reference_plane="ECLIPTIC",
+            reference_system="ICRF",
+            source="horizons",
+        ).to_dict()
+        data["bodies"][1]["state_origin"] = "horizons"
+
+        system = SolarSystem.from_dict(data)
+        clone = SolarSystem.from_dict(system.to_dict())
+
+        self.assertTrue(clone.reference_frame.horizons_compatible)
+        self.assertEqual(clone.bodies[1].state_origin, "horizons")
+
+    def test_body_cannot_have_two_direct_group_owners(self):
+        data = _sample_system_data()
+        data["groups"] = [
+            SystemGroup(name="One", kind="stellar_system", body_ids=["sun"]).to_dict(),
+            SystemGroup(name="Two", kind="stellar_system", body_ids=["sun"]).to_dict(),
+        ]
+
+        with self.assertRaisesRegex(ModelError, "belongs directly to both"):
+            SolarSystem.from_dict(data)
+
+    def test_nonfinite_body_values_fail(self):
+        data = _sample_system_data()
+        data["bodies"][0]["position_m"][0] = float("inf")
+        with self.assertRaisesRegex(ModelError, "finite values"):
+            SolarSystem.from_dict(data)
+
+        data = _sample_system_data()
+        data["bodies"][0]["mass_kg"] = float("inf")
+        with self.assertRaisesRegex(ModelError, "mass must be positive"):
+            SolarSystem.from_dict(data)
 
     def test_dwarf_planets_preset_gets_large_step_default(self):
         system = next(

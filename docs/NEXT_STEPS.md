@@ -4,10 +4,9 @@ Potential follow-up work for future sessions.
 
 ## Simulator Features
 
-- Add create/delete body controls.
-- Add editable body radius, kind, color, visibility, and trail settings.
 - Add explicit reset-to-bundled-preset and reset-to-last-save variants if users need separate commands beyond the current loaded-state reset.
 - Add import/export of `.json` solar-system documents.
+- Add a coordinate-transform workflow before allowing reference-frame edits on systems with existing bodies.
 
 ## Canvas And Interaction
 
@@ -23,16 +22,9 @@ Potential follow-up work for future sessions.
 - Improve integrator options if long-range stability becomes a requirement.
 - Add more regression tests around large masses, close approaches, and backwards playback.
 
-## Other ideas
-
-Add moons to solar system preset. New lower scale?
-
-Confirm presets are read only. 
-
 ## Packaging And Quality
 
 - Add Flatpak build verification to CI once CI exists.
 - Add UI smoke tests if a GTK test harness is introduced.
 - Replace placeholder AppStream metadata and screenshots.
 - Expand README with Builder-specific setup notes.
-

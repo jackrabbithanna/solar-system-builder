@@ -28,7 +28,15 @@ User-created systems are stored as JSON in the app data directory. Document impo
 
 ## Bundled Presets
 
-Bundled systems are versioned JSON data. They are treated as read-only templates; user edits should create or save a local copy.
+Bundled systems are versioned JSON data. They are read-only templates. Editing requires an explicit duplicate so Save never silently changes system identity.
+
+## Canonical State and Reference Frames
+
+Cartesian body vectors are canonical. Orbital elements and sources are provenance. Schema v9 records a body `state_origin` and one system-level reference frame. The UI displays but does not relabel an existing frame because a correct change requires transforming every body vector.
+
+## Horizons Requests
+
+Live JPL Horizons import is limited to Sol systems with a compatible frame. Requests use one executor and a serialized client, validate the API signature and major version, and return immutable drafts. Horizons object data prefills mean radius and mass when present; mass is derived from GM in SI units when GM is the available value. Small bodies may use structured JPL SBDB GM and diameter data as a fallback. Unavailable physical fields remain required in the review dialog. Only reviewed drafts are applied to the model on the GTK main thread.
 
 ## Main-Thread GTK Updates
 

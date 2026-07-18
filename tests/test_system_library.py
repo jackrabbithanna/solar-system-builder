@@ -60,6 +60,7 @@ class SystemLibraryControllerTests(unittest.TestCase):
         self.controller.current_system = lambda: self.current
         self.controller.prepare_for_save = self.prepared.append
         self.controller.load_system = self._load_system
+        self.controller.activate_system = self._load_system
         self.controller.system_saved = self._save_system
         self.controller.system_renamed = self._rename_system
         self.controller.systems = []
@@ -76,17 +77,16 @@ class SystemLibraryControllerTests(unittest.TestCase):
     def _rename_system(self):
         self.renamed += 1
 
-    def test_save_builtin_creates_editable_copy(self):
+    def test_save_builtin_requires_explicit_duplicate(self):
         builtin_id = self.current.id
 
         self.controller._on_save_clicked(None)
 
-        self.assertNotEqual(self.current.id, builtin_id)
-        self.assertTrue(self.controller.is_user_saved(self.current))
-        self.assertEqual(self.prepared, [self.current])
-        self.assertEqual(self.saved, [self.current])
-        self.assertEqual(self.library.load(self.current.id).name, self.current.name)
-        self.assertEqual(self.panel.loaded, (self.current, True))
+        self.assertEqual(self.current.id, builtin_id)
+        self.assertFalse(self.controller.is_user_saved(self.current))
+        self.assertEqual(self.prepared, [])
+        self.assertEqual(self.saved, [])
+        self.assertEqual(self.library.list_systems(), [])
 
     def test_duplicate_saves_and_selects_copy(self):
         original_id = self.current.id
@@ -97,6 +97,36 @@ class SystemLibraryControllerTests(unittest.TestCase):
         self.assertEqual(self.loaded, [self.current])
         self.assertEqual(self.dropdown.selected, 1)
         self.assertEqual(self.library.load(self.current.id).id, self.current.id)
+
+    def test_save_new_system_saves_and_selects_system(self):
+        system = self.current.duplicate("Created")
+
+        self.controller.save_new_system(system)
+
+        self.assertEqual(self.loaded, [system])
+        self.assertEqual(self.prepared, [])
+        self.assertEqual(self.library.load(system.id).name, "Created")
+        self.assertEqual(self.dropdown.selected, 1)
+        self.assertEqual(self.panel.loaded, (system, True))
+
+    def test_save_can_preserve_a_pending_dropdown_selection(self):
+        current = self.current.duplicate("Current")
+        chosen = self.current.duplicate("Chosen")
+        self.library.save(current)
+        self.library.save(chosen)
+        self.current = current
+        self.controller.refresh(current)
+        chosen_index = next(
+            index
+            for index, system in enumerate(self.controller.systems)
+            if system.id == chosen.id
+        )
+        self.dropdown.set_selected(chosen_index)
+
+        self.controller.save_current(refresh_dropdown=False)
+
+        self.assertEqual(self.dropdown.selected, chosen_index)
+        self.assertEqual(self.saved, [current])
 
     def test_rename_refreshes_active_label_without_saving(self):
         self.current = self.current.duplicate("Before")

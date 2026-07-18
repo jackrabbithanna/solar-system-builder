@@ -18,7 +18,7 @@ from gi.repository import Gdk, GObject, Gtk
 
 from . import hierarchy
 from .constants import AU, DAY
-from .models import Body, DataSource, ModelError, OrbitData, SolarSystem, SystemGroup, SystemSettings
+from .models import BODY_KINDS, Body, DataSource, ModelError, OrbitData, SolarSystem, SystemGroup, SystemSettings
 from .scales import (
     ACCURACY_LABELS,
     DISTANCE_UNITS,
@@ -28,6 +28,12 @@ from .scales import (
     time_unit_for_seconds,
     unit_factor,
     unit_index,
+)
+
+BODY_KIND_OPTIONS = tuple(
+    kind
+    for kind in ("star", "planet", "dwarf planet", "moon", "comet", "asteroid")
+    if kind in BODY_KINDS
 )
 
 
@@ -170,6 +176,7 @@ class BodyHierarchyList(Gtk.ListBox):
 class SystemPropertiesPanel(GObject.GObject):
     __gsignals__ = {
         "system-name-edited": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
+        "system-description-edited": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
         "delete-requested": (GObject.SignalFlags.RUN_FIRST, None, ()),
         "time-step-changed": (GObject.SignalFlags.RUN_FIRST, None, (float,)),
         "accuracy-changed": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
@@ -181,6 +188,9 @@ class SystemPropertiesPanel(GObject.GObject):
     def __init__(
         self,
         system_name_entry,
+        system_description_entry,
+        reference_frame_label,
+        preset_edit_box,
         delete_system_button,
         speed_spin,
         time_unit_dropdown,
@@ -191,6 +201,9 @@ class SystemPropertiesPanel(GObject.GObject):
     ):
         super().__init__()
         self.system_name_entry = system_name_entry
+        self.system_description_entry = system_description_entry
+        self.reference_frame_label = reference_frame_label
+        self.preset_edit_box = preset_edit_box
         self.delete_system_button = delete_system_button
         self.speed_spin = speed_spin
         self.time_unit_dropdown = time_unit_dropdown
@@ -208,6 +221,11 @@ class SystemPropertiesPanel(GObject.GObject):
 
         self.system_name_entry.connect("activate", self._on_system_name_edit)
         self.system_name_entry.connect("notify::has-focus", self._on_system_name_focus_changed)
+        self.system_description_entry.connect("activate", self._on_system_description_edit)
+        self.system_description_entry.connect(
+            "notify::has-focus",
+            self._on_system_description_focus_changed,
+        )
         self.delete_system_button.connect("clicked", lambda *_args: self.emit("delete-requested"))
         self.speed_spin.connect("value-changed", self._on_time_step_changed)
         self.time_unit_dropdown.connect("notify::selected", self._on_time_step_changed)
@@ -220,8 +238,22 @@ class SystemPropertiesPanel(GObject.GObject):
         self.editing = True
         try:
             self.system_name_entry.set_text(system.name)
+            self.system_description_entry.set_text(system.description)
             self.system_name_entry.set_sensitive(editable)
+            self.system_description_entry.set_sensitive(editable)
             self.delete_system_button.set_sensitive(editable)
+            self.preset_edit_box.set_visible(not editable)
+            frame = system.reference_frame
+            if frame is None:
+                self.reference_frame_label.set_label("Reference frame not specified")
+            elif frame.source == "horizons":
+                center = "heliocentric" if frame.center_id == "500@10" else "solar-system barycentric"
+                self.reference_frame_label.set_label(
+                    f"{frame.epoch} {frame.time_scale} - {center} - "
+                    f"{frame.reference_system}/{frame.reference_plane}"
+                )
+            else:
+                self.reference_frame_label.set_label(f"App-local frame - {frame.epoch or system.epoch}")
         finally:
             self.editing = False
 
@@ -255,6 +287,14 @@ class SystemPropertiesPanel(GObject.GObject):
         if not self.editing:
             self.emit("system-name-edited", self.system_name_entry.get_text().strip())
 
+    def _on_system_description_focus_changed(self, entry, _param) -> None:
+        if not entry.has_focus():
+            self._on_system_description_edit()
+
+    def _on_system_description_edit(self, *_args) -> None:
+        if not self.editing:
+            self.emit("system-description-edited", self.system_description_entry.get_text().strip())
+
     def _on_time_step_changed(self, *_args) -> None:
         if not self.editing:
             self.emit("time-step-changed", self.step_seconds())
@@ -287,6 +327,8 @@ class SystemPropertiesPanel(GObject.GObject):
 class BodyInspectorPanel(GObject.GObject):
     __gsignals__ = {
         "body-edited": (GObject.SignalFlags.RUN_FIRST, None, ()),
+        "group-edited": (GObject.SignalFlags.RUN_FIRST, None, ()),
+        "name-edited": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
         "focus-requested": (GObject.SignalFlags.RUN_FIRST, None, ()),
         "generate-body-orbit": (GObject.SignalFlags.RUN_FIRST, None, ()),
         "generate-group-orbit": (GObject.SignalFlags.RUN_FIRST, None, ()),
@@ -295,7 +337,7 @@ class BodyInspectorPanel(GObject.GObject):
 
     def __init__(
         self,
-        selected_name_label,
+        selected_name_entry,
         focus_button,
         selected_distance_list,
         orbit_expander,
@@ -316,16 +358,32 @@ class BodyInspectorPanel(GObject.GObject):
         generate_group_orbit_button,
         generate_binary_orbit_button,
         orbit_status_label,
+        group_properties_expander,
+        group_kind_entry,
+        group_parent_dropdown,
+        apply_group_button,
+        body_properties_grid,
+        body_kind_dropdown,
+        body_parent_dropdown,
         mass_entry,
+        radius_entry,
+        body_color_button,
+        body_visible_switch,
+        body_trail_switch,
         x_label,
         x_spin,
         y_label,
         y_spin,
+        z_label,
+        z_spin,
         vx_spin,
         vy_spin,
+        vz_spin,
+        state_origin_label,
+        apply_body_button,
     ):
         super().__init__()
-        self.selected_name_label = selected_name_label
+        self.selected_name_entry = selected_name_entry
         self.focus_button = focus_button
         self.selected_distance_list = selected_distance_list
         self.orbit_expander = orbit_expander
@@ -346,14 +404,32 @@ class BodyInspectorPanel(GObject.GObject):
         self.generate_group_orbit_button = generate_group_orbit_button
         self.generate_binary_orbit_button = generate_binary_orbit_button
         self.orbit_status_label = orbit_status_label
+        self.group_properties_expander = group_properties_expander
+        self.group_kind_entry = group_kind_entry
+        self.group_parent_dropdown = group_parent_dropdown
+        self.apply_group_button = apply_group_button
+        self.body_properties_grid = body_properties_grid
+        self.body_kind_dropdown = body_kind_dropdown
+        self.body_parent_dropdown = body_parent_dropdown
         self.mass_entry = mass_entry
+        self.radius_entry = radius_entry
+        self.body_color_button = body_color_button
+        self.body_visible_switch = body_visible_switch
+        self.body_trail_switch = body_trail_switch
         self.x_label = x_label
         self.x_spin = x_spin
         self.y_label = y_label
         self.y_spin = y_spin
+        self.z_label = z_label
+        self.z_spin = z_spin
         self.vx_spin = vx_spin
         self.vy_spin = vy_spin
+        self.vz_spin = vz_spin
+        self.state_origin_label = state_origin_label
+        self.apply_body_button = apply_body_button
         self.orbit_target_options: list[tuple[str, str]] = []
+        self.parent_options: list[str | None] = []
+        self.group_parent_options: list[str | None] = []
         self.orbit_editor_enabled = False
         self.editing = False
 
@@ -361,17 +437,58 @@ class BodyInspectorPanel(GObject.GObject):
         self.generate_orbit_button.connect("clicked", lambda *_args: self.emit("generate-body-orbit"))
         self.generate_group_orbit_button.connect("clicked", lambda *_args: self.emit("generate-group-orbit"))
         self.generate_binary_orbit_button.connect("clicked", lambda *_args: self.emit("generate-binary-orbit"))
+        self.body_kind_dropdown.set_model(Gtk.StringList.new([kind.title() for kind in BODY_KIND_OPTIONS]))
         self.orbit_eccentricity_spin.connect("value-changed", self._on_orbit_eccentricity_changed)
+        self.selected_name_entry.connect("activate", self._on_name_edit)
+        self.selected_name_entry.connect("notify::has-focus", self._on_name_focus_changed)
         self.mass_entry.connect("activate", self._on_body_edit)
-        self.mass_entry.connect("notify::has-focus", self._on_mass_focus_changed)
-        for spin in (self.x_spin, self.y_spin, self.vx_spin, self.vy_spin):
-            spin.connect("value-changed", self._on_body_edit)
+        self.radius_entry.connect("activate", self._on_body_edit)
+        self.apply_body_button.connect("clicked", self._on_body_edit)
+        self.group_kind_entry.connect("activate", self._on_group_edit)
+        self.apply_group_button.connect("clicked", self._on_group_edit)
 
     def set_editing(self, editing: bool) -> None:
         self.editing = editing
 
     def set_selected_name(self, name: str) -> None:
-        self.selected_name_label.set_label(name)
+        self.selected_name_entry.set_text(name)
+
+    def set_name_sensitive(self, sensitive: bool) -> None:
+        self.selected_name_entry.set_sensitive(sensitive)
+
+    def show_group_properties(self, visible: bool) -> None:
+        self.group_properties_expander.set_visible(visible)
+        self.body_properties_grid.set_visible(not visible)
+
+    def set_group_values(
+        self,
+        group: SystemGroup,
+        parent_options: list[SystemGroup],
+        editable: bool,
+    ) -> None:
+        self.group_kind_entry.set_text(group.kind)
+        self.group_parent_options = [None, *[candidate.id for candidate in parent_options]]
+        self.group_parent_dropdown.set_model(
+            Gtk.StringList.new(["No Parent", *[candidate.name for candidate in parent_options]])
+        )
+        selected = next(
+            (
+                index
+                for index, candidate_id in enumerate(self.group_parent_options)
+                if candidate_id == group.parent_group_id
+            ),
+            0,
+        )
+        self.group_parent_dropdown.set_selected(selected)
+        for widget in (self.group_kind_entry, self.group_parent_dropdown, self.apply_group_button):
+            widget.set_sensitive(editable)
+
+    def edited_group_values(self) -> tuple[str, str | None] | None:
+        kind = self.group_kind_entry.get_text().strip()
+        selected = self.group_parent_dropdown.get_selected()
+        if not kind or selected == Gtk.INVALID_LIST_POSITION or selected >= len(self.group_parent_options):
+            return None
+        return kind, self.group_parent_options[selected]
 
     def configure_focus_button(self, visible: bool, focused: bool) -> None:
         self.focus_button.set_visible(visible)
@@ -380,7 +497,22 @@ class BodyInspectorPanel(GObject.GObject):
         )
 
     def set_body_editor_sensitive(self, sensitive: bool, orbit_sensitive: bool) -> None:
-        for widget in (self.mass_entry, self.x_spin, self.y_spin, self.vx_spin, self.vy_spin):
+        for widget in (
+            self.body_kind_dropdown,
+            self.body_parent_dropdown,
+            self.mass_entry,
+            self.radius_entry,
+            self.body_color_button,
+            self.body_visible_switch,
+            self.body_trail_switch,
+            self.x_spin,
+            self.y_spin,
+            self.z_spin,
+            self.vx_spin,
+            self.vy_spin,
+            self.vz_spin,
+            self.apply_body_button,
+        ):
             widget.set_sensitive(sensitive)
         self.set_orbit_editor_sensitive(orbit_sensitive)
 
@@ -508,32 +640,64 @@ class BodyInspectorPanel(GObject.GObject):
             self.selected_distance_list.remove(child)
         self.selected_distance_list.set_visible(False)
 
+    def set_parent_options(self, bodies: list[Body], current_parent_id: str | None) -> None:
+        self.parent_options = [None, *[body.id for body in bodies]]
+        labels = ["No Parent", *[f"{body.name} ({body.kind})" for body in bodies]]
+        self.body_parent_dropdown.set_model(Gtk.StringList.new(labels))
+        selected = next(
+            (index for index, body_id in enumerate(self.parent_options) if body_id == current_parent_id),
+            0,
+        )
+        self.body_parent_dropdown.set_selected(selected)
+
+    def selected_parent_id(self) -> str | None:
+        selected = self.body_parent_dropdown.get_selected()
+        if selected == Gtk.INVALID_LIST_POSITION or selected >= len(self.parent_options):
+            return None
+        return self.parent_options[selected]
+
     def set_body_values(self, body: Body, distance_factor: float) -> None:
+        self.body_kind_dropdown.set_selected(BODY_KIND_OPTIONS.index(body.kind))
         self.mass_entry.set_text(f"{body.mass_kg:.12g}")
+        self.radius_entry.set_text(f"{body.radius_m:.12g}")
+        color = Gdk.RGBA()
+        if not color.parse(body.color):
+            color.parse("#ffffff")
+        self.body_color_button.set_rgba(color)
+        self.body_visible_switch.set_active(body.visible)
+        self.body_trail_switch.set_active(body.trail_enabled)
         self.x_spin.set_value(body.position_m[0] / distance_factor)
         self.y_spin.set_value(body.position_m[1] / distance_factor)
+        self.z_spin.set_value(body.position_m[2] / distance_factor)
         self.vx_spin.set_value(body.velocity_mps[0])
         self.vy_spin.set_value(body.velocity_mps[1])
+        self.vz_spin.set_value(body.velocity_mps[2])
+        self.state_origin_label.set_label(f"Canonical state: {body.state_origin.replace('_', ' ')}")
 
     def clear_body_values(self) -> None:
         self.mass_entry.set_text("")
+        self.radius_entry.set_text("")
         self.x_spin.set_value(0.0)
         self.y_spin.set_value(0.0)
+        self.z_spin.set_value(0.0)
         self.vx_spin.set_value(0.0)
         self.vy_spin.set_value(0.0)
+        self.vz_spin.set_value(0.0)
+        self.state_origin_label.set_label("")
 
     def configure_position_spins(self, bodies: list[Body], unit: str, factor: float) -> None:
         self.x_label.set_label(f"X ({unit})")
         self.y_label.set_label(f"Y ({unit})")
+        self.z_label.set_label(f"Z ({unit})")
         max_distance_m = max(
-            max(abs(body.position_m[0]), abs(body.position_m[1]))
+            max(abs(component) for component in body.position_m)
             for body in bodies
         )
         limit = max(100.0, 10.0 * max_distance_m / factor)
         step = max(0.0001, limit / 10000.0)
         page = max(step * 10.0, limit / 100.0)
         digits = 6 if unit in {"ly", "kAU"} else 4
-        for spin in (self.x_spin, self.y_spin):
+        for spin in (self.x_spin, self.y_spin, self.z_spin):
             adjustment = spin.get_adjustment()
             adjustment.set_lower(-limit)
             adjustment.set_upper(limit)
@@ -541,19 +705,37 @@ class BodyInspectorPanel(GObject.GObject):
             adjustment.set_page_increment(page)
             spin.set_digits(digits)
 
-    def edited_body_values(self, distance_factor: float) -> tuple[float, float, float, float, float] | None:
+    def edited_body_values(self, distance_factor: float):
         try:
             mass = float(self.mass_entry.get_text())
+            radius = float(self.radius_entry.get_text())
         except ValueError:
             return None
-        if mass <= 0.0:
+        if mass <= 0.0 or radius <= 0.0:
             return None
+        selected_kind = self.body_kind_dropdown.get_selected()
+        if selected_kind == Gtk.INVALID_LIST_POSITION or selected_kind >= len(BODY_KIND_OPTIONS):
+            return None
+        rgba = self.body_color_button.get_rgba()
+        color = "#{:02x}{:02x}{:02x}".format(
+            round(rgba.red * 255),
+            round(rgba.green * 255),
+            round(rgba.blue * 255),
+        )
         return (
+            BODY_KIND_OPTIONS[selected_kind],
+            self.selected_parent_id(),
             mass,
+            radius,
+            color,
+            self.body_visible_switch.get_active(),
+            self.body_trail_switch.get_active(),
             self.x_spin.get_value() * distance_factor,
             self.y_spin.get_value() * distance_factor,
+            self.z_spin.get_value() * distance_factor,
             self.vx_spin.get_value(),
             self.vy_spin.get_value(),
+            self.vz_spin.get_value(),
         )
 
     def orbit_from_editor(self, epoch: str) -> OrbitData:
@@ -591,10 +773,18 @@ class BodyInspectorPanel(GObject.GObject):
         )
         return source if source.to_dict() else None
 
-    def _on_mass_focus_changed(self, entry, _param) -> None:
+    def _on_name_focus_changed(self, entry, _param) -> None:
         if not entry.has_focus():
-            self._on_body_edit()
+            self._on_name_edit()
+
+    def _on_name_edit(self, *_args) -> None:
+        if not self.editing:
+            self.emit("name-edited", self.selected_name_entry.get_text().strip())
 
     def _on_body_edit(self, *_args) -> None:
         if not self.editing:
             self.emit("body-edited")
+
+    def _on_group_edit(self, *_args) -> None:
+        if not self.editing:
+            self.emit("group-edited")

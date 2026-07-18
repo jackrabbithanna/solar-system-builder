@@ -58,6 +58,12 @@
               </object>
             </child>
             <child type="end">
+              <object class="GtkButton" id="new_system_button">
+                <property name="icon-name">list-add-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Create new system</property>
+              </object>
+            </child>
+            <child type="end">
               <object class="GtkButton" id="duplicate_button">
                 <property name="icon-name">edit-copy-symbolic</property>
                 <property name="tooltip-text" translatable="yes">Duplicate current system</property>
@@ -67,6 +73,9 @@
               <object class="GtkButton" id="save_button">
                 <property name="icon-name">document-save-symbolic</property>
                 <property name="tooltip-text" translatable="yes">Save current system</property>
+                <style>
+                  <class name="suggested-action"/>
+                </style>
               </object>
             </child>
             <child type="end">
@@ -158,7 +167,7 @@
                       </object>
                     </child>
                     <child>
-                      <object class="GtkBox">
+                      <object class="GtkBox" id="settings_controls_box">
                         <property name="orientation">horizontal</property>
                         <property name="spacing">12</property>
                         <child>
@@ -292,6 +301,43 @@
                       </object>
                     </child>
                     <child>
+                      <object class="GtkEntry" id="system_description_entry">
+                        <property name="placeholder-text" translatable="yes">Description</property>
+                        <property name="tooltip-text" translatable="yes">Saved system description</property>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkLabel" id="reference_frame_label">
+                        <property name="wrap">True</property>
+                        <property name="xalign">0</property>
+                        <style>
+                          <class name="dim-label"/>
+                        </style>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkBox" id="preset_edit_box">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">8</property>
+                        <child>
+                          <object class="GtkLabel">
+                            <property name="label" translatable="yes">Bundled preset</property>
+                            <property name="hexpand">True</property>
+                            <property name="xalign">0</property>
+                            <style>
+                              <class name="dim-label"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="duplicate_to_edit_button">
+                            <property name="label" translatable="yes">Duplicate to Edit</property>
+                            <property name="tooltip-text" translatable="yes">Create an editable saved copy</property>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                    <child>
                       <object class="GtkButton" id="delete_system_button">
                         <property name="icon-name">user-trash-symbolic</property>
                         <property name="tooltip-text" translatable="yes">Delete saved system</property>
@@ -311,6 +357,53 @@
                       </object>
                     </child>
                     <child>
+                      <object class="GtkBox">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">4</property>
+                        <child>
+                          <object class="GtkMenuButton" id="add_body_menu_button">
+                            <property name="icon-name">list-add-symbolic</property>
+                            <property name="tooltip-text" translatable="yes">Add body or star system</property>
+                            <property name="popover">
+                              <object class="GtkPopover">
+                                <property name="child">
+                                  <object class="GtkBox">
+                                    <property name="orientation">vertical</property>
+                                    <property name="spacing">4</property>
+                                    <property name="margin-top">6</property>
+                                    <property name="margin-bottom">6</property>
+                                    <property name="margin-start">6</property>
+                                    <property name="margin-end">6</property>
+                                    <child><object class="GtkButton" id="add_star_system_button"><property name="label" translatable="yes">Add Star System</property></object></child>
+                                    <child><object class="GtkButton" id="add_star_button"><property name="label" translatable="yes">Add Star</property></object></child>
+                                    <child><object class="GtkButton" id="add_planet_button"><property name="label" translatable="yes">Add Planet</property></object></child>
+                                    <child><object class="GtkButton" id="add_dwarf_planet_button"><property name="label" translatable="yes">Add Dwarf Planet</property></object></child>
+                                    <child><object class="GtkButton" id="add_moon_button"><property name="label" translatable="yes">Add Moon</property></object></child>
+                                    <child><object class="GtkButton" id="add_comet_button"><property name="label" translatable="yes">Add Comet</property></object></child>
+                                    <child><object class="GtkButton" id="add_asteroid_button"><property name="label" translatable="yes">Add Asteroid</property></object></child>
+                                    <child><object class="GtkSeparator"/></child>
+                                    <child><object class="GtkButton" id="search_horizons_button"><property name="label" translatable="yes">Search JPL Horizons</property></object></child>
+                                  </object>
+                                </property>
+                              </object>
+                            </property>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="delete_selected_button">
+                            <property name="icon-name">user-trash-symbolic</property>
+                            <property name="tooltip-text" translatable="yes">Delete selected body or system</property>
+                            <style>
+                              <class name="destructive-action"/>
+                            </style>
+                          </object>
+                        </child>
+                        <style>
+                          <class name="linked"/>
+                        </style>
+                      </object>
+                    </child>
+                    <child>
                       <object class="BodyHierarchyList" id="body_list">
                         <property name="selection-mode">single</property>
                         <style>
@@ -323,9 +416,9 @@
                         <property name="orientation">horizontal</property>
                         <property name="spacing">8</property>
                         <child>
-                          <object class="GtkLabel" id="selected_name_label">
-                            <property name="xalign">0</property>
+                          <object class="GtkEntry" id="selected_name_entry">
                             <property name="hexpand">True</property>
+                            <property name="tooltip-text" translatable="yes">Selected body or star system name</property>
                             <style>
                               <class name="heading"/>
                             </style>
@@ -351,6 +444,53 @@
                         <style>
                           <class name="boxed-list"/>
                         </style>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkExpander" id="group_properties_expander">
+                        <property name="label" translatable="yes">Group Properties</property>
+                        <property name="expanded">True</property>
+                        <property name="visible">False</property>
+                        <child>
+                          <object class="GtkGrid">
+                            <property name="column-spacing">10</property>
+                            <property name="row-spacing">8</property>
+                            <property name="margin-top">8</property>
+                            <child>
+                              <object class="GtkLabel">
+                                <property name="label" translatable="yes">Kind</property>
+                                <property name="xalign">0</property>
+                                <layout><property name="column">0</property><property name="row">0</property></layout>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkEntry" id="group_kind_entry">
+                                <property name="tooltip-text" translatable="yes">Semantic group kind</property>
+                                <layout><property name="column">1</property><property name="row">0</property></layout>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkLabel">
+                                <property name="label" translatable="yes">Parent Group</property>
+                                <property name="xalign">0</property>
+                                <layout><property name="column">0</property><property name="row">1</property></layout>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkDropDown" id="group_parent_dropdown">
+                                <layout><property name="column">1</property><property name="row">1</property></layout>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkButton" id="apply_group_button">
+                                <property name="label" translatable="yes">Apply Group Changes</property>
+                                <property name="halign">end</property>
+                                <style><class name="suggested-action"/></style>
+                                <layout><property name="column">0</property><property name="row">2</property><property name="column-span">2</property></layout>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
                       </object>
                     </child>
                     <child>
@@ -691,152 +831,39 @@
                       </object>
                     </child>
                     <child>
-                      <object class="GtkGrid">
+                      <object class="GtkGrid" id="body_properties_grid">
                         <property name="column-spacing">10</property>
                         <property name="row-spacing">8</property>
-                        <child>
-                          <object class="GtkLabel">
-                            <property name="label" translatable="yes">Distance Unit</property>
-                            <property name="xalign">0</property>
-                            <layout>
-                              <property name="column">0</property>
-                              <property name="row">0</property>
-                            </layout>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkDropDown" id="distance_unit_dropdown">
-                            <property name="tooltip-text" translatable="yes">Position editor distance unit</property>
-                            <layout>
-                              <property name="column">1</property>
-                              <property name="row">0</property>
-                            </layout>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkLabel">
-                            <property name="label" translatable="yes">Mass (kg)</property>
-                            <property name="xalign">0</property>
-                            <layout>
-                              <property name="column">0</property>
-                              <property name="row">1</property>
-                            </layout>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkEntry" id="mass_entry">
-                            <layout>
-                              <property name="column">1</property>
-                              <property name="row">1</property>
-                            </layout>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkLabel" id="x_label">
-                            <property name="label" translatable="yes">X (AU)</property>
-                            <property name="xalign">0</property>
-                            <layout>
-                              <property name="column">0</property>
-                              <property name="row">2</property>
-                            </layout>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkSpinButton" id="x_spin">
-                            <property name="digits">4</property>
-                            <property name="adjustment">
-                              <object class="GtkAdjustment">
-                                <property name="lower">-100</property>
-                                <property name="upper">100</property>
-                                <property name="step-increment">0.01</property>
-                                <property name="page-increment">1</property>
-                              </object>
-                            </property>
-                            <layout>
-                              <property name="column">1</property>
-                              <property name="row">2</property>
-                            </layout>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkLabel" id="y_label">
-                            <property name="label" translatable="yes">Y (AU)</property>
-                            <property name="xalign">0</property>
-                            <layout>
-                              <property name="column">0</property>
-                              <property name="row">3</property>
-                            </layout>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkSpinButton" id="y_spin">
-                            <property name="digits">4</property>
-                            <property name="adjustment">
-                              <object class="GtkAdjustment">
-                                <property name="lower">-100</property>
-                                <property name="upper">100</property>
-                                <property name="step-increment">0.01</property>
-                                <property name="page-increment">1</property>
-                              </object>
-                            </property>
-                            <layout>
-                              <property name="column">1</property>
-                              <property name="row">3</property>
-                            </layout>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkLabel">
-                            <property name="label" translatable="yes">VX (m/s)</property>
-                            <property name="xalign">0</property>
-                            <layout>
-                              <property name="column">0</property>
-                              <property name="row">4</property>
-                            </layout>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkSpinButton" id="vx_spin">
-                            <property name="adjustment">
-                              <object class="GtkAdjustment">
-                                <property name="lower">-100000</property>
-                                <property name="upper">100000</property>
-                                <property name="step-increment">10</property>
-                                <property name="page-increment">1000</property>
-                              </object>
-                            </property>
-                            <layout>
-                              <property name="column">1</property>
-                              <property name="row">4</property>
-                            </layout>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkLabel">
-                            <property name="label" translatable="yes">VY (m/s)</property>
-                            <property name="xalign">0</property>
-                            <layout>
-                              <property name="column">0</property>
-                              <property name="row">5</property>
-                            </layout>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkSpinButton" id="vy_spin">
-                            <property name="adjustment">
-                              <object class="GtkAdjustment">
-                                <property name="lower">-100000</property>
-                                <property name="upper">100000</property>
-                                <property name="step-increment">10</property>
-                                <property name="page-increment">1000</property>
-                              </object>
-                            </property>
-                            <layout>
-                              <property name="column">1</property>
-                              <property name="row">5</property>
-                            </layout>
-                          </object>
-                        </child>
+                        <child><object class="GtkLabel"><property name="label" translatable="yes">Distance Unit</property><property name="xalign">0</property><layout><property name="column">0</property><property name="row">0</property></layout></object></child>
+                        <child><object class="GtkDropDown" id="distance_unit_dropdown"><property name="tooltip-text" translatable="yes">Position editor distance unit</property><layout><property name="column">1</property><property name="row">0</property></layout></object></child>
+                        <child><object class="GtkLabel"><property name="label" translatable="yes">Kind</property><property name="xalign">0</property><layout><property name="column">0</property><property name="row">1</property></layout></object></child>
+                        <child><object class="GtkDropDown" id="body_kind_dropdown"><layout><property name="column">1</property><property name="row">1</property></layout></object></child>
+                        <child><object class="GtkLabel"><property name="label" translatable="yes">Parent</property><property name="xalign">0</property><layout><property name="column">0</property><property name="row">2</property></layout></object></child>
+                        <child><object class="GtkDropDown" id="body_parent_dropdown"><layout><property name="column">1</property><property name="row">2</property></layout></object></child>
+                        <child><object class="GtkLabel"><property name="label" translatable="yes">Mass (kg)</property><property name="xalign">0</property><layout><property name="column">0</property><property name="row">3</property></layout></object></child>
+                        <child><object class="GtkEntry" id="mass_entry"><layout><property name="column">1</property><property name="row">3</property></layout></object></child>
+                        <child><object class="GtkLabel"><property name="label" translatable="yes">Radius (m)</property><property name="xalign">0</property><layout><property name="column">0</property><property name="row">4</property></layout></object></child>
+                        <child><object class="GtkEntry" id="radius_entry"><layout><property name="column">1</property><property name="row">4</property></layout></object></child>
+                        <child><object class="GtkLabel"><property name="label" translatable="yes">Color</property><property name="xalign">0</property><layout><property name="column">0</property><property name="row">5</property></layout></object></child>
+                        <child><object class="GtkColorDialogButton" id="body_color_button"><property name="dialog"><object class="GtkColorDialog"/></property><layout><property name="column">1</property><property name="row">5</property></layout></object></child>
+                        <child><object class="GtkLabel"><property name="label" translatable="yes">Visible</property><property name="xalign">0</property><layout><property name="column">0</property><property name="row">6</property></layout></object></child>
+                        <child><object class="GtkSwitch" id="body_visible_switch"><property name="halign">start</property><layout><property name="column">1</property><property name="row">6</property></layout></object></child>
+                        <child><object class="GtkLabel"><property name="label" translatable="yes">Trail</property><property name="xalign">0</property><layout><property name="column">0</property><property name="row">7</property></layout></object></child>
+                        <child><object class="GtkSwitch" id="body_trail_switch"><property name="halign">start</property><layout><property name="column">1</property><property name="row">7</property></layout></object></child>
+                        <child><object class="GtkLabel" id="x_label"><property name="label" translatable="yes">X (AU)</property><property name="xalign">0</property><layout><property name="column">0</property><property name="row">8</property></layout></object></child>
+                        <child><object class="GtkSpinButton" id="x_spin"><property name="digits">4</property><property name="adjustment"><object class="GtkAdjustment"><property name="lower">-100</property><property name="upper">100</property><property name="step-increment">0.01</property><property name="page-increment">1</property></object></property><layout><property name="column">1</property><property name="row">8</property></layout></object></child>
+                        <child><object class="GtkLabel" id="y_label"><property name="label" translatable="yes">Y (AU)</property><property name="xalign">0</property><layout><property name="column">0</property><property name="row">9</property></layout></object></child>
+                        <child><object class="GtkSpinButton" id="y_spin"><property name="digits">4</property><property name="adjustment"><object class="GtkAdjustment"><property name="lower">-100</property><property name="upper">100</property><property name="step-increment">0.01</property><property name="page-increment">1</property></object></property><layout><property name="column">1</property><property name="row">9</property></layout></object></child>
+                        <child><object class="GtkLabel" id="z_label"><property name="label" translatable="yes">Z (AU)</property><property name="xalign">0</property><layout><property name="column">0</property><property name="row">10</property></layout></object></child>
+                        <child><object class="GtkSpinButton" id="z_spin"><property name="digits">4</property><property name="adjustment"><object class="GtkAdjustment"><property name="lower">-100</property><property name="upper">100</property><property name="step-increment">0.01</property><property name="page-increment">1</property></object></property><layout><property name="column">1</property><property name="row">10</property></layout></object></child>
+                        <child><object class="GtkLabel"><property name="label" translatable="yes">VX (m/s)</property><property name="xalign">0</property><layout><property name="column">0</property><property name="row">11</property></layout></object></child>
+                        <child><object class="GtkSpinButton" id="vx_spin"><property name="adjustment"><object class="GtkAdjustment"><property name="lower">-1000000000</property><property name="upper">1000000000</property><property name="step-increment">10</property><property name="page-increment">1000</property></object></property><layout><property name="column">1</property><property name="row">11</property></layout></object></child>
+                        <child><object class="GtkLabel"><property name="label" translatable="yes">VY (m/s)</property><property name="xalign">0</property><layout><property name="column">0</property><property name="row">12</property></layout></object></child>
+                        <child><object class="GtkSpinButton" id="vy_spin"><property name="adjustment"><object class="GtkAdjustment"><property name="lower">-1000000000</property><property name="upper">1000000000</property><property name="step-increment">10</property><property name="page-increment">1000</property></object></property><layout><property name="column">1</property><property name="row">12</property></layout></object></child>
+                        <child><object class="GtkLabel"><property name="label" translatable="yes">VZ (m/s)</property><property name="xalign">0</property><layout><property name="column">0</property><property name="row">13</property></layout></object></child>
+                        <child><object class="GtkSpinButton" id="vz_spin"><property name="adjustment"><object class="GtkAdjustment"><property name="lower">-1000000000</property><property name="upper">1000000000</property><property name="step-increment">10</property><property name="page-increment">1000</property></object></property><layout><property name="column">1</property><property name="row">13</property></layout></object></child>
+                        <child><object class="GtkLabel" id="state_origin_label"><property name="xalign">0</property><style><class name="dim-label"/></style><layout><property name="column">0</property><property name="row">14</property><property name="column-span">2</property></layout></object></child>
+                        <child><object class="GtkButton" id="apply_body_button"><property name="label" translatable="yes">Apply Body Changes</property><property name="halign">end</property><style><class name="suggested-action"/></style><layout><property name="column">0</property><property name="row">15</property><property name="column-span">2</property></layout></object></child>
                       </object>
                     </child>
                   </object>

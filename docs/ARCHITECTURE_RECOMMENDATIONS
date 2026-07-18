@@ -1,0 +1,7 @@
+  Recommended next improvements, in priority order:
+
+  2. Add typed view-model snapshots
+      - CanvasScene already does this well. A similar snapshot for the inspector/sidebar state would reduce back-and-forth calls like
+        “load group focus, configure buttons, populate dropdown, reload editor.”
+
+      - I’d only do this if more sidebar features are planned; otherwise it may be premature.
