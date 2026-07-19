@@ -18,6 +18,16 @@ The app uses a practical first post-Newtonian approximation for solar-system sca
 
 The UI `Days / step` value is the visible simulation interval. It must not be used directly as one large integrator step. Use `physics.advance()` for final-state-only callers and `physics.advance_with_samples()` for UI playback.
 
+## Selectable Gravity And Integration
+
+Gravity model and integrator are independent persisted system settings. Post-Newtonian Velocity Verlet preserves the original behavior and remains the migration default. Newtonian gravity provides classical invariant checks, while RK4 provides a higher per-step-accuracy alternative that works with the velocity-dependent 1PN acceleration. Worker job plans capture both settings so main-thread changes cannot alter an in-flight job.
+
+Velocity Verlet remains the recommended long-duration option; RK4 is not claimed to be symplectic. Auto policy estimates RK4 at twice the current integrator work because it uses four rather than two acceleration evaluations per substep.
+
+## Conservation Diagnostics
+
+Energy and angular momentum are measured in the center-of-mass frame against a loaded/saved-state baseline. Newtonian energy is an exact model invariant; in 1PN mode it is labeled as a health-check proxy. Approximate physics policies are explicitly identified because their topology changes can create expected drift.
+
 ## Trail Sampling
 
 UI trails are sampled from bounded physics substeps, not just from the final position of each visible UI step. This keeps high `Days / step` playback from drawing sparse line segments that make inner orbits look artificially angular or rosette-like.

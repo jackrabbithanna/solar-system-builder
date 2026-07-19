@@ -116,6 +116,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     canvas = Gtk.Template.Child()
     main_paned = Gtk.Template.Child()
     settings_controls_box = Gtk.Template.Child()
+    settings_primary_row = Gtk.Template.Child()
+    settings_physics_row = Gtk.Template.Child()
     play_button = Gtk.Template.Child()
     step_back_button = Gtk.Template.Child()
     reset_button = Gtk.Template.Child()
@@ -140,6 +142,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     speed_spin = Gtk.Template.Child()
     time_unit_dropdown = Gtk.Template.Child()
     accuracy_dropdown = Gtk.Template.Child()
+    physics_mode_dropdown = Gtk.Template.Child()
+    integrator_dropdown = Gtk.Template.Child()
     view_mode_dropdown = Gtk.Template.Child()
     simulation_scope_dropdown = Gtk.Template.Child()
     trail_frame_dropdown = Gtk.Template.Child()
@@ -250,7 +254,12 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         )
         self.compact_breakpoint.add_setter(self.main_paned, "position", 420)
         self.compact_breakpoint.add_setter(
-            self.settings_controls_box,
+            self.settings_primary_row,
+            "orientation",
+            Gtk.Orientation.VERTICAL,
+        )
+        self.compact_breakpoint.add_setter(
+            self.settings_physics_row,
             "orientation",
             Gtk.Orientation.VERTICAL,
         )
@@ -265,6 +274,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.speed_spin,
             self.time_unit_dropdown,
             self.accuracy_dropdown,
+            self.physics_mode_dropdown,
+            self.integrator_dropdown,
             self.view_mode_dropdown,
             self.simulation_scope_dropdown,
             self.trail_frame_dropdown,
@@ -343,6 +354,10 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             "export-document",
             self._on_export_document_action,
         )
+        self.physics_diagnostics_action = self._create_window_action(
+            "physics-diagnostics",
+            self._on_physics_diagnostics_action,
+        )
         self.reset_loaded_action = self._create_window_action(
             "reset-loaded",
             lambda *_args: self._on_reset_clicked(None),
@@ -393,6 +408,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.body_list.connect("group-selected", self._on_hierarchy_group_selected)
         self.system_panel.connect("time-step-changed", self._on_time_step_changed)
         self.system_panel.connect("accuracy-changed", self._on_accuracy_changed)
+        self.system_panel.connect("physics-mode-changed", self._on_physics_mode_changed)
+        self.system_panel.connect("integrator-changed", self._on_integrator_changed)
         self.system_panel.connect("view-mode-changed", self._on_view_mode_changed)
         self.system_panel.connect("simulation-scope-changed", self._on_simulation_scope_changed)
         self.system_panel.connect("trail-frame-changed", self._on_trail_frame_changed)
@@ -506,6 +523,106 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.system_library.save_new_system(imported)
         except Exception as error:
             self._show_error_dialog("Cannot Import System", str(error))
+
+    def _on_physics_diagnostics_action(self, *_args) -> None:
+        try:
+            diagnostics, drift = self.simulation.conservation_snapshot(
+                self.system.bodies,
+                self.system.groups,
+            )
+        except ValueError as error:
+            self._show_error_dialog("Physics Diagnostics Unavailable", str(error))
+            return
+
+        settings = self._effective_settings()
+        decision = self.simulation.physics_decision(
+            self.system.bodies,
+            self.system.groups,
+            settings,
+            self.selected_index,
+            self.focus_group_id,
+            self.focus_target,
+            settings.visible_step_s,
+        )
+        mode_label = (
+            "Post-Newtonian (1PN)"
+            if settings.physics_mode == "post_newtonian"
+            else "Newtonian"
+        )
+        integrator_label = (
+            "Runge-Kutta 4" if settings.integrator == "rk4" else "Velocity Verlet"
+        )
+        energy_label = (
+            "Newtonian mechanical-energy proxy"
+            if settings.physics_mode == "post_newtonian"
+            else "Mechanical energy"
+        )
+        angular = diagnostics.angular_momentum_kg_m2ps
+        lines = [
+            f"Gravity model: {mode_label}",
+            f"Integrator: {integrator_label}",
+            f"Effective policy: {decision.policy.replace('_', ' ')}",
+            f"Elapsed time: {format_elapsed_time(self.simulation.state.elapsed_s)}",
+            "",
+            f"Kinetic energy: {diagnostics.kinetic_energy_j:.6e} J",
+            f"Potential energy: {diagnostics.potential_energy_j:.6e} J",
+            f"{energy_label}: {diagnostics.total_energy_j:.6e} J",
+            (
+                "Angular momentum (x, y, z): "
+                f"({angular[0]:.6e}, {angular[1]:.6e}, {angular[2]:.6e}) kg·m²/s"
+            ),
+            (
+                "Angular-momentum magnitude: "
+                f"{diagnostics.angular_momentum_magnitude_kg_m2ps:.6e} kg·m²/s"
+            ),
+            "",
+        ]
+        if drift is None:
+            lines.append("Baseline drift: unavailable")
+        else:
+            lines.extend(
+                (
+                    f"Energy change from baseline: {drift.energy_delta_j:+.6e} J",
+                    (
+                        "Relative energy drift: "
+                        f"{self._format_diagnostic_drift(drift.relative_energy_drift)}"
+                    ),
+                    (
+                        "Angular-momentum change: "
+                        f"{drift.angular_momentum_delta_magnitude_kg_m2ps:.6e} kg·m²/s"
+                    ),
+                    (
+                        "Relative angular-momentum drift: "
+                        f"{self._format_diagnostic_drift(drift.relative_angular_momentum_drift)}"
+                    ),
+                )
+            )
+        if decision.policy != "full_nbody" or decision.moons_collapsed:
+            lines.extend(
+                (
+                    "",
+                    "Approximate physics is active, so conservation drift is expected.",
+                )
+            )
+        if settings.physics_mode == "post_newtonian":
+            lines.extend(
+                (
+                    "",
+                    "The energy value is a Newtonian diagnostic proxy for the practical 1PN force model.",
+                )
+            )
+
+        dialog = Adw.AlertDialog.new("Physics Diagnostics", "\n".join(lines))
+        dialog.add_response("close", "Close")
+        dialog.set_default_response("close")
+        dialog.set_close_response("close")
+        dialog.present(self)
+
+    @staticmethod
+    def _format_diagnostic_drift(value: float | None) -> str:
+        if value is None:
+            return "n/a"
+        return f"{value:+.6e} ({value * 100.0:+.6e}%)"
 
     def _on_export_document_action(self, *_args) -> None:
         self._stop_playback_for_structural_work()
@@ -1688,6 +1805,24 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             )
             self._load_settings_editor()
         self._update_title()
+
+    def _on_physics_mode_changed(self, _panel, physics_mode: str) -> None:
+        if physics_mode == self.system.settings.physics_mode:
+            return
+        self.system.settings.physics_mode = physics_mode
+        self._mark_dirty_if_editable()
+        self._clear_dynamic_simulation_state()
+        self._update_title()
+        self._refresh_canvas()
+
+    def _on_integrator_changed(self, _panel, integrator: str) -> None:
+        if integrator == self.system.settings.integrator:
+            return
+        self.system.settings.integrator = integrator
+        self._mark_dirty_if_editable()
+        self._clear_dynamic_simulation_state()
+        self._update_title()
+        self._refresh_canvas()
 
     def _on_view_mode_changed(self, _panel, view_mode: str) -> None:
         self._exit_focus(reload_settings=False)
@@ -3453,6 +3588,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _on_system_saved(self, system: SolarSystem) -> None:
         self.system = system
         self.loaded_system_snapshot = self._clone_system(self.system)
+        self.simulation.rebase_diagnostics(self.system.bodies, self.system.groups)
         self.simulation.increment_generation()
         self._set_dirty(False)
         self._load_system_editor()
@@ -3613,8 +3749,11 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
                 policy += " (locked until reset)"
         if decision.moons_collapsed:
             policy += " (moons collapsed)"
+        mode = "1PN" if settings.physics_mode == "post_newtonian" else "Newtonian"
+        integrator = "RK4" if settings.integrator == "rk4" else "Verlet"
         self.window_title.set_subtitle(
-            f"{self.system.epoch} - {policy}, max step {max_step_days:,.2f} days"
+            f"{self.system.epoch} - {policy}, {mode}/{integrator}, "
+            f"max step {max_step_days:,.2f} days"
         )
 
     def _update_time_label(self) -> None:

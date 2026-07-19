@@ -11,13 +11,13 @@ The model stores complete three-dimensional positions and velocities in SI units
 - Add and organize stars, planets, dwarf planets, moons, comets, asteroids, nested system groups, and persistent unbound flybys.
 - Edit complete Cartesian state vectors or generate them from elliptic and hyperbolic orbital elements.
 - Search JPL Horizons for bodies, import available physical data, and atomically refresh an entire compatible system to one current epoch.
-- Run NumPy-backed N-body playback with bounded internal substeps, a first post-Newtonian correction, and scalable focus or barycenter approximation policies for large systems.
+- Run NumPy-backed N-body playback with Newtonian or first post-Newtonian gravity, Velocity Verlet or RK4 integration, bounded internal substeps, and scalable focus or barycenter approximation policies.
 - Follow selected bodies and systems, focus on planet-and-moon subsystems, use logarithmic overviews, and compare focused motion with coarse outside context.
 - Inspect barycenters, distances, orbital trails, elapsed simulation time, reference-frame provenance, and saved simulation settings.
 
 ## Using the App
 
-Use the canvas to select bodies, inspect trails, and zoom through the active system. Playback controls step or continuously advance simulated time. The settings below the canvas control the visible time interval, integration accuracy, view scale, physics policy, and trail perspective.
+Use the canvas to select bodies, inspect trails, and zoom through the active system. Playback controls step or continuously advance simulated time. The settings below the canvas control the visible time interval, integration accuracy, gravity model, integrator, view scale, physics policy, and trail perspective. The main menu provides an on-demand conservation-diagnostics snapshot for debugging.
 
 The sidebar switches between bundled and saved systems, exposes the body and group hierarchy, and provides creation, editing, orbital-generation, and JPL tools. Bundled presets are read-only; duplicate one when you want to edit or save changes.
 

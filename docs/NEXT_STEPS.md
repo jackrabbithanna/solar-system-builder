@@ -11,13 +11,6 @@ Potential follow-up work for future sessions.
 - Add relative diagnostics and export presets centered on a selected body, subsystem barycenter, or whole-system barycenter.
 - Validate that selected standard-frame metadata matches the applied transform instead of trusting arbitrary labels and matrices.
 
-## Physics
-
-- Add configurable physics mode in the UI: Newtonian versus post-Newtonian.
-- Add energy/angular-momentum diagnostics for debugging.
-- Improve integrator options if long-range stability becomes a requirement.
-- Add more regression tests around large masses, close approaches, and backwards playback.
-
 ## Packaging And Quality
 
 - Add Flatpak build verification to CI once CI exists.

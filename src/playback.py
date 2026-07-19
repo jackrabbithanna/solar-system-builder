@@ -14,7 +14,14 @@ from typing import Literal
 import numpy as np
 
 from .models import Body, SystemGroup, SystemSettings
-from .physics import SimulationState, advance_with_samples
+from .physics import (
+    ConservationDiagnostics,
+    ConservationDrift,
+    SimulationState,
+    advance_with_samples,
+    compute_conservation_diagnostics,
+    compute_conservation_drift,
+)
 from .scales import (
     OverviewEntity,
     active_body_indices,
@@ -152,6 +159,8 @@ class SimulationJobPlan:
     start_elapsed_s: float
     dt_s: float
     max_step_s: float
+    physics_mode: str = "post_newtonian"
+    integrator: str = "velocity_verlet"
     overview_entity_ids: list[str] | None = None
     context_entity_ids: list[str] | None = None
     display_indices: list[int] | None = None
@@ -187,6 +196,7 @@ class SimulationSession:
 
     def __init__(self, state: SimulationState):
         self.state = state
+        self.diagnostic_baseline: ConservationDiagnostics | None = None
         self.generation = 0
         self.trails: list[list[tuple[float, float, float]]] = [[] for _ in state.masses_kg]
         self.overview_trails: dict[str, list[tuple[float, float, float]]] = {}
@@ -200,6 +210,7 @@ class SimulationSession:
         self.ms_per_work_unit = INITIAL_MS_PER_WORK_UNIT
         self.last_effective_policy = "full_nbody"
         self.last_auto_approximation = False
+        self.rebase_diagnostics()
 
     @classmethod
     def from_bodies(cls, bodies: list[Body]) -> "SimulationSession":
@@ -215,12 +226,39 @@ class SimulationSession:
         preserved_elapsed_s = self.state.elapsed_s if elapsed_s is None else elapsed_s
         self.state = SimulationState.from_bodies(bodies)
         self.state.elapsed_s = preserved_elapsed_s
+        self.rebase_diagnostics()
         if increment_generation:
             self.generation += 1
         self.auto_approximation_locked = False
         self.last_effective_policy = "full_nbody"
         self.last_auto_approximation = False
         self.clear_dynamic(bodies)
+
+    def rebase_diagnostics(
+        self,
+        bodies: list[Body] | None = None,
+        groups: list[SystemGroup] | None = None,
+    ) -> None:
+        state = self._materialized_state(bodies, groups) if bodies is not None else self.state
+        try:
+            self.diagnostic_baseline = compute_conservation_diagnostics(state)
+        except ValueError:
+            self.diagnostic_baseline = None
+
+    def conservation_snapshot(
+        self,
+        bodies: list[Body],
+        groups: list[SystemGroup],
+    ) -> tuple[ConservationDiagnostics, ConservationDrift | None]:
+        current = compute_conservation_diagnostics(
+            self._materialized_state(bodies, groups)
+        )
+        drift = (
+            compute_conservation_drift(current, self.diagnostic_baseline)
+            if self.diagnostic_baseline is not None
+            else None
+        )
+        return current, drift
 
     def increment_generation(self) -> None:
         self.generation += 1
@@ -432,6 +470,8 @@ class SimulationSession:
             active_indices=decision.physics_indices,
             dt_s=dt_s,
             max_step_s=decision.max_step_s,
+            physics_mode=settings.physics_mode,
+            integrator=settings.integrator,
             display_indices=decision.display_indices,
             effective_policy=decision.policy,
             estimated_work_units=decision.estimated_work_units,
@@ -508,7 +548,12 @@ class SimulationSession:
         )
         auto_bodies = proxy_bodies_for_memberships(bodies, auto_memberships)
         auto_max_step_s = derived_max_step_s(auto_bodies, settings.accuracy_profile)
-        full_work = estimate_work_units(dt_s, auto_max_step_s, len(auto_indices))
+        full_work = estimate_work_units(
+            dt_s,
+            auto_max_step_s,
+            len(auto_indices),
+            settings.integrator,
+        )
         full_duration = full_work * self.ms_per_work_unit
 
         if settings.simulation_scope == "auto":
@@ -582,7 +627,12 @@ class SimulationSession:
         if policy == "system_overview" and len(self.overview_entities(bodies, groups)) > 1:
             entities = self.overview_entities(bodies, groups)
             max_step_s = derived_overview_max_step_s(entities, settings.accuracy_profile)
-            work = estimate_work_units(dt_s, max_step_s, len(entities))
+            work = estimate_work_units(
+                dt_s,
+                max_step_s,
+                len(entities),
+                settings.integrator,
+            )
             return PhysicsDecision(
                 policy,
                 "system_overview",
@@ -620,7 +670,12 @@ class SimulationSession:
         simulated_count = len(active)
         if mode == "hybrid_focus":
             simulated_count += len(self.context_entities(bodies, groups, focus_target))
-        work = estimate_work_units(dt_s, max_step_s, simulated_count)
+        work = estimate_work_units(
+            dt_s,
+            max_step_s,
+            simulated_count,
+            settings.integrator,
+        )
         effective_display_indices = (
             display_indices if focus_target is not None or policy == "full_nbody" else active
         )
@@ -874,6 +929,8 @@ def run_simulation_job(job: SimulationJob) -> SimulationJobResult:
             job.context_state,
             job.plan.dt_s,
             job.plan.max_step_s,
+            job.plan.physics_mode,
+            job.plan.integrator,
         )
         state, position_samples = focused_result
         duration_ms = (time.perf_counter() - started) * 1_000.0
@@ -882,8 +939,9 @@ def run_simulation_job(job: SimulationJob) -> SimulationJobResult:
     state, position_samples = advance_with_samples(
         job.state,
         job.plan.dt_s,
-        "post_newtonian",
+        job.plan.physics_mode,
         job.plan.max_step_s,
+        job.plan.integrator,
     )
     duration_ms = (time.perf_counter() - started) * 1_000.0
     return SimulationJobResult(job.plan, state, position_samples, worker_duration_ms=duration_ms)
@@ -894,13 +952,16 @@ def advance_hybrid_simulations(
     context_state: SimulationState | None,
     dt_s: float,
     focused_max_step_s: float,
+    physics_mode: str = "post_newtonian",
+    integrator: str = "velocity_verlet",
 ):
     if context_state is None:
         focused_result = advance_with_samples(
             focused_state,
             dt_s,
-            "post_newtonian",
+            physics_mode,
             focused_max_step_s,
+            integrator,
         )
         return focused_result, None
 
@@ -914,8 +975,9 @@ def advance_hybrid_simulations(
     combined_result, combined_samples = advance_with_samples(
         combined_state,
         dt_s,
-        "post_newtonian",
+        physics_mode,
         focused_max_step_s,
+        integrator,
     )
     focused_result = SimulationState(
         masses_kg=combined_result.masses_kg[:focused_count].copy(),
@@ -1036,11 +1098,17 @@ def overview_simulation_state(
     )
 
 
-def estimate_work_units(dt_s: float, max_step_s: float, body_count: int) -> int:
+def estimate_work_units(
+    dt_s: float,
+    max_step_s: float,
+    body_count: int,
+    integrator: str = "velocity_verlet",
+) -> int:
     if dt_s == 0.0 or body_count == 0:
         return 0
     substeps = max(1, math.ceil(abs(dt_s) / max_step_s))
-    return substeps * body_count * body_count
+    integrator_multiplier = 2 if integrator == "rk4" else 1
+    return substeps * body_count * body_count * integrator_multiplier
 
 
 def aggregate_position_samples(

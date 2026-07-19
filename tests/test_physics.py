@@ -1,10 +1,19 @@
+import math
 import unittest
 
 import numpy as np
 
 from src.constants import AU, DAY, G, SOLAR_MASS, YEAR
 from src.models import Body, SystemSettings
-from src.physics import SimulationState, acceleration, advance, advance_with_samples, step
+from src.physics import (
+    SimulationState,
+    acceleration,
+    advance,
+    advance_with_samples,
+    compute_conservation_diagnostics,
+    compute_conservation_drift,
+    step,
+)
 from src.presets import load_builtin_solar_system, load_builtin_solar_systems
 from src.scales import (
     LIGHT_YEAR,
@@ -88,14 +97,28 @@ class PhysicsTests(unittest.TestCase):
     def test_advance_with_samples_matches_advance(self):
         start = SimulationState.from_bodies(load_builtin_solar_system().bodies)
 
-        sampled, samples = advance_with_samples(start, 30 * DAY, "post_newtonian")
-        advanced = advance(start, 30 * DAY, "post_newtonian")
+        for integrator in ("velocity_verlet", "rk4"):
+            with self.subTest(integrator=integrator):
+                sampled, samples = advance_with_samples(
+                    start,
+                    30 * DAY,
+                    "post_newtonian",
+                    DAY,
+                    integrator,
+                )
+                advanced = advance(
+                    start,
+                    30 * DAY,
+                    "post_newtonian",
+                    DAY,
+                    integrator,
+                )
 
-        self.assertEqual(len(samples), 30)
-        self.assertTrue(np.array_equal(sampled.positions_m, advanced.positions_m))
-        self.assertTrue(np.array_equal(sampled.velocities_mps, advanced.velocities_mps))
-        self.assertEqual(sampled.elapsed_s, advanced.elapsed_s)
-        self.assertTrue(np.array_equal(samples[-1], sampled.positions_m))
+                self.assertEqual(len(samples), 30)
+                self.assertTrue(np.array_equal(sampled.positions_m, advanced.positions_m))
+                self.assertTrue(np.array_equal(sampled.velocities_mps, advanced.velocities_mps))
+                self.assertEqual(sampled.elapsed_s, advanced.elapsed_s)
+                self.assertTrue(np.array_equal(samples[-1], sampled.positions_m))
 
     def test_advance_with_samples_handles_negative_time(self):
         start = SimulationState.from_bodies(load_builtin_solar_system().bodies)
@@ -127,6 +150,149 @@ class PhysicsTests(unittest.TestCase):
         post_newtonian = acceleration(masses, positions, velocities, "post_newtonian")
 
         self.assertGreater(np.linalg.norm(post_newtonian - newtonian), 0)
+
+    def test_integrators_and_modes_support_backwards_playback(self):
+        start = SimulationState.from_bodies(load_builtin_solar_system().bodies)
+
+        for mode in ("newtonian", "post_newtonian"):
+            for integrator in ("velocity_verlet", "rk4"):
+                with self.subTest(mode=mode, integrator=integrator):
+                    forward = advance(start, 3 * DAY, mode, 0.25 * DAY, integrator)
+                    backward = advance(forward, -3 * DAY, mode, 0.25 * DAY, integrator)
+
+                    self.assertAlmostEqual(backward.elapsed_s, start.elapsed_s, places=6)
+                    position_error = np.max(
+                        np.linalg.norm(backward.positions_m - start.positions_m, axis=1)
+                    )
+                    velocity_error = np.max(
+                        np.linalg.norm(backward.velocities_mps - start.velocities_mps, axis=1)
+                    )
+                    self.assertLess(position_error, 3.0)
+                    self.assertLess(velocity_error, 1.0e-5)
+
+    def test_large_mass_binary_remains_bounded_with_both_integrators(self):
+        mass = 1.0e32
+        separation_m = 1.0e10
+        angular_speed = math.sqrt(G * (2.0 * mass) / separation_m**3)
+        speed_mps = angular_speed * separation_m / 2.0
+        period_s = math.tau / angular_speed
+        start = SimulationState(
+            masses_kg=np.array([mass, mass]),
+            positions_m=np.array(
+                [[-separation_m / 2.0, 0.0, 0.0], [separation_m / 2.0, 0.0, 0.0]]
+            ),
+            velocities_mps=np.array([[0.0, -speed_mps, 0.0], [0.0, speed_mps, 0.0]]),
+        )
+
+        for integrator in ("velocity_verlet", "rk4"):
+            with self.subTest(integrator=integrator):
+                result = advance(
+                    start,
+                    period_s,
+                    "newtonian",
+                    period_s / 500.0,
+                    integrator,
+                )
+                separation = np.linalg.norm(result.positions_m[1] - result.positions_m[0])
+
+                self.assertTrue(np.isfinite(result.positions_m).all())
+                self.assertLess(abs(separation - separation_m), 1.0e-6 * separation_m)
+
+    def test_close_approach_remains_finite_and_conservative(self):
+        mass = 1.0e22
+        start = SimulationState(
+            masses_kg=np.array([mass, mass]),
+            positions_m=np.array([[-1.0e8, 2.0e7, 0.0], [1.0e8, -2.0e7, 0.0]]),
+            velocities_mps=np.array([[1.0e4, 0.0, 0.0], [-1.0e4, 0.0, 0.0]]),
+        )
+        baseline = compute_conservation_diagnostics(start)
+
+        for integrator in ("velocity_verlet", "rk4"):
+            with self.subTest(integrator=integrator):
+                result, samples = advance_with_samples(
+                    start,
+                    20_000.0,
+                    "newtonian",
+                    20.0,
+                    integrator,
+                )
+                closest_distance = min(
+                    np.linalg.norm(sample[1] - sample[0]) for sample in samples
+                )
+                drift = compute_conservation_drift(
+                    compute_conservation_diagnostics(result),
+                    baseline,
+                )
+
+                self.assertLess(closest_distance, 4.1e7)
+                self.assertTrue(np.isfinite(result.positions_m).all())
+                self.assertLess(abs(drift.relative_energy_drift), 1.0e-10)
+
+    def test_conservation_diagnostics_match_two_body_values(self):
+        mass = 2.0
+        radius = 3.0
+        speed = 4.0
+        state = SimulationState(
+            masses_kg=np.array([mass, mass]),
+            positions_m=np.array([[-radius, 0.0, 0.0], [radius, 0.0, 0.0]]),
+            velocities_mps=np.array([[0.0, -speed, 0.0], [0.0, speed, 0.0]]),
+        )
+
+        diagnostics = compute_conservation_diagnostics(state)
+
+        expected_kinetic = mass * speed**2
+        expected_potential = -G * mass**2 / (2.0 * radius)
+        self.assertAlmostEqual(diagnostics.kinetic_energy_j, expected_kinetic)
+        self.assertAlmostEqual(diagnostics.potential_energy_j, expected_potential)
+        self.assertAlmostEqual(
+            diagnostics.total_energy_j,
+            expected_kinetic + expected_potential,
+        )
+        self.assertEqual(diagnostics.angular_momentum_kg_m2ps, (0.0, 0.0, 48.0))
+        self.assertEqual(diagnostics.angular_momentum_magnitude_kg_m2ps, 48.0)
+
+    def test_conservation_diagnostics_are_translation_and_boost_invariant(self):
+        base = SimulationState(
+            masses_kg=np.array([2.0, 3.0]),
+            positions_m=np.array([[-4.0, 1.0, 0.0], [2.0, -1.0, 0.0]]),
+            velocities_mps=np.array([[0.0, -2.0, 0.5], [0.0, 1.0, -0.25]]),
+        )
+        transformed = SimulationState(
+            masses_kg=base.masses_kg.copy(),
+            positions_m=base.positions_m + np.array([100.0, -50.0, 25.0]),
+            velocities_mps=base.velocities_mps + np.array([8.0, 4.0, -2.0]),
+        )
+
+        first = compute_conservation_diagnostics(base)
+        second = compute_conservation_diagnostics(transformed)
+
+        self.assertAlmostEqual(first.total_energy_j, second.total_energy_j)
+        np.testing.assert_allclose(
+            first.angular_momentum_kg_m2ps,
+            second.angular_momentum_kg_m2ps,
+        )
+
+    def test_conservation_diagnostics_reject_coincident_bodies(self):
+        state = SimulationState(
+            masses_kg=np.array([1.0, 1.0]),
+            positions_m=np.zeros((2, 3)),
+            velocities_mps=np.zeros((2, 3)),
+        )
+
+        with self.assertRaisesRegex(ValueError, "coincident bodies"):
+            compute_conservation_diagnostics(state)
+
+    def test_unknown_physics_options_fail(self):
+        state = SimulationState(
+            masses_kg=np.array([1.0]),
+            positions_m=np.zeros((1, 3)),
+            velocities_mps=np.zeros((1, 3)),
+        )
+
+        with self.assertRaisesRegex(ValueError, "unknown physics mode"):
+            step(state, 1.0, "quantum")
+        with self.assertRaisesRegex(ValueError, "unknown integrator"):
+            step(state, 1.0, "newtonian", "euler")
 
     def test_invalid_arrays_fail(self):
         with self.assertRaises(ValueError):

@@ -22,8 +22,10 @@ from .models import BODY_KINDS, Body, DataSource, ModelError, OrbitData, SolarSy
 from .scales import (
     ACCURACY_LABELS,
     DISTANCE_UNITS,
+    INTEGRATOR_LABELS,
     ORBIT_VISIBILITY_LABELS,
     PATH_STYLE_LABELS,
+    PHYSICS_MODE_LABELS,
     TIME_UNITS,
     TRAIL_VISIBILITY_LABELS,
     VIEW_MODE_LABELS,
@@ -184,6 +186,8 @@ class SystemPropertiesPanel(GObject.GObject):
         "delete-requested": (GObject.SignalFlags.RUN_FIRST, None, ()),
         "time-step-changed": (GObject.SignalFlags.RUN_FIRST, None, (float,)),
         "accuracy-changed": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
+        "physics-mode-changed": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
+        "integrator-changed": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
         "view-mode-changed": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
         "simulation-scope-changed": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
         "trail-frame-changed": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
@@ -203,6 +207,8 @@ class SystemPropertiesPanel(GObject.GObject):
         speed_spin,
         time_unit_dropdown,
         accuracy_dropdown,
+        physics_mode_dropdown,
+        integrator_dropdown,
         view_mode_dropdown,
         simulation_scope_dropdown,
         trail_frame_dropdown,
@@ -220,6 +226,8 @@ class SystemPropertiesPanel(GObject.GObject):
         self.speed_spin = speed_spin
         self.time_unit_dropdown = time_unit_dropdown
         self.accuracy_dropdown = accuracy_dropdown
+        self.physics_mode_dropdown = physics_mode_dropdown
+        self.integrator_dropdown = integrator_dropdown
         self.view_mode_dropdown = view_mode_dropdown
         self.simulation_scope_dropdown = simulation_scope_dropdown
         self.trail_frame_dropdown = trail_frame_dropdown
@@ -231,6 +239,8 @@ class SystemPropertiesPanel(GObject.GObject):
 
         self._setup_dropdown(self.time_unit_dropdown, TIME_UNITS)
         self._setup_dropdown(self.accuracy_dropdown, ACCURACY_LABELS)
+        self._setup_dropdown(self.physics_mode_dropdown, PHYSICS_MODE_LABELS)
+        self._setup_dropdown(self.integrator_dropdown, INTEGRATOR_LABELS)
         self._setup_dropdown(self.view_mode_dropdown, VIEW_MODE_LABELS)
         self._setup_dropdown(self.simulation_scope_dropdown, SIMULATION_SCOPE_LABELS)
         self._setup_dropdown(self.trail_frame_dropdown, TRAIL_FRAME_LABELS)
@@ -250,6 +260,8 @@ class SystemPropertiesPanel(GObject.GObject):
         self.speed_spin.connect("value-changed", self._on_time_step_changed)
         self.time_unit_dropdown.connect("notify::selected", self._on_time_step_changed)
         self.accuracy_dropdown.connect("notify::selected", self._on_accuracy_changed)
+        self.physics_mode_dropdown.connect("notify::selected", self._on_physics_mode_changed)
+        self.integrator_dropdown.connect("notify::selected", self._on_integrator_changed)
         self.view_mode_dropdown.connect("notify::selected", self._on_view_mode_changed)
         self.simulation_scope_dropdown.connect("notify::selected", self._on_simulation_scope_changed)
         self.trail_frame_dropdown.connect("notify::selected", self._on_trail_frame_changed)
@@ -295,6 +307,12 @@ class SystemPropertiesPanel(GObject.GObject):
             self.speed_spin.set_value(settings.visible_step_s / time_factor)
             self.time_unit_dropdown.set_selected(unit_index(TIME_UNITS, time_unit))
             self.accuracy_dropdown.set_selected(unit_index(ACCURACY_LABELS, settings.accuracy_profile))
+            self.physics_mode_dropdown.set_selected(
+                unit_index(PHYSICS_MODE_LABELS, settings.physics_mode)
+            )
+            self.integrator_dropdown.set_selected(
+                unit_index(INTEGRATOR_LABELS, settings.integrator)
+            )
             self.view_mode_dropdown.set_selected(unit_index(VIEW_MODE_LABELS, settings.view_mode))
             self.simulation_scope_dropdown.set_selected(unit_index(SIMULATION_SCOPE_LABELS, settings.simulation_scope))
             self.trail_frame_dropdown.set_selected(unit_index(TRAIL_FRAME_LABELS, settings.trail_frame))
@@ -344,6 +362,18 @@ class SystemPropertiesPanel(GObject.GObject):
             selected = dropdown.get_selected()
             if selected < len(ACCURACY_LABELS):
                 self.emit("accuracy-changed", ACCURACY_LABELS[selected][1])
+
+    def _on_physics_mode_changed(self, dropdown, _param) -> None:
+        if not self.editing:
+            selected = dropdown.get_selected()
+            if selected < len(PHYSICS_MODE_LABELS):
+                self.emit("physics-mode-changed", PHYSICS_MODE_LABELS[selected][1])
+
+    def _on_integrator_changed(self, dropdown, _param) -> None:
+        if not self.editing:
+            selected = dropdown.get_selected()
+            if selected < len(INTEGRATOR_LABELS):
+                self.emit("integrator-changed", INTEGRATOR_LABELS[selected][1])
 
     def _on_view_mode_changed(self, dropdown, _param) -> None:
         if not self.editing:

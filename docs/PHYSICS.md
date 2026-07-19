@@ -25,15 +25,31 @@ The anchor only defines the initial osculating state; it does not remain a fixed
 
 - `SimulationState`: NumPy arrays for masses, positions, velocities, and elapsed seconds.
 - `acceleration(...)`: computes Newtonian or first post-Newtonian accelerations.
-- `step(state, dt_s, mode)`: low-level single velocity-Verlet style integrator step.
-- `advance(state, total_dt_s, mode, max_step_s=DAY)`: user-facing advance helper that splits large intervals into stable internal substeps.
-- `advance_with_samples(state, total_dt_s, mode, max_step_s=DAY)`: same bounded advance behavior, plus copied position samples after each internal substep.
+- `step(state, dt_s, mode, integrator)`: one low-level Velocity Verlet or RK4 integrator step.
+- `advance(state, total_dt_s, mode, max_step_s=DAY, integrator="velocity_verlet")`: user-facing advance helper that splits large intervals into stable internal substeps.
+- `advance_with_samples(state, total_dt_s, mode, max_step_s=DAY, integrator="velocity_verlet")`: same bounded advance behavior, plus copied position samples after each internal substep.
+- `compute_conservation_diagnostics(state)`: center-of-mass-frame Newtonian mechanical energy and angular momentum.
+- `compute_conservation_drift(current, baseline)`: absolute and relative changes from a captured diagnostic baseline.
 
 UI playback must use `advance_with_samples()` so trails can use the same internal substeps as physics. Non-UI callers that only need the final state can use `advance()`. Do not make direct large calls to `step()`.
 
 ## Relativity Model
 
 `post_newtonian` is a practical first post-Newtonian pairwise correction suitable for an interactive solar-system app. It is not full numerical relativity.
+
+The selected gravity model is saved per system. `post_newtonian` remains the default for existing documents; `newtonian` is available for classical N-body experiments and exact interpretation of the conservation diagnostics. The energy reported in post-Newtonian mode is explicitly a Newtonian proxy because the practical pairwise correction does not have a matching conserved-energy expression in this app.
+
+## Integrators
+
+Velocity Verlet remains the default and preferred option for long-duration qualitative orbital work because of its conservation behavior under Newtonian gravity. Classical fourth-order Runge-Kutta is available when higher per-step accuracy is more useful, including finely resolved close encounters. RK4 evaluates acceleration four times per substep instead of twice, so Auto physics cost prediction counts it as twice the integration work.
+
+Both algorithms support Newtonian and post-Newtonian acceleration, bounded internal substeps, position sampling, and negative playback intervals. RK4 is not presented as a symplectic integrator.
+
+## Conservation Diagnostics
+
+The main-menu Physics Diagnostics action calculates a snapshot from the latest state applied on the GTK main thread. Kinetic energy is calculated after subtracting center-of-mass velocity, and angular momentum is calculated about the system barycenter, making both values insensitive to a constant origin translation or velocity boost. Potential energy sums each body pair once.
+
+The baseline is refreshed when a system is loaded, reset, saved as the new loaded state, or structurally rebuilt. Approximate policies and collapsed-moon proxies can produce expected drift, which the dialog calls out. Coincident bodies make potential energy undefined and produce an unavailable-diagnostics error instead of a misleading value.
 
 ## Large-Step Instability
 

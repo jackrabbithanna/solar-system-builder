@@ -72,6 +72,24 @@ The accuracy menu controls how small the internal simulation substeps should be.
 
 The window subtitle shows the effective physics policy, whether Auto is using an approximation, and the current maximum internal step in days.
 
+### Gravity Model
+
+The gravity model is saved with the system and applies to normal, overview, and focused worker jobs.
+
+- Post-Newtonian (1PN) is the default practical solar-system correction.
+- Newtonian uses classical pairwise gravity and is the mode for exact interpretation of the conservation readout.
+
+Changing gravity model preserves current positions and velocities, clears trails, and invalidates any in-flight result so the next worker job uses the new model.
+
+### Integrator
+
+The integrator menu selects the numerical algorithm used inside each bounded substep.
+
+- Velocity Verlet is the default and recommended long-duration qualitative option.
+- Runge-Kutta 4 evaluates the force more often for higher per-step accuracy and is useful for finely resolved encounters. It is slower and is not symplectic.
+
+Changing integrator preserves the current state, clears trails, and invalidates in-flight work.
+
 ### View Scale Mode
 
 The view mode controls how the canvas is centered and scaled.
@@ -95,6 +113,10 @@ The physics policy controls which bodies or aggregate system markers participate
 - Focus + Coarse Context simulates a focused subsystem together with outside aggregate context so they exert gravity on each other.
 
 Auto starts with a hardware-neutral estimate and refines it from measured full-physics worker times. If full N-body exceeds the budget, Auto chooses the best available approximation. Once approximate history has been applied, Auto remains approximate until Reset because omitted orbital phases cannot be reconstructed exactly. Selecting Full N-body after that history offers to reset first.
+
+### Physics Diagnostics
+
+Physics Diagnostics in the main menu shows a snapshot of center-of-mass-frame kinetic, potential, and total energy; angular-momentum components and magnitude; and drift from the loaded or saved baseline. Reopen the dialog to refresh the snapshot. Post-Newtonian energy is labeled as a Newtonian proxy, and approximate policies warn that topology changes can produce expected drift.
 
 ### Trail Perspective
 

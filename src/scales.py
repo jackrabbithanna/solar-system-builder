@@ -37,6 +37,16 @@ ACCURACY_LABELS: tuple[tuple[str, str], ...] = (
     ("Fast", "fast"),
 )
 
+PHYSICS_MODE_LABELS: tuple[tuple[str, str], ...] = (
+    ("Post-Newtonian (1PN)", "post_newtonian"),
+    ("Newtonian", "newtonian"),
+)
+
+INTEGRATOR_LABELS: tuple[tuple[str, str], ...] = (
+    ("Velocity Verlet", "velocity_verlet"),
+    ("Runge-Kutta 4", "rk4"),
+)
+
 VIEW_MODE_LABELS: tuple[tuple[str, str], ...] = (
     ("Fit System", "fit_system"),
     ("Follow Selected", "follow_selected"),

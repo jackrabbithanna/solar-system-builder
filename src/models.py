@@ -13,9 +13,11 @@ from uuid import uuid4
 
 from .constants import DAY
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 ACCURACY_PROFILES = {"high", "balanced", "fast"}
+PHYSICS_MODES = {"newtonian", "post_newtonian"}
+INTEGRATORS = {"velocity_verlet", "rk4"}
 BODY_KINDS = frozenset({"star", "planet", "dwarf planet", "moon", "comet", "asteroid"})
 STATE_ORIGINS = frozenset({"cartesian", "orbital", "horizons", "flyby"})
 REFERENCE_FRAME_SOURCES = frozenset({"app_local", "horizons"})
@@ -489,6 +491,8 @@ class SystemGroup:
 class SystemSettings:
     visible_step_s: float = DAY
     accuracy_profile: str = "balanced"
+    physics_mode: str = "post_newtonian"
+    integrator: str = "velocity_verlet"
     distance_unit: str = "AU"
     view_mode: str = "fit_system"
     simulation_scope: str = "auto"
@@ -512,6 +516,8 @@ class SystemSettings:
         settings = cls(
             visible_step_s=float(data.get("visible_step_s", defaults.visible_step_s)),
             accuracy_profile=str(data.get("accuracy_profile", defaults.accuracy_profile)),
+            physics_mode=str(data.get("physics_mode", defaults.physics_mode)),
+            integrator=str(data.get("integrator", defaults.integrator)),
             distance_unit=str(data.get("distance_unit", defaults.distance_unit)),
             view_mode=str(data.get("view_mode", defaults.view_mode)),
             simulation_scope=str(data.get("simulation_scope", defaults.simulation_scope)),
@@ -537,6 +543,10 @@ class SystemSettings:
             raise ModelError("trail_sample_interval_s must be positive")
         if self.accuracy_profile not in ACCURACY_PROFILES:
             raise ModelError(f"unsupported accuracy_profile {self.accuracy_profile}")
+        if self.physics_mode not in PHYSICS_MODES:
+            raise ModelError(f"unsupported physics_mode {self.physics_mode}")
+        if self.integrator not in INTEGRATORS:
+            raise ModelError(f"unsupported integrator {self.integrator}")
         if self.distance_unit not in DISTANCE_UNITS:
             raise ModelError(f"unsupported distance_unit {self.distance_unit}")
         if self.view_mode not in VIEW_MODES:
@@ -557,6 +567,8 @@ class SystemSettings:
         return {
             "visible_step_s": self.visible_step_s,
             "accuracy_profile": self.accuracy_profile,
+            "physics_mode": self.physics_mode,
+            "integrator": self.integrator,
             "distance_unit": self.distance_unit,
             "view_mode": self.view_mode,
             "simulation_scope": self.simulation_scope,

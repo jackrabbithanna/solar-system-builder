@@ -258,6 +258,29 @@ class PlaybackTests(unittest.TestCase):
         self.assertEqual(playback.estimate_work_units(10.0, 3.0, 4), 64)
         self.assertEqual(playback.estimate_work_units(-10.0, 3.0, 4), 64)
         self.assertEqual(playback.estimate_work_units(0.0, 3.0, 4), 0)
+        self.assertEqual(playback.estimate_work_units(10.0, 3.0, 4, "rk4"), 128)
+
+    def test_job_plan_carries_physics_mode_and_integrator(self):
+        bodies = [_body("a"), _body("b", position=[1.0, 0.0, 0.0])]
+        settings = SystemSettings(
+            simulation_scope="full_nbody",
+            physics_mode="newtonian",
+            integrator="rk4",
+        )
+
+        job = playback.SimulationSession.from_bodies(bodies).create_job(
+            bodies,
+            [],
+            settings,
+            0,
+            None,
+            None,
+            1.0,
+        )
+
+        self.assertEqual(job.plan.physics_mode, "newtonian")
+        self.assertEqual(job.plan.integrator, "rk4")
+        self.assertEqual(job.plan.estimated_work_units, 8)
 
     def test_auto_policy_uses_full_for_small_presets_and_overview_for_alpha_centauri(self):
         systems = {system.name: system for system in load_builtin_solar_systems()}
@@ -449,7 +472,13 @@ class PlaybackTests(unittest.TestCase):
 
         self.assertEqual(focused_result, expected_result)
         self.assertIsNone(context_result)
-        advance.assert_called_once_with(state, 10.0, "post_newtonian", 1.0)
+        advance.assert_called_once_with(
+            state,
+            10.0,
+            "post_newtonian",
+            1.0,
+            "velocity_verlet",
+        )
 
     def test_hybrid_worker_couples_context_then_splits_results(self):
         focused = _state([[1.0, 0.0, 0.0]], elapsed_s=2.0)
@@ -466,6 +495,8 @@ class PlaybackTests(unittest.TestCase):
                 context,
                 1.0,
                 0.25,
+                "newtonian",
+                "rk4",
             )
 
         combined_input = advance.call_args.args[0]
@@ -474,7 +505,45 @@ class PlaybackTests(unittest.TestCase):
         self.assertEqual(context_result[0].positions_m[0][0], 20.0)
         self.assertEqual(focused_result[1][0].shape, (1, 3))
         self.assertEqual(context_result[1][0].shape, (1, 3))
-        advance.assert_called_once_with(combined_input, 1.0, "post_newtonian", 0.25)
+        advance.assert_called_once_with(combined_input, 1.0, "newtonian", 0.25, "rk4")
+
+    def test_worker_job_uses_planned_physics_configuration(self):
+        body = _body("a")
+        settings = SystemSettings(
+            simulation_scope="full_nbody",
+            physics_mode="newtonian",
+            integrator="rk4",
+        )
+        job = playback.SimulationSession.from_bodies([body]).create_job(
+            [body],
+            [],
+            settings,
+            0,
+            None,
+            None,
+            10.0,
+        )
+        expected = (job.state.copy(), [])
+
+        with patch("src.playback.advance_with_samples", return_value=expected) as advance:
+            result = playback.run_simulation_job(job)
+
+        self.assertEqual(result.state, expected[0])
+        advance.assert_called_once_with(job.state, 10.0, "newtonian", job.plan.max_step_s, "rk4")
+
+    def test_diagnostic_baseline_rebases_with_replaced_bodies(self):
+        bodies = [_body("a"), _body("b", position=[1.0, 0.0, 0.0])]
+        session = playback.SimulationSession.from_bodies(bodies)
+
+        _current, initial_drift = session.conservation_snapshot(bodies, [])
+        session.state.positions_m[1][0] = 2.0
+        _current, moved_drift = session.conservation_snapshot(bodies, [])
+        session.replace_bodies(bodies)
+        _current, replaced_drift = session.conservation_snapshot(bodies, [])
+
+        self.assertEqual(initial_drift.energy_delta_j, 0.0)
+        self.assertNotEqual(moved_drift.energy_delta_j, 0.0)
+        self.assertEqual(replaced_drift.energy_delta_j, 0.0)
 
     def test_planetary_focus_job_keeps_host_star_as_coupled_context(self):
         bodies = [

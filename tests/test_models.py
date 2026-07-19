@@ -93,6 +93,8 @@ class ModelTests(unittest.TestCase):
                 data = json.loads((PRESET_DIR / filename).read_text(encoding="utf-8"))
                 self.assertEqual(data["schema_version"], SCHEMA_VERSION)
                 self.assertIn("settings", data)
+                self.assertIn("physics_mode", data["settings"])
+                self.assertIn("integrator", data["settings"])
                 self.assertIn("trail_frame", data["settings"])
                 self.assertIn("orbit_visibility", data["settings"])
                 self.assertIn("trail_visibility", data["settings"])
@@ -310,6 +312,8 @@ class ModelTests(unittest.TestCase):
         data["settings"] = {
             "visible_step_s": 10.0 * DAY,
             "accuracy_profile": "fast",
+            "physics_mode": "newtonian",
+            "integrator": "rk4",
             "distance_unit": "kAU",
             "view_mode": "log_overview",
             "simulation_scope": "stellar_overview",
@@ -325,6 +329,8 @@ class ModelTests(unittest.TestCase):
 
         self.assertEqual(clone.settings.visible_step_s, 10.0 * DAY)
         self.assertEqual(clone.settings.accuracy_profile, "fast")
+        self.assertEqual(clone.settings.physics_mode, "newtonian")
+        self.assertEqual(clone.settings.integrator, "rk4")
         self.assertEqual(clone.settings.distance_unit, "kAU")
         self.assertEqual(clone.settings.view_mode, "log_overview")
         self.assertEqual(clone.settings.simulation_scope, "stellar_overview")
@@ -343,6 +349,15 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(settings.orbit_visibility, "all")
         self.assertEqual(settings.trail_visibility, "all")
         self.assertEqual(settings.path_style, "subtle")
+
+    def test_v12_settings_receive_v13_physics_defaults(self):
+        data = _sample_system_data(schema_version=12)
+        data["settings"] = {"accuracy_profile": "fast"}
+
+        settings = SolarSystem.from_dict(data).settings
+
+        self.assertEqual(settings.physics_mode, "post_newtonian")
+        self.assertEqual(settings.integrator, "velocity_verlet")
 
     def test_fixed_scale_view_mode_round_trips(self):
         data = _sample_system_data()
@@ -417,6 +432,14 @@ class ModelTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ModelError, "unsupported simulation_scope"):
             SolarSystem.from_dict(data)
+
+    def test_invalid_physics_configuration_fails(self):
+        for field, value in (("physics_mode", "quantum"), ("integrator", "euler")):
+            with self.subTest(field=field):
+                data = _sample_system_data()
+                data["settings"] = {field: value}
+                with self.assertRaisesRegex(ModelError, f"unsupported {field}"):
+                    SolarSystem.from_dict(data)
 
     def test_invalid_trail_frame_fails(self):
         data = _sample_system_data()

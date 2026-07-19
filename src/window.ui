@@ -275,10 +275,14 @@
                     </child>
                     <child>
                       <object class="GtkBox" id="settings_controls_box">
-                        <property name="orientation">horizontal</property>
-                        <property name="spacing">12</property>
+                        <property name="orientation">vertical</property>
+                        <property name="spacing">8</property>
                         <child>
-                          <object class="GtkBox">
+                          <object class="GtkBox" id="settings_primary_row">
+                            <property name="orientation">horizontal</property>
+                            <property name="spacing">12</property>
+                            <child>
+                              <object class="GtkBox">
                             <property name="orientation">vertical</property>
                             <property name="spacing">4</property>
                             <child>
@@ -315,10 +319,10 @@
                                 </child>
                               </object>
                             </child>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkBox">
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkBox">
                             <property name="orientation">vertical</property>
                             <property name="spacing">4</property>
                             <child>
@@ -334,10 +338,10 @@
                                 <property name="tooltip-text" translatable="yes">Simulation accuracy</property>
                               </object>
                             </child>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkBox">
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkBox">
                             <property name="orientation">vertical</property>
                             <property name="spacing">4</property>
                             <child>
@@ -353,10 +357,54 @@
                                 <property name="tooltip-text" translatable="yes">View scale mode</property>
                               </object>
                             </child>
+                              </object>
+                            </child>
                           </object>
                         </child>
                         <child>
-                          <object class="GtkBox">
+                          <object class="GtkBox" id="settings_physics_row">
+                            <property name="orientation">horizontal</property>
+                            <property name="spacing">12</property>
+                            <child>
+                              <object class="GtkBox">
+                                <property name="orientation">vertical</property>
+                                <property name="spacing">4</property>
+                                <child>
+                                  <object class="GtkLabel">
+                                    <property name="label" translatable="yes">_Gravity Model</property>
+                                    <property name="use-underline">True</property>
+                                    <property name="mnemonic-widget">physics_mode_dropdown</property>
+                                    <property name="xalign">0</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkDropDown" id="physics_mode_dropdown">
+                                    <property name="tooltip-text" translatable="yes">Newtonian or first post-Newtonian gravity</property>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkBox">
+                                <property name="orientation">vertical</property>
+                                <property name="spacing">4</property>
+                                <child>
+                                  <object class="GtkLabel">
+                                    <property name="label" translatable="yes">_Integrator</property>
+                                    <property name="use-underline">True</property>
+                                    <property name="mnemonic-widget">integrator_dropdown</property>
+                                    <property name="xalign">0</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkDropDown" id="integrator_dropdown">
+                                    <property name="tooltip-text" translatable="yes">Numerical integration algorithm</property>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkBox">
                             <property name="orientation">vertical</property>
                             <property name="spacing">4</property>
                             <child>
@@ -372,10 +420,10 @@
                                 <property name="tooltip-text" translatable="yes">Physics integration policy</property>
                               </object>
                             </child>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkBox">
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkBox">
                             <property name="orientation">vertical</property>
                             <property name="spacing">4</property>
                             <child>
@@ -389,6 +437,8 @@
                             <child>
                               <object class="GtkDropDown" id="trail_frame_dropdown">
                                 <property name="tooltip-text" translatable="yes">Trail coordinates used during Focus and Fit</property>
+                              </object>
+                            </child>
                               </object>
                             </child>
                           </object>
@@ -1048,6 +1098,12 @@
       <item>
         <attribute name="label" translatable="yes">Reset _Bundled Preset</attribute>
         <attribute name="action">win.reset-bundled-preset</attribute>
+      </item>
+    </section>
+    <section>
+      <item>
+        <attribute name="label" translatable="yes">_Physics Diagnostics…</attribute>
+        <attribute name="action">win.physics-diagnostics</attribute>
       </item>
     </section>
     <section>
