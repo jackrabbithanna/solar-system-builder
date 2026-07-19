@@ -35,7 +35,17 @@ from .horizons import (
     parse_required_physical_value,
     shift_horizons_frame_epoch,
 )
-from .models import Body, DataSource, ModelError, OrbitData, SolarSystem, SystemGroup, SystemSettings
+from .flybys import radial_velocity_mps, solve_flyby
+from .models import (
+    Body,
+    DataSource,
+    FlybyData,
+    ModelError,
+    OrbitData,
+    SolarSystem,
+    SystemGroup,
+    SystemSettings,
+)
 from .orbit_editing import (
     generate_binary_pair_orbit,
     generate_body_orbit,
@@ -64,6 +74,7 @@ from .system_editing import (
     BODY_DEFAULTS,
     DEFAULT_ORBIT_RADIUS_M,
     BodyStateInput,
+    add_flyby_from_state,
     add_body_from_state,
     add_star_system,
     create_system,
@@ -71,6 +82,7 @@ from .system_editing import (
     delete_group_cascade,
     deletion_summary_for_body,
     deletion_summary_for_group,
+    regenerate_flyby,
     update_body_from_state,
 )
 from .system_library import SystemLibraryController
@@ -78,6 +90,7 @@ from .system_library import SystemLibraryController
 MAX_AUTOMATIC_SIDEBAR_WIDTH = 520
 SIDEBAR_HORIZONTAL_MARGINS = 24
 WINDOW_MONITOR_MARGIN = 32
+FLYBY_KIND_OPTIONS = ("star", "planet", "dwarf planet", "comet", "asteroid")
 
 
 @Gtk.Template(resource_path="/io/github/jackrabbithanna/solarsystembuilder/window.ui")
@@ -122,6 +135,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     add_moon_button = Gtk.Template.Child()
     add_comet_button = Gtk.Template.Child()
     add_asteroid_button = Gtk.Template.Child()
+    add_flyby_button = Gtk.Template.Child()
     search_horizons_button = Gtk.Template.Child()
     delete_selected_button = Gtk.Template.Child()
     selected_name_entry = Gtk.Template.Child()
@@ -144,6 +158,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     generate_orbit_button = Gtk.Template.Child()
     generate_group_orbit_button = Gtk.Template.Child()
     generate_binary_orbit_button = Gtk.Template.Child()
+    edit_flyby_button = Gtk.Template.Child()
     orbit_status_label = Gtk.Template.Child()
     distance_unit_dropdown = Gtk.Template.Child()
     body_kind_dropdown = Gtk.Template.Child()
@@ -314,7 +329,9 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.add_moon_button.connect("clicked", self._on_add_moon_clicked)
         self.add_comet_button.connect("clicked", lambda *_args: self._on_add_orbiting_kind("comet"))
         self.add_asteroid_button.connect("clicked", lambda *_args: self._on_add_orbiting_kind("asteroid"))
+        self.add_flyby_button.connect("clicked", self._on_add_flyby_clicked)
         self.search_horizons_button.connect("clicked", self._on_search_horizons_clicked)
+        self.edit_flyby_button.connect("clicked", self._on_edit_flyby_clicked)
         self.delete_selected_button.connect("clicked", self._on_delete_selected_clicked)
         self.body_list.connect("body-selected", self._on_hierarchy_body_selected)
         self.body_list.connect("group-selected", self._on_hierarchy_group_selected)
@@ -892,6 +909,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             parent = next((item for item in self.system.bodies if item.id == body.parent_id), None)
 
         self._show_group_orbit_controls(False)
+        self.edit_flyby_button.set_visible(False)
         editable = self._current_system_editable()
         self.body_inspector.set_orbit_expander_sensitive(body is not None)
         self._set_orbit_editor_sensitive(editable and body is not None and parent is not None)
@@ -902,6 +920,30 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             if body is None:
                 self._load_orbit_values(None, None, 0.0)
                 self.body_inspector.set_orbit_status("")
+            elif body.flyby is not None:
+                anchor = next(
+                    (
+                        candidate
+                        for candidate in self.system.bodies
+                        if candidate.id == body.flyby.anchor_body_id
+                    ),
+                    None,
+                )
+                self._load_orbit_values(body.orbit, None, 0.0)
+                self._set_orbit_editor_sensitive(False)
+                self.body_inspector.set_generate_body_orbit_sensitive(False)
+                self.edit_flyby_button.set_visible(True)
+                self.edit_flyby_button.set_sensitive(editable)
+                anchor_name = anchor.name if anchor is not None else "its anchor"
+                phase = (
+                    "currently inbound"
+                    if anchor is not None and radial_velocity_mps(anchor, body) < 0.0
+                    else "currently outbound"
+                )
+                self.body_inspector.set_orbit_status(
+                    f"Configured hyperbolic flyby around {anchor_name}; {phase}. "
+                    "Use Edit Flyby to regenerate its initial state."
+                )
             elif binary_group := self._direct_binary_group_for_body(body):
                 self._load_orbit_values(binary_group.orbit, binary_group.data_source, 0.0)
                 self._set_orbit_editor_sensitive(editable)
@@ -922,6 +964,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
 
     def _load_group_orbit_editor(self, group: SystemGroup) -> None:
         editable = self._current_system_editable()
+        self.edit_flyby_button.set_visible(False)
         self.body_inspector.set_orbit_expander_sensitive(True)
         self._show_group_orbit_controls(True)
         self._set_orbit_editor_sensitive(editable)
@@ -1057,6 +1100,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
                     visible=visible,
                     trail_enabled=trail_enabled,
                 ),
+                preserve_metadata=not physics_changed,
             )
         except ModelError as error:
             self._show_error_dialog("Cannot Apply Body Changes", str(error))
@@ -1066,6 +1110,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             body.orbit = None
             body.data_source = None
             body.state_origin = "cartesian"
+            body.flyby = None
             self.playing = False
             self.play_button.set_icon_name("media-playback-start-symbolic")
             self._clear_dynamic_simulation_state()
@@ -1948,6 +1993,395 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _on_add_star_clicked(self, _button) -> None:
         self._show_manual_body_dialog("star", "Add Star", "New Star", [])
 
+    def _on_add_flyby_clicked(self, _button) -> None:
+        self._show_flyby_dialog(None)
+
+    def _on_edit_flyby_clicked(self, _button) -> None:
+        if not self.system.bodies or self.selected_group_id is not None:
+            return
+        body = self.system.bodies[self.selected_index]
+        if body.flyby is not None:
+            self._show_flyby_dialog(body)
+
+    def _show_flyby_dialog(self, body: Body | None) -> None:
+        anchors = [
+            candidate
+            for candidate in self.system.bodies
+            if candidate.kind == "star"
+            and candidate.parent_id is None
+            and candidate.flyby is None
+            and (body is None or candidate.id != body.id)
+        ]
+        if not anchors:
+            self._show_error_dialog(
+                "Cannot Add Flyby",
+                "A flyby requires an existing root star as its encounter anchor.",
+            )
+            return
+
+        default_anchor, default_periapsis_m = self._default_flyby_anchor(anchors)
+        if body is not None and body.flyby is not None:
+            default_anchor = next(
+                (
+                    anchor
+                    for anchor in anchors
+                    if anchor.id == body.flyby.anchor_body_id
+                ),
+                default_anchor,
+            )
+            default_periapsis_m = body.flyby.periapsis_distance_m
+
+        initial_kind = body.kind if body is not None else "star"
+        mass_default, radius_default, color_default = BODY_DEFAULTS[initial_kind]
+        template_dropdown = Gtk.DropDown.new_from_strings(["Custom", "Proxima-like"])
+        kind_dropdown = Gtk.DropDown.new_from_strings(
+            [kind.title() for kind in FLYBY_KIND_OPTIONS]
+        )
+        kind_dropdown.set_selected(FLYBY_KIND_OPTIONS.index(initial_kind))
+        anchor_dropdown = Gtk.DropDown.new_from_strings([anchor.name for anchor in anchors])
+        anchor_dropdown.set_selected(anchors.index(default_anchor))
+        name_entry = Gtk.Entry(text=body.name if body is not None else "New Flyby")
+        mass_entry = Gtk.Entry(
+            text=f"{body.mass_kg if body is not None else mass_default:.12g}"
+        )
+        radius_entry = Gtk.Entry(
+            text=f"{body.radius_m if body is not None else radius_default:.12g}"
+        )
+        color_entry = Gtk.Entry(text=body.color if body is not None else color_default)
+        visible_switch = Gtk.Switch(
+            active=body.visible if body is not None else True,
+            halign=Gtk.Align.START,
+        )
+        trail_switch = Gtk.Switch(
+            active=body.trail_enabled if body is not None else True,
+            halign=Gtk.Align.START,
+        )
+        existing = body.flyby if body is not None else None
+        periapsis_spin = self._dialog_spin(
+            1.0e-9,
+            1.0e9,
+            default_periapsis_m / AU,
+            6,
+            0.1,
+        )
+        start_spin = self._dialog_spin(
+            1.0e-9,
+            1.0e9,
+            (existing.start_distance_m if existing else 5.0 * default_periapsis_m) / AU,
+            6,
+            1.0,
+        )
+        velocity_spin = self._dialog_spin(
+            0.001,
+            1.0e6,
+            (existing.velocity_at_infinity_mps / 1000.0) if existing else 20.0,
+            3,
+            1.0,
+        )
+        inclination_spin = self._dialog_spin(
+            -360.0,
+            360.0,
+            existing.inclination_deg if existing else 0.0,
+            3,
+            1.0,
+        )
+        node_spin = self._dialog_spin(
+            -360.0,
+            360.0,
+            existing.longitude_of_ascending_node_deg if existing else 0.0,
+            3,
+            1.0,
+        )
+        argument_spin = self._dialog_spin(
+            -360.0,
+            360.0,
+            existing.argument_of_periapsis_deg if existing else 0.0,
+            3,
+            1.0,
+        )
+        preview_label = Gtk.Label(xalign=0, wrap=True, selectable=True)
+        preview_label.add_css_class("dim-label")
+
+        grid = Gtk.Grid(column_spacing=10, row_spacing=8)
+        rows = (
+            ("Template", template_dropdown),
+            ("Name", name_entry),
+            ("Kind", kind_dropdown),
+            ("Encounter Anchor", anchor_dropdown),
+            ("Mass (kg)", mass_entry),
+            ("Radius (m)", radius_entry),
+            ("Color", color_entry),
+            ("Visible", visible_switch),
+            ("Trail", trail_switch),
+            ("Periapsis Distance (AU)", periapsis_spin),
+            ("Starting Distance (AU)", start_spin),
+            ("Velocity at Infinity (km/s)", velocity_spin),
+            ("Inclination (deg)", inclination_spin),
+            ("Ascending Node (deg)", node_spin),
+            ("Periapsis Argument (deg)", argument_spin),
+            ("Derived Initial State", preview_label),
+        )
+        for row, (label, widget) in enumerate(rows):
+            self._attach_dialog_row(grid, row, label, widget)
+        grid.set_margin_top(6)
+        grid.set_margin_bottom(6)
+        grid.set_margin_start(6)
+        grid.set_margin_end(6)
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_min_content_height(560)
+        scroller.set_propagate_natural_width(True)
+        scroller.set_child(grid)
+
+        title = "Edit Flyby" if body is not None else "Add Flyby"
+        dialog = Adw.AlertDialog.new(
+            title,
+            "The body starts inbound and remains in the system after periapsis.",
+        )
+        dialog.set_extra_child(scroller)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("create", "Regenerate" if body is not None else "Add Flyby")
+        dialog.set_close_response("cancel")
+        dialog.set_default_response("create")
+        dialog.set_response_appearance("create", Adw.ResponseAppearance.SUGGESTED)
+
+        controls = {
+            "name": name_entry,
+            "kind": kind_dropdown,
+            "anchor": anchor_dropdown,
+            "mass": mass_entry,
+            "radius": radius_entry,
+            "color": color_entry,
+            "visible": visible_switch,
+            "trail": trail_switch,
+            "periapsis": periapsis_spin,
+            "start": start_spin,
+            "velocity": velocity_spin,
+            "inclination": inclination_spin,
+            "node": node_spin,
+            "argument": argument_spin,
+            "preview": preview_label,
+        }
+
+        def current_input() -> tuple[BodyStateInput, FlybyData]:
+            kind_index = kind_dropdown.get_selected()
+            anchor_index = anchor_dropdown.get_selected()
+            if kind_index >= len(FLYBY_KIND_OPTIONS) or anchor_index >= len(anchors):
+                raise ModelError("select a flyby kind and encounter anchor")
+            mass = float(mass_entry.get_text())
+            radius = float(radius_entry.get_text())
+            if mass <= 0.0 or radius <= 0.0 or not all(
+                math.isfinite(value) for value in (mass, radius)
+            ):
+                raise ModelError("mass and radius must be finite and positive")
+            state = BodyStateInput(
+                name=name_entry.get_text(),
+                kind=FLYBY_KIND_OPTIONS[kind_index],
+                mass_kg=mass,
+                radius_m=radius,
+                position_m=(0.0, 0.0, 0.0),
+                velocity_mps=(0.0, 0.0, 0.0),
+                color=color_entry.get_text().strip() or BODY_DEFAULTS[FLYBY_KIND_OPTIONS[kind_index]][2],
+                visible=visible_switch.get_active(),
+                trail_enabled=trail_switch.get_active(),
+            )
+            flyby = FlybyData(
+                anchor_body_id=anchors[anchor_index].id,
+                periapsis_distance_m=periapsis_spin.get_value() * AU,
+                velocity_at_infinity_mps=velocity_spin.get_value() * 1000.0,
+                start_distance_m=start_spin.get_value() * AU,
+                inclination_deg=inclination_spin.get_value(),
+                longitude_of_ascending_node_deg=node_spin.get_value(),
+                argument_of_periapsis_deg=argument_spin.get_value(),
+            )
+            flyby.validate()
+            return state, flyby
+
+        def update_preview(*_args) -> None:
+            try:
+                state, flyby = current_input()
+                anchor = next(item for item in anchors if item.id == flyby.anchor_body_id)
+                preview_body = Body(
+                    name=state.name.strip() or "Flyby",
+                    kind=state.kind,
+                    mass_kg=state.mass_kg,
+                    radius_m=state.radius_m,
+                    position_m=[0.0, 0.0, 0.0],
+                    velocity_mps=[0.0, 0.0, 0.0],
+                    color=state.color,
+                    id=body.id if body is not None else "flyby-preview",
+                )
+                frame = self.system.reference_frame
+                solution = solve_flyby(
+                    anchor,
+                    preview_body,
+                    flyby,
+                    epoch=frame.epoch if frame is not None else self.system.epoch,
+                    reference_plane=frame.reference_plane if frame is not None else "app-local XY",
+                )
+                position = ", ".join(f"{value / AU:.4f}" for value in solution.position_m)
+                velocity = ", ".join(f"{value / 1000.0:.4f}" for value in solution.velocity_mps)
+                preview_label.set_label(
+                    f"e = {solution.orbit.eccentricity:.6g}; "
+                    f"a = {solution.orbit.semi_major_axis_m / AU:.6g} AU\n"
+                    f"XYZ = ({position}) AU\nV = ({velocity}) km/s"
+                )
+                dialog.set_response_enabled("create", bool(state.name.strip()))
+            except (ModelError, ValueError, StopIteration) as error:
+                preview_label.set_label(str(error))
+                dialog.set_response_enabled("create", False)
+
+        def apply_template(dropdown, _param) -> None:
+            if dropdown.get_selected() != 1:
+                return
+            kind_dropdown.set_selected(FLYBY_KIND_OPTIONS.index("star"))
+            name_entry.set_text("Proxima-like Flyby")
+            mass_entry.set_text(f"{0.1221 * BODY_DEFAULTS['star'][0]:.12g}")
+            radius_entry.set_text(f"{0.1542 * BODY_DEFAULTS['star'][1]:.12g}")
+            color_entry.set_text("#ff7b54")
+            update_preview()
+
+        def apply_kind_defaults(dropdown, _param) -> None:
+            if template_dropdown.get_selected() != 0:
+                return
+            selected = dropdown.get_selected()
+            if selected >= len(FLYBY_KIND_OPTIONS):
+                return
+            kind = FLYBY_KIND_OPTIONS[selected]
+            mass, radius, color = BODY_DEFAULTS[kind]
+            mass_entry.set_text(f"{mass:.12g}")
+            radius_entry.set_text(f"{radius:.12g}")
+            color_entry.set_text(color)
+            if body is None:
+                name_entry.set_text(f"New {kind.title()} Flyby")
+            update_preview()
+
+        template_dropdown.connect("notify::selected", apply_template)
+        kind_dropdown.connect("notify::selected", apply_kind_defaults)
+        anchor_dropdown.connect("notify::selected", update_preview)
+        mass_entry.connect("changed", update_preview)
+        radius_entry.connect("changed", update_preview)
+        name_entry.connect("changed", update_preview)
+        for spin in (
+            periapsis_spin,
+            start_spin,
+            velocity_spin,
+            inclination_spin,
+            node_spin,
+            argument_spin,
+        ):
+            spin.connect("value-changed", update_preview)
+        dialog.connect(
+            "response",
+            lambda source, response: self._finish_flyby_dialog(
+                source,
+                response,
+                body.id if body is not None else None,
+                anchors,
+                controls,
+            ),
+        )
+        update_preview()
+        dialog.present(self)
+
+    def _default_flyby_anchor(self, anchors: list[Body]) -> tuple[Body, float]:
+        selected = None
+        if self.selected_group_id is None and self.system.bodies:
+            selected = self.system.bodies[self.selected_index]
+        elif self.selected_group_id is not None:
+            anchor_ids = {anchor.id for anchor in anchors}
+            candidates = [
+                self.system.bodies[index]
+                for index in self._body_indices_for_group(self.selected_group_id)
+                if self.system.bodies[index].id in anchor_ids
+            ]
+            if candidates:
+                selected = max(candidates, key=lambda item: item.mass_kg)
+
+        bodies_by_id = {candidate.id: candidate for candidate in self.system.bodies}
+        root = selected
+        while root is not None and root.parent_id is not None:
+            root = bodies_by_id.get(root.parent_id)
+        anchor = (
+            next((item for item in anchors if root is not None and item.id == root.id), None)
+            or max(anchors, key=lambda item: item.mass_kg)
+        )
+        periapsis_m = 20.0 * AU
+        if selected is not None and selected.id != anchor.id:
+            selected_root = selected
+            while selected_root.parent_id is not None:
+                parent = bodies_by_id.get(selected_root.parent_id)
+                if parent is None:
+                    break
+                selected_root = parent
+            if selected_root.id == anchor.id:
+                periapsis_m = distance_between_bodies_m(selected, anchor)
+        return anchor, periapsis_m
+
+    def _finish_flyby_dialog(
+        self,
+        _dialog,
+        response: str,
+        body_id: str | None,
+        anchors: list[Body],
+        controls: dict,
+    ) -> None:
+        if response != "create":
+            return
+        try:
+            self._ensure_editable_for_structural_edit()
+            kind_index = controls["kind"].get_selected()
+            anchor_index = controls["anchor"].get_selected()
+            if kind_index >= len(FLYBY_KIND_OPTIONS) or anchor_index >= len(anchors):
+                raise ModelError("select a flyby kind and encounter anchor")
+            kind = FLYBY_KIND_OPTIONS[kind_index]
+            mass = float(controls["mass"].get_text())
+            radius = float(controls["radius"].get_text())
+            state = BodyStateInput(
+                name=controls["name"].get_text(),
+                kind=kind,
+                mass_kg=mass,
+                radius_m=radius,
+                position_m=(0.0, 0.0, 0.0),
+                velocity_mps=(0.0, 0.0, 0.0),
+                color=controls["color"].get_text().strip() or BODY_DEFAULTS[kind][2],
+                visible=controls["visible"].get_active(),
+                trail_enabled=controls["trail"].get_active(),
+            )
+            flyby = FlybyData(
+                anchor_body_id=anchors[anchor_index].id,
+                periapsis_distance_m=controls["periapsis"].get_value() * AU,
+                velocity_at_infinity_mps=controls["velocity"].get_value() * 1000.0,
+                start_distance_m=controls["start"].get_value() * AU,
+                inclination_deg=controls["inclination"].get_value(),
+                longitude_of_ascending_node_deg=controls["node"].get_value(),
+                argument_of_periapsis_deg=controls["argument"].get_value(),
+            )
+            candidate = self._clone_system(self.system)
+            if body_id is None:
+                result = add_flyby_from_state(candidate, state, flyby)
+            else:
+                update_body_from_state(
+                    candidate,
+                    body_id,
+                    state,
+                    preserve_metadata=False,
+                )
+                result = regenerate_flyby(candidate, body_id, flyby)
+            candidate.settings.simulation_scope = "full_nbody"
+            candidate.validate()
+        except (ModelError, ValueError) as error:
+            self._show_error_dialog("Cannot Save Flyby", str(error))
+            return
+
+        self.system = candidate
+        self._after_structural_edit(selected_body_id=result.id)
+        self._show_information_dialog(
+            "Flyby Ready",
+            "Full N-body physics is selected so the encounter can perturb every body. "
+            "The flyby will remain in the saved system after periapsis.",
+        )
+
     def _on_add_planet_clicked(self, _button) -> None:
         self._on_add_orbiting_kind("planet")
 
@@ -2350,6 +2784,10 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         )
         self.add_comet_button.set_sensitive(editable and bool(self._eligible_parent_options({"star"})))
         self.add_asteroid_button.set_sensitive(editable and bool(self._eligible_parent_options({"star"})))
+        self.add_flyby_button.set_sensitive(
+            editable
+            and any(body.kind == "star" and body.parent_id is None for body in self.system.bodies)
+        )
         self.search_horizons_button.set_sensitive(editable and horizons_import_available(self.system))
         refresh_available = horizons_refresh_available(self.system)
         self.horizons_refresh_button.set_sensitive(

@@ -2,15 +2,17 @@ import math
 import unittest
 
 from src.constants import AU, G
-from src.models import ModelError, SolarSystem
+from src.models import FlybyData, ModelError, SolarSystem
 from src.system_editing import (
     BodyStateInput,
     add_body,
     add_body_from_state,
+    add_flyby_from_state,
     add_star_system,
     create_system,
     delete_body_cascade,
     delete_group_cascade,
+    regenerate_flyby,
     update_body_from_state,
 )
 
@@ -107,6 +109,97 @@ class SystemEditingTests(unittest.TestCase):
         self.assertEqual(body.velocity_mps, [21.0, 22.0, 23.0])
         self.assertFalse(body.visible)
         self.assertFalse(body.trail_enabled)
+        system.validate()
+
+    def test_add_and_regenerate_flyby_preserves_encounter_inputs(self):
+        system = create_system("Root")
+        star = system.bodies[0]
+        state = BodyStateInput(
+            name="Visitor",
+            kind="asteroid",
+            mass_kg=1.0e16,
+            radius_m=1.0e4,
+            position_m=(0.0, 0.0, 0.0),
+            velocity_mps=(0.0, 0.0, 0.0),
+            color="#abcdef",
+        )
+        flyby = FlybyData(star.id, 2.0 * AU, 15_000.0, 20.0 * AU, 30.0, 10.0, 5.0)
+
+        body = add_flyby_from_state(system, state, flyby)
+        original_position = body.position_m[:]
+        changed = FlybyData(star.id, 3.0 * AU, 15_000.0, 20.0 * AU, 30.0, 10.0, 5.0)
+        regenerated = regenerate_flyby(system, body.id, changed)
+
+        self.assertIsNone(regenerated.parent_id)
+        self.assertEqual(regenerated.state_origin, "flyby")
+        self.assertEqual(regenerated.flyby, changed)
+        self.assertEqual(system.settings.simulation_scope, "full_nbody")
+        self.assertGreater(regenerated.orbit.eccentricity, 1.0)
+        self.assertNotEqual(regenerated.position_m, original_position)
+        self.assertAlmostEqual(math.dist(regenerated.position_m, star.position_m), 20.0 * AU, delta=1.0)
+        system.validate()
+
+    def test_cartesian_edit_can_detach_flyby_metadata(self):
+        system = create_system("Root")
+        star = system.bodies[0]
+        body = add_flyby_from_state(
+            system,
+            BodyStateInput(
+                "Visitor",
+                "planet",
+                1.0e24,
+                1.0e6,
+                (0.0, 0.0, 0.0),
+                (0.0, 0.0, 0.0),
+                "#fff",
+            ),
+            FlybyData(star.id, AU, 10_000.0, 10.0 * AU),
+        )
+
+        updated = update_body_from_state(
+            system,
+            body.id,
+            BodyStateInput(
+                body.name,
+                body.kind,
+                body.mass_kg,
+                body.radius_m,
+                (1.0, 2.0, 3.0),
+                (4.0, 5.0, 6.0),
+                body.color,
+            ),
+            preserve_metadata=False,
+        )
+
+        self.assertIsNone(updated.parent_id)
+        self.assertIsNone(updated.flyby)
+        self.assertIsNone(updated.orbit)
+        self.assertEqual(updated.state_origin, "cartesian")
+        system.validate()
+
+    def test_deleting_flyby_anchor_keeps_body_as_unbound_cartesian(self):
+        system = create_system("Root")
+        star = system.bodies[0]
+        body = add_flyby_from_state(
+            system,
+            BodyStateInput(
+                "Visitor",
+                "asteroid",
+                1.0e16,
+                1.0e4,
+                (0.0, 0.0, 0.0),
+                (0.0, 0.0, 0.0),
+                "#fff",
+            ),
+            FlybyData(star.id, AU, 10_000.0, 10.0 * AU),
+        )
+
+        delete_body_cascade(system, star.id)
+
+        self.assertEqual(system.bodies, [body])
+        self.assertIsNone(body.flyby)
+        self.assertIsNone(body.orbit)
+        self.assertEqual(body.state_origin, "cartesian")
         system.validate()
 
     def test_update_body_reparents_atomically_and_keeps_group_ownership(self):

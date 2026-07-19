@@ -30,6 +30,7 @@ solar_system_builder_sources = [
   '__init__.py',
   'canvas.py',
   'constants.py',
+  'flybys.py',
   'hierarchy.py',
   'horizons.py',
   'main.py',

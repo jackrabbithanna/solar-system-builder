@@ -15,6 +15,12 @@ The UI may display convenient units such as AU, light-years, days, or years, but
 
 Body kinds do not change force calculations. Stars, planets, dwarf planets, moons, comets, and asteroids all participate according to their masses and Cartesian state vectors.
 
+## Unbound Flybys
+
+Flyby bodies use the same flat N-body state as every other body. The guided builder derives an inbound hyperbolic osculating state around a root-star anchor from periapsis distance `q`, velocity at infinity `v_inf`, starting distance, and three orientation angles. It uses `a = -mu / v_inf^2`, `e = 1 + q * v_inf^2 / mu`, solves the negative inbound hyperbolic anomaly at the requested starting radius, and delegates the final 3D state conversion to `orbits.py`.
+
+The anchor only defines the initial osculating state; it does not remain a fixed force center. Once playback starts, the flyby and every other active body react to one another normally. Creating or regenerating a flyby selects Full N-body because overview and scoped approximations can intentionally omit the planetary perturbations being investigated.
+
 ## Simulation API
 
 - `SimulationState`: NumPy arrays for masses, positions, velocities, and elapsed seconds.

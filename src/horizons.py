@@ -19,7 +19,12 @@ from urllib.request import urlopen
 
 from .constants import AU, DAY, G
 from .models import Body, DataSource, ModelError, OrbitData, SolarSystem, SystemReferenceFrame
-from .system_editing import BodyStateInput, add_body_from_state, default_body_state
+from .system_editing import (
+    BodyStateInput,
+    add_body_from_state,
+    default_body_state,
+    regenerate_flyby,
+)
 
 HORIZONS_URL = "https://ssd.jpl.nasa.gov/api/horizons.api"
 HORIZONS_LOOKUP_URL = "https://ssd.jpl.nasa.gov/api/horizons_lookup.api"
@@ -915,6 +920,9 @@ def apply_system_refresh(
         "heliocentric" if frame.center_id == "500@10" else "solar-system barycentric"
     )
     candidate.epoch = f"{refresh.tdb_epoch} TDB, JPL Horizons, {center_label}"
+    for body in candidate.bodies:
+        if body.flyby is not None:
+            regenerate_flyby(candidate, body.id)
     candidate.validate()
     return candidate
 

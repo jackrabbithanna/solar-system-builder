@@ -10,6 +10,7 @@ from src.models import (
     SCHEMA_VERSION,
     Body,
     DataSource,
+    FlybyData,
     ModelError,
     OrbitData,
     SolarSystem,
@@ -165,6 +166,12 @@ class ModelTests(unittest.TestCase):
 
         self.assertEqual(system.schema_version, SCHEMA_VERSION)
         self.assertEqual(system.settings.trail_frame, "focused_parent")
+
+    def test_v10_data_migrates_without_flyby_metadata(self):
+        system = SolarSystem.from_dict(_sample_system_data(schema_version=10))
+
+        self.assertEqual(system.schema_version, SCHEMA_VERSION)
+        self.assertTrue(all(body.flyby is None for body in system.bodies))
 
     def test_state_origin_and_horizons_frame_round_trip(self):
         data = _sample_system_data()
@@ -658,11 +665,11 @@ class ModelTests(unittest.TestCase):
         with self.assertRaisesRegex(ModelError, "moon parent must be"):
             SolarSystem.from_dict(data)
 
-    def test_root_nonstar_and_nonstar_planet_parent_fail(self):
+    def test_root_nonstar_is_allowed_but_nonstar_planet_parent_fails(self):
         data = _sample_system_data()
         data["bodies"][1].pop("parent_id")
-        with self.assertRaisesRegex(ModelError, "requires a parent star"):
-            SolarSystem.from_dict(data)
+        system = SolarSystem.from_dict(data)
+        self.assertIsNone(system.bodies[1].parent_id)
 
         data = _sample_system_data()
         data["bodies"].append(
@@ -680,6 +687,43 @@ class ModelTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ModelError, "parent must be a star"):
             SolarSystem.from_dict(data)
+
+    def test_flyby_round_trip_and_duplicate_remap_anchor(self):
+        system = SolarSystem.from_dict(_sample_system_data())
+        visitor = Body(
+            name="Visitor",
+            kind="asteroid",
+            mass_kg=1.0e16,
+            radius_m=1.0e4,
+            position_m=[100.0, 0.0, 0.0],
+            velocity_mps=[-1.0, 0.0, 0.0],
+            color="#aaa",
+            orbit=OrbitData(semi_major_axis_m=-10.0, eccentricity=2.0),
+            flyby=FlybyData("sun", 1.0, 2.0, 100.0),
+            state_origin="flyby",
+        )
+        system.bodies.append(visitor)
+        system.validate()
+
+        clone = SolarSystem.from_dict(system.to_dict())
+        duplicate = system.duplicate()
+        cloned_visitor = next(body for body in clone.bodies if body.name == "Visitor")
+        duplicate_visitor = next(body for body in duplicate.bodies if body.name == "Visitor")
+        duplicate_sun = next(body for body in duplicate.bodies if body.name == "Sun")
+
+        self.assertEqual(cloned_visitor.flyby.anchor_body_id, "sun")
+        self.assertEqual(duplicate_visitor.flyby.anchor_body_id, duplicate_sun.id)
+        self.assertNotEqual(duplicate_visitor.flyby.anchor_body_id, "sun")
+
+        invalid = system.to_dict()
+        invalid["bodies"][-1]["flyby"]["anchor_body_id"] = "missing"
+        with self.assertRaisesRegex(ModelError, "flyby anchor missing does not exist"):
+            SolarSystem.from_dict(invalid)
+
+        invalid = system.to_dict()
+        invalid["bodies"][-1]["flyby"]["anchor_body_id"] = visitor.id
+        with self.assertRaisesRegex(ModelError, "cannot use itself"):
+            SolarSystem.from_dict(invalid)
 
     def test_duplicate_remaps_parent_ids(self):
         data = _sample_system_data()

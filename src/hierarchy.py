@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 
+from .flybys import radial_velocity_mps
 from .models import Body, SystemGroup
 from .scales import distance_between_bodies_m, format_distance
 
@@ -222,6 +223,15 @@ def nearest_other_star(bodies: list[Body], body: Body) -> Body | None:
 
 
 def body_relationship_label(bodies: list[Body], body: Body) -> str:
+    if body.flyby is not None:
+        anchor = next(
+            (item for item in bodies if item.id == body.flyby.anchor_body_id),
+            None,
+        )
+        if anchor is not None:
+            phase = "inbound to" if radial_velocity_mps(anchor, body) < 0.0 else "outbound from"
+            distance = distance_between_bodies_m(body, anchor)
+            return f"{body.kind} flyby - {phase} {anchor.name} - {format_distance(distance)}"
     if body.parent_id is None:
         nearest_star = nearest_other_star(bodies, body)
         if body.kind == "star" and nearest_star is not None:
@@ -256,6 +266,25 @@ def group_center(bodies: list[Body], groups: list[SystemGroup], group_id: str) -
 
 def selected_distance_rows(bodies: list[Body], body: Body) -> list[tuple[str, str]]:
     rows: list[tuple[str, str]] = []
+    if body.flyby is not None:
+        anchor = next(
+            (item for item in bodies if item.id == body.flyby.anchor_body_id),
+            None,
+        )
+        if anchor is not None:
+            rows.append(
+                (
+                    f"Distance to {anchor.name}",
+                    format_distance(distance_between_bodies_m(body, anchor)),
+                )
+            )
+            rows.append(
+                (
+                    f"Planned periapsis at {anchor.name}",
+                    format_distance(body.flyby.periapsis_distance_m),
+                )
+            )
+        return rows
     if body.parent_id is not None:
         parent = next((item for item in bodies if item.id == body.parent_id), None)
         if parent is not None:

@@ -13,11 +13,11 @@ from uuid import uuid4
 
 from .constants import DAY
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 ACCURACY_PROFILES = {"high", "balanced", "fast"}
 BODY_KINDS = frozenset({"star", "planet", "dwarf planet", "moon", "comet", "asteroid"})
-STATE_ORIGINS = frozenset({"cartesian", "orbital", "horizons"})
+STATE_ORIGINS = frozenset({"cartesian", "orbital", "horizons", "flyby"})
 REFERENCE_FRAME_SOURCES = frozenset({"app_local", "horizons"})
 DISTANCE_UNITS = {"km", "AU", "kAU", "ly"}
 VIEW_MODES = {"fit_system", "follow_selected", "log_overview"}
@@ -164,6 +164,70 @@ class OrbitData:
 
 
 @dataclass
+class FlybyData:
+    """User-facing parameters for a persistent unbound trajectory."""
+
+    anchor_body_id: str
+    periapsis_distance_m: float
+    velocity_at_infinity_mps: float
+    start_distance_m: float
+    inclination_deg: float = 0.0
+    longitude_of_ascending_node_deg: float = 0.0
+    argument_of_periapsis_deg: float = 0.0
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "FlybyData | None":
+        if data is None:
+            return None
+        flyby = cls(
+            anchor_body_id=str(data.get("anchor_body_id", "")),
+            periapsis_distance_m=float(data["periapsis_distance_m"]),
+            velocity_at_infinity_mps=float(data["velocity_at_infinity_mps"]),
+            start_distance_m=float(data["start_distance_m"]),
+            inclination_deg=float(data.get("inclination_deg", 0.0)),
+            longitude_of_ascending_node_deg=float(
+                data.get("longitude_of_ascending_node_deg", 0.0)
+            ),
+            argument_of_periapsis_deg=float(data.get("argument_of_periapsis_deg", 0.0)),
+        )
+        flyby.validate()
+        return flyby
+
+    def validate(self) -> None:
+        if not self.anchor_body_id:
+            raise ModelError("flyby anchor_body_id is required")
+        for field_name in (
+            "periapsis_distance_m",
+            "velocity_at_infinity_mps",
+            "start_distance_m",
+        ):
+            value = getattr(self, field_name)
+            if value <= 0.0 or not math.isfinite(value):
+                raise ModelError(f"flyby {field_name} must be finite and positive")
+        if self.start_distance_m <= self.periapsis_distance_m:
+            raise ModelError("flyby start_distance_m must be greater than periapsis_distance_m")
+        for field_name in (
+            "inclination_deg",
+            "longitude_of_ascending_node_deg",
+            "argument_of_periapsis_deg",
+        ):
+            if not math.isfinite(getattr(self, field_name)):
+                raise ModelError(f"flyby {field_name} must be finite")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return {
+            "anchor_body_id": self.anchor_body_id,
+            "periapsis_distance_m": self.periapsis_distance_m,
+            "velocity_at_infinity_mps": self.velocity_at_infinity_mps,
+            "start_distance_m": self.start_distance_m,
+            "inclination_deg": self.inclination_deg,
+            "longitude_of_ascending_node_deg": self.longitude_of_ascending_node_deg,
+            "argument_of_periapsis_deg": self.argument_of_periapsis_deg,
+        }
+
+
+@dataclass
 class DataSource:
     source_name: str = ""
     source_url: str = ""
@@ -263,14 +327,18 @@ class Body:
     orbit: OrbitData | None = None
     data_source: DataSource | None = None
     state_origin: str = "cartesian"
+    flyby: FlybyData | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Body":
         orbit = OrbitData.from_dict(data.get("orbit"))
         data_source = DataSource.from_dict(data.get("data_source"))
+        flyby = FlybyData.from_dict(data.get("flyby"))
         state_origin = data.get("state_origin")
         if state_origin is None:
-            if data_source is not None and data_source.source_name.casefold() == "jpl horizons":
+            if flyby is not None:
+                state_origin = "flyby"
+            elif data_source is not None and data_source.source_name.casefold() == "jpl horizons":
                 state_origin = "horizons"
             elif orbit is not None:
                 state_origin = "orbital"
@@ -291,6 +359,7 @@ class Body:
             orbit=orbit,
             data_source=data_source,
             state_origin=str(state_origin),
+            flyby=flyby,
         )
         body.validate()
         return body
@@ -308,6 +377,14 @@ class Body:
             raise ModelError(f"{self.name} radius must be positive")
         if self.state_origin not in STATE_ORIGINS:
             raise ModelError(f"{self.name} unsupported state_origin {self.state_origin}")
+        if self.flyby is not None:
+            self.flyby.validate()
+            if self.state_origin != "flyby":
+                raise ModelError(f"{self.name} flyby metadata requires flyby state_origin")
+            if self.orbit is None or (self.orbit.eccentricity or 0.0) <= 1.0:
+                raise ModelError(f"{self.name} flyby requires hyperbolic orbit metadata")
+        elif self.state_origin == "flyby":
+            raise ModelError(f"{self.name} flyby state_origin requires flyby metadata")
         self.position_m = _vector3(self.position_m, "position_m")
         self.velocity_mps = _vector3(self.velocity_mps, "velocity_mps")
         if self.orbit is not None:
@@ -336,6 +413,8 @@ class Body:
             source_data = self.data_source.to_dict()
             if source_data:
                 data["data_source"] = source_data
+        if self.flyby is not None:
+            data["flyby"] = self.flyby.to_dict()
         return data
 
 
@@ -501,7 +580,7 @@ class SolarSystem:
             )
         if reference_frame.source == "horizons":
             for item, body in zip(data.get("bodies", []), bodies):
-                if "state_origin" not in item:
+                if "state_origin" not in item and body.flyby is None:
                     body.state_origin = "horizons"
         system = cls(
             id=system_id,
@@ -581,8 +660,8 @@ class SolarSystem:
             seen_ids.add(body.id)
         for body in self.bodies:
             if body.parent_id is None:
-                if body.kind != "star":
-                    raise ModelError(f"{body.name} {body.kind} requires a parent star")
+                if body.kind == "moon":
+                    raise ModelError(f"{body.name} moon requires a parent planet or dwarf planet")
                 continue
             if body.parent_id == body.id:
                 raise ModelError(f"{body.name} cannot parent itself")
@@ -590,6 +669,7 @@ class SolarSystem:
                 raise ModelError(f"{body.name} parent_id {body.parent_id} does not exist")
         self._validate_parent_cycles()
         self._validate_body_parent_kinds()
+        self._validate_flybys(seen_ids)
         self._validate_groups(seen_ids)
         self._validate_group_orbit_targets(seen_ids)
 
@@ -607,6 +687,20 @@ class SolarSystem:
                 continue
             if parent.kind != "star":
                 raise ModelError(f"{body.name} {body.kind} parent must be a star")
+
+    def _validate_flybys(self, body_ids: set[str]) -> None:
+        for body in self.bodies:
+            if body.flyby is None:
+                continue
+            if body.parent_id is not None:
+                raise ModelError(f"{body.name} flyby must be an unparented body")
+            if body.kind == "moon":
+                raise ModelError(f"{body.name} moon cannot be a flyby body")
+            anchor_id = body.flyby.anchor_body_id
+            if anchor_id == body.id:
+                raise ModelError(f"{body.name} cannot use itself as its flyby anchor")
+            if anchor_id not in body_ids:
+                raise ModelError(f"{body.name} flyby anchor {anchor_id} does not exist")
 
     def _validate_parent_cycles(self) -> None:
         bodies_by_id = {body.id: body for body in self.bodies}
@@ -743,6 +837,10 @@ class SolarSystem:
             body["id"] = body_id_map[old_id]
             if body.get("parent_id") is not None:
                 body["parent_id"] = body_id_map[body["parent_id"]]
+            if body.get("flyby") is not None:
+                body["flyby"]["anchor_body_id"] = body_id_map[
+                    body["flyby"]["anchor_body_id"]
+                ]
         group_id_map = {
             group["id"]: str(uuid4())
             for group in data.get("groups", [])

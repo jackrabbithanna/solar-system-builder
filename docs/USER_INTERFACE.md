@@ -143,9 +143,21 @@ The title shows `*` while a saved system has unsaved changes. Switching systems,
 
 ## Creation And Deletion
 
-The body hierarchy Add menu creates a nested star system, star, planet, dwarf planet, moon, comet, or asteroid. Manual creation collects physical and appearance fields, then accepts either complete Cartesian XYZ/velocity state or orbital inputs that generate the canonical vector.
+The body hierarchy Add menu creates a nested star system, star, planet, dwarf planet, moon, comet, asteroid, or unbound flyby. Manual creation collects physical and appearance fields, then accepts either complete Cartesian XYZ/velocity state or orbital inputs that generate the canonical vector.
 
-Adding a star system creates a semantic `SystemGroup` with one starter root star. Stars are roots. Planets, dwarf planets, comets, and asteroids require a star parent; moons require a planet or dwarf-planet parent.
+Adding a star system creates a semantic `SystemGroup` with one starter root star. Stars are roots. Normally created planets, dwarf planets, comets, and asteroids require a star parent; moons require a planet or dwarf-planet parent. Flyby bodies are deliberately unparented, and a Cartesian edit can leave a non-moon body unbound after its flyby provenance is cleared.
+
+### Flyby Builder
+
+Add Flyby creates a body that starts inbound at the current displayed simulation epoch and remains in the saved system after closest approach. It supports stars, planets, dwarf planets, comets, and asteroids; an unbound moon is not supported.
+
+- Encounter Anchor selects an existing root star. When a child such as Uranus is selected before opening the builder, its root star and current star-relative distance prefill the anchor and periapsis fields.
+- Periapsis and Starting Distance use AU, Velocity at Infinity uses km/s, and the three orientation fields use degrees. SI values are stored internally.
+- Custom uses the normal physical defaults. Proxima-like fills `0.1221` solar masses, `0.1542` solar radii, and the existing Proxima display color; it is an approximate physical template, not a claim that the real Proxima Centauri is on the entered trajectory.
+- The preview shows the derived hyperbolic eccentricity, semi-major axis, and initial Cartesian state. Starting distance must be greater than periapsis.
+- Adding or regenerating a flyby stops playback, clears trails, and selects Full N-body so all modeled bodies can be perturbed. The flyby remains editable through Edit Flyby in Orbital Data.
+
+“Near Uranus’s orbit” means a closest solar distance equal to Uranus’s current solar distance. It does not target Uranus’s future position or guarantee a close encounter with the planet itself.
 
 Deleting a selected body or star-system group shows a destructive confirmation with affected descendants. Confirming removes the selected item and its child planets, moons, and nested groups. A system must keep at least one body.
 
@@ -171,7 +183,7 @@ Position units available in the editor:
 
 Changing kind, parent, mass, radius, position, or velocity rebuilds simulation state, clears trails, and marks the canonical source Cartesian. The physics model stores values internally in SI units: kilograms, meters, meters per second, and seconds.
 
-When a body has a parent, the distance panel shows its distance to that parent. For root stars in multi-star systems, it shows distances to the other stars.
+When a body has a parent, the distance panel shows its distance to that parent. Flybys show current anchor distance and planned periapsis. For other root stars in multi-star systems, it shows distances to the other stars.
 
 Selecting a group replaces body fields with Group Properties. Kind and Parent Group can be changed, subject to hierarchy-cycle and orbit-target validation. Group names and orbital generation remain available in the same inspector.
 
@@ -200,7 +212,7 @@ Starting a Horizons search pauses playback and invalidates any unfinished playba
 
 The review dialog shows the resolved body, type, parent, parent-relative and resulting system-frame XYZ/velocity vectors, source, and SPK catalog id. It prefills mass and radius when JPL supplies GM, mean-radius, radius, or small-body diameter data; GM is converted to mass and diameter to radius in SI units. Any unavailable physical value remains required before Add Body. Imported bodies retain their Horizons source, retrieval date, catalog id, optional osculating elements, and `horizons` canonical-state origin. Duplicate catalog ids are rejected.
 
-After any body or star-system addition, compatible systems offer to refresh all Horizons bodies. The same workflow is available from the system-level Refresh button. It stops playback, shows cancellable per-request progress, fetches every vector in the shared system frame at one captured current UTC instant, converts that instant to the Horizons TDB epoch, and resets playback to zero elapsed time after a successful atomic update. A failed or cancelled body request applies nothing. Mass, radius, colors, visibility, trail settings, names, and hierarchy are preserved; non-Horizons bodies keep their entered Cartesian state.
+After ordinary body or star-system additions, compatible systems offer to refresh all Horizons bodies. Flyby creation does not prompt for an immediate refresh. The same workflow is available from the system-level Refresh button. It stops playback, shows cancellable per-request progress, fetches every vector in the shared system frame at one captured current UTC instant, converts that instant to the Horizons TDB epoch, and resets playback to zero elapsed time after a successful atomic update. A failed or cancelled body request applies nothing. Mass, radius, colors, visibility, trail settings, names, and hierarchy are preserved; ordinary non-Horizons bodies keep their entered Cartesian state, while flybys are regenerated against their refreshed anchors so the configured encounter geometry remains intact.
 
 ## Narrow Windows
 

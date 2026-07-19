@@ -12,10 +12,12 @@ from datetime import date
 from uuid import uuid4
 
 from .constants import AU, G, SOLAR_MASS
+from .flybys import solve_flyby
 from .models import (
     BODY_KINDS,
     Body,
     DataSource,
+    FlybyData,
     ModelError,
     SolarSystem,
     SystemGroup,
@@ -200,15 +202,109 @@ def add_body_from_state(system: SolarSystem, state: BodyStateInput) -> Body:
     return body
 
 
-def update_body_from_state(system: SolarSystem, body_id: str, state: BodyStateInput) -> Body:
+def add_flyby_from_state(
+    system: SolarSystem,
+    state: BodyStateInput,
+    flyby: FlybyData,
+) -> Body:
+    """Atomically add an unparented body on an inbound hyperbolic trajectory."""
+
+    if state.parent_id is not None:
+        raise ModelError("flyby body must not have a parent")
+    if state.group_id is not None:
+        raise ModelError("flyby body must not be a direct group member")
+    if state.kind == "moon":
+        raise ModelError("moon cannot be a flyby body")
+    body = _body_from_state(state)
+    anchor = _body_by_id(system, flyby.anchor_body_id, "flyby anchor")
+    frame = system.reference_frame
+    solution = solve_flyby(
+        anchor,
+        body,
+        flyby,
+        epoch=frame.epoch if frame is not None else system.epoch,
+        reference_plane=frame.reference_plane if frame is not None else "app-local XY",
+    )
+    body.position_m = solution.position_m
+    body.velocity_mps = solution.velocity_mps
+    body.orbit = solution.orbit
+    body.flyby = flyby
+    body.state_origin = "flyby"
+    previous_scope = system.settings.simulation_scope
+    system.bodies.append(body)
+    system.settings.simulation_scope = "full_nbody"
+    try:
+        system.validate()
+    except Exception:
+        system.bodies.remove(body)
+        system.settings.simulation_scope = previous_scope
+        raise
+    return body
+
+
+def regenerate_flyby(
+    system: SolarSystem,
+    body_id: str,
+    flyby: FlybyData | None = None,
+) -> Body:
+    """Atomically regenerate an existing flyby against its current anchor state."""
+
+    candidate = SolarSystem.from_dict(system.to_dict())
+    candidate_body = _body_by_id(candidate, body_id, "flyby body")
+    requested = flyby or candidate_body.flyby
+    if requested is None:
+        raise ModelError(f"{candidate_body.name} does not have flyby metadata")
+    anchor = _body_by_id(candidate, requested.anchor_body_id, "flyby anchor")
+    frame = candidate.reference_frame
+    solution = solve_flyby(
+        anchor,
+        candidate_body,
+        requested,
+        epoch=frame.epoch if frame is not None else candidate.epoch,
+        reference_plane=frame.reference_plane if frame is not None else "app-local XY",
+    )
+    candidate_body.parent_id = None
+    candidate_body.position_m = solution.position_m
+    candidate_body.velocity_mps = solution.velocity_mps
+    candidate_body.orbit = solution.orbit
+    candidate_body.data_source = None
+    candidate_body.flyby = requested
+    candidate_body.state_origin = "flyby"
+    candidate.settings.simulation_scope = "full_nbody"
+    candidate.validate()
+
+    body = _body_by_id(system, body_id, "flyby body")
+    body.parent_id = None
+    body.position_m = candidate_body.position_m
+    body.velocity_mps = candidate_body.velocity_mps
+    body.orbit = candidate_body.orbit
+    body.data_source = None
+    body.flyby = requested
+    body.state_origin = "flyby"
+    system.settings.simulation_scope = "full_nbody"
+    system.validate()
+    return body
+
+
+def update_body_from_state(
+    system: SolarSystem,
+    body_id: str,
+    state: BodyStateInput,
+    *,
+    preserve_metadata: bool = True,
+) -> Body:
     body = _body_by_id(system, body_id, "body")
     replacement = _body_from_state(state, body_id=body.id)
-    replacement.orbit = body.orbit
-    replacement.data_source = body.data_source
-    replacement.state_origin = body.state_origin
+    if preserve_metadata:
+        replacement.orbit = body.orbit
+        replacement.data_source = body.data_source
+        replacement.state_origin = body.state_origin
+        replacement.flyby = body.flyby
     if replacement.kind == "star" and replacement.parent_id is not None:
         raise ModelError("star must be a root body")
-    if replacement.kind != "star":
+    if replacement.kind == "moon" and replacement.parent_id is None:
+        raise ModelError("moon requires a parent planet or dwarf planet")
+    if replacement.kind != "star" and replacement.parent_id is not None:
         parent = _body_by_id(system, replacement.parent_id, "parent body")
         _validate_parent_kind(replacement.kind, parent)
     candidate = SolarSystem.from_dict(system.to_dict())
@@ -434,6 +530,12 @@ def _remove_body_ids(system: SolarSystem, deleted_ids: set[str]) -> None:
     if len(deleted_ids) >= len(system.bodies):
         raise ModelError("system must contain at least one body")
     system.bodies = [body for body in system.bodies if body.id not in deleted_ids]
+    for body in system.bodies:
+        if body.flyby is not None and body.flyby.anchor_body_id in deleted_ids:
+            body.flyby = None
+            body.orbit = None
+            body.data_source = None
+            body.state_origin = "cartesian"
     for group in system.groups:
         group.body_ids = [body_id for body_id in group.body_ids if body_id not in deleted_ids]
         if group.orbit_target_type == "body" and group.orbit_target_id in deleted_ids:

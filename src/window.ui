@@ -407,6 +407,7 @@
                                     <child><object class="GtkButton" id="add_comet_button"><property name="label" translatable="yes">Add Comet</property></object></child>
                                     <child><object class="GtkButton" id="add_asteroid_button"><property name="label" translatable="yes">Add Asteroid</property></object></child>
                                     <child><object class="GtkSeparator"/></child>
+                                    <child><object class="GtkButton" id="add_flyby_button"><property name="label" translatable="yes">Add Flyby…</property></object></child>
                                     <child><object class="GtkButton" id="search_horizons_button"><property name="label" translatable="yes">Search JPL Horizons</property></object></child>
                                   </object>
                                 </property>
@@ -838,6 +839,17 @@
                               </object>
                             </child>
                             <child>
+                              <object class="GtkButton" id="edit_flyby_button">
+                                <property name="label" translatable="yes">Edit Flyby…</property>
+                                <property name="halign">end</property>
+                                <property name="visible">False</property>
+                                <layout>
+                                  <property name="column">1</property>
+                                  <property name="row">15</property>
+                                </layout>
+                              </object>
+                            </child>
+                            <child>
                               <object class="GtkLabel" id="orbit_status_label">
                                 <property name="wrap">True</property>
                                 <property name="xalign">0</property>
@@ -846,7 +858,7 @@
                                 </style>
                                 <layout>
                                   <property name="column">0</property>
-                                  <property name="row">15</property>
+                                  <property name="row">16</property>
                                   <property name="column-span">2</property>
                                 </layout>
                               </object>

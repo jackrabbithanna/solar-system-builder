@@ -30,9 +30,14 @@ from src.horizons import (
     parse_sbdb_physical_properties,
     shift_horizons_frame_epoch,
 )
-from src.constants import DAY, G
-from src.models import DataSource, ModelError, OrbitData
-from src.system_editing import BodyStateInput, add_body_from_state, create_system
+from src.constants import AU, DAY, G
+from src.models import DataSource, FlybyData, ModelError, OrbitData
+from src.system_editing import (
+    BodyStateInput,
+    add_body_from_state,
+    add_flyby_from_state,
+    create_system,
+)
 
 
 VECTOR_RESULT = """
@@ -437,6 +442,43 @@ class HorizonsTests(unittest.TestCase):
         self.assertEqual(updated_manual.color, "#123456")
         self.assertEqual(updated.bodies[0].state_origin, "horizons")
         self.assertIn("JPL Horizons", updated.epoch)
+
+    def test_apply_system_refresh_regenerates_flyby_against_refreshed_anchor(self):
+        system = create_system("Sol Flyby", "sol", epoch="2026-06-14 00:00:00")
+        sun = system.bodies[0]
+        visitor = add_flyby_from_state(
+            system,
+            BodyStateInput(
+                name="Visitor",
+                kind="star",
+                mass_kg=1.0e29,
+                radius_m=1.0e8,
+                position_m=(0.0, 0.0, 0.0),
+                velocity_mps=(0.0, 0.0, 0.0),
+                color="#ff0000",
+            ),
+            FlybyData(sun.id, 5.0 * AU, 20_000.0, 50.0 * AU),
+        )
+        original_visitor_position = visitor.position_m[:]
+        refresh = HorizonsClient(opener=FakeOpener(_payload(VECTOR_WITH_DELTA_RESULT))).fetch_system_refresh(
+            system,
+            datetime(2026, 7, 18, tzinfo=timezone.utc),
+        )
+
+        updated = apply_system_refresh(system, refresh)
+        updated_by_id = {body.id: body for body in updated.bodies}
+        updated_sun = updated_by_id[sun.id]
+        updated_visitor = updated_by_id[visitor.id]
+
+        self.assertEqual(visitor.position_m, original_visitor_position)
+        self.assertAlmostEqual(
+            math.dist(updated_visitor.position_m, updated_sun.position_m),
+            50.0 * AU,
+            delta=1.0,
+        )
+        self.assertEqual(updated_visitor.flyby.anchor_body_id, updated_sun.id)
+        self.assertEqual(updated_visitor.state_origin, "flyby")
+        self.assertEqual(updated_visitor.orbit.epoch, updated.reference_frame.epoch)
 
     def test_system_refresh_keeps_enceladus_closer_to_saturn_than_titan(self):
         system = create_system("Saturn with Moons", "sol", epoch="2026-06-14 00:00:00")
