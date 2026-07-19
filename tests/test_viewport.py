@@ -89,6 +89,31 @@ class ViewportTests(unittest.TestCase):
             [(point.x, point.y, point.depth) for point in scalar],
         )
 
+    def test_3d_barycenter_accepts_numpy_overview_positions(self):
+        entities = [
+            OverviewEntity("a", "A", "system", 3.0, [0.0, 0.0, 2.0], [0.0, 0.0, 0.0], "#fff"),
+            OverviewEntity("b", "B", "system", 1.0, [4.0, 0.0, 6.0], [0.0, 0.0, 0.0], "#fff"),
+        ]
+        positions = np.array([entity.position_m for entity in entities])
+
+        barycenter = viewport.weighted_position_3d(
+            [entity.mass_kg for entity in entities],
+            positions,
+        )
+        point = viewport.shared_barycenter_point_3d(
+            entities,
+            positions,
+            100.0,
+            100.0,
+            1.0,
+            barycenter,
+            "fit_system",
+            viewport.Camera3D(),
+        )
+
+        self.assertEqual(barycenter, (1.0, 0.0, 3.0))
+        self.assertEqual(point, viewport.ProjectedPoint3D(100.0, 100.0, 0.0))
+
     def test_zoom_clamping_honors_limits(self):
         self.assertEqual(viewport.clamp_zoom_factor(0.1), 1.0)
         self.assertEqual(viewport.clamp_zoom_factor(128.0), 64.0)

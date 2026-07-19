@@ -270,7 +270,7 @@ def project_3d(
             compressed = AU * math.log1p(distance / AU)
             factor = compressed / distance
             delta = tuple(value * factor for value in delta)
-    right, up, toward_camera = basis or camera_basis(camera)
+    right, up, toward_camera = basis if basis is not None else camera_basis(camera)
     horizontal = sum(delta[axis] * right[axis] for axis in range(3))
     vertical = sum(delta[axis] * up[axis] for axis in range(3))
     depth = sum(delta[axis] * toward_camera[axis] for axis in range(3))
@@ -303,7 +303,8 @@ def project_points_3d(
         nonzero = distances > 0.0
         factors[nonzero] = AU * np.log1p(distances[nonzero] / AU) / distances[nonzero]
         deltas = deltas * factors[:, np.newaxis]
-    camera_coordinates = deltas @ np.asarray(basis or camera_basis(camera), dtype=float).T
+    resolved_basis = basis if basis is not None else camera_basis(camera)
+    camera_coordinates = deltas @ np.asarray(resolved_basis, dtype=float).T
     projected = np.empty_like(camera_coordinates)
     projected[:, 0] = origin_x + camera_coordinates[:, 0] * scale
     projected[:, 1] = origin_y - camera_coordinates[:, 1] * scale
@@ -683,7 +684,7 @@ def weighted_position_3d(
     masses: Sequence[float],
     positions: Sequence[Position3D],
 ) -> tuple[float, float, float] | None:
-    if not positions or len(masses) < len(positions):
+    if len(positions) == 0 or len(masses) < len(positions):
         return None
     total_mass = sum(float(masses[index]) for index in range(len(positions)))
     if total_mass <= 0.0:
