@@ -33,7 +33,7 @@ The header bar contains the main simulation controls.
 
 - Play or pause starts and stops continuous simulation playback.
 - Step backward moves the simulation back by one visible time step.
-- Reset to loaded state stops playback and restores the current system to the state it had when it was loaded or last saved.
+- Reset to loaded state stops playback and restores the in-memory snapshot captured when the system was loaded or last saved. The main menu also offers Reset to Last Save for editable systems and Reset Bundled Preset for active packaged presets.
 - Step forward moves the simulation forward by one visible time step.
 
 The label below the canvas shows the current elapsed simulation time. Playback and stepping append trails for active bodies or overview markers.
@@ -128,12 +128,15 @@ The system menu in the header switches between bundled presets and saved systems
 - Duplicate current system creates and selects an editable saved copy, including the current unsaved simulation state.
 - Save current system writes a dirty user system to the local library. Bundled presets require the explicit Duplicate to Edit action.
 - Delete saved system removes the selected user-saved system. Bundled presets cannot be deleted.
+- Import System reads a validated `.json` document and creates a new editable library copy. Imported system, body, and group IDs are regenerated; name collisions receive an `Imported` suffix rather than replacing an existing system.
+- Export Current System pauses playback and writes the current body vectors and unsaved edits to a `.json` document without saving to the local library. Trails, camera state, and the transient elapsed-time counter are not document data.
+- Reset to Last Save reloads an editable system from its library file. Reset Bundled Preset reloads an active preset from packaged data; saved copies do not retain preset lineage.
 
-The System Name and Description fields edit user-saved metadata. The reference-frame summary shows the shared epoch, time scale, center, plane, and reference system. Existing frame metadata is read-only because changing it correctly requires transforming every body vector.
+The System Name and Description fields edit user-saved metadata. The reference-frame summary shows the shared epoch, time scale, center, plane, and reference system. Transform Reference Frame is available for editable systems. It can move the origin to a body, group/system barycenter, or custom position/velocity and can rotate axes using fixed X/Y/Z angles or a validated 3×3 matrix. It applies the same rigid transform to every body vector and rotates body, group, and flyby orientation metadata atomically. Epoch and time scale remain fixed.
 
 Refresh from JPL Horizons updates all Horizons-backed bodies to one current instant. It works directly on editable systems and marks them dirty. For a bundled preset, it creates, saves, and selects an editable `<Preset Name> Updated` copy; installed preset files remain unchanged. Systems without compatible Horizons frame metadata or bodies disable the action.
 
-The title shows `*` while a saved system has unsaved changes. Switching systems, creating another system, closing, or resetting offers Save, Discard, and Cancel. The header Save button writes changes without leaving the current system. Reset then restores the loaded or last-saved snapshot and clears unsaved edits.
+The title shows `*` while a saved system has unsaved changes. Switching systems, importing another system, creating another system, closing, or resetting offers Save, Discard, and Cancel. The header Save button writes changes without leaving the current system. Reset to Loaded State then restores the loaded or last-saved snapshot and clears unsaved edits.
 
 ### Creation Workflows
 

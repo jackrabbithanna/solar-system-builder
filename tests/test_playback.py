@@ -667,6 +667,20 @@ class PlaybackTests(unittest.TestCase):
         self.assertEqual(session.overview_trails["ga"], [(5.0, 0.0, 0.0)])
         self.assertEqual(session.overview_trails["gb"], [(105.0, 0.0, 0.0)])
 
+        materialized = [
+            _body("a", position=[0.0, 0.0, 0.0]),
+            _body("b", position=[100.0, 0.0, 0.0]),
+        ]
+        session.apply_to_bodies(materialized, groups)
+
+        self.assertEqual(materialized[0].position_m[0], 5.0)
+        self.assertEqual(materialized[1].position_m[0], 105.0)
+        self.assertEqual(session.state.positions_m[:, 0].tolist(), [0.0, 100.0])
+
+        session.materialize_to_bodies(materialized, groups)
+
+        self.assertEqual(session.state.positions_m[:, 0].tolist(), [5.0, 105.0])
+
     def test_session_applies_hybrid_focus_result_with_display_only_context(self):
         bodies = [
             _body("star", kind="star", position=[0.0, 0.0, 0.0]),

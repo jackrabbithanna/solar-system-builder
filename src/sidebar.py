@@ -252,14 +252,14 @@ class SystemPropertiesPanel(GObject.GObject):
             frame = system.reference_frame
             if frame is None:
                 self.reference_frame_label.set_label("Reference frame not specified")
-            elif frame.source == "horizons":
-                center = "heliocentric" if frame.center_id == "500@10" else "solar-system barycentric"
+            else:
+                epoch = frame.epoch or system.epoch
+                time = f" {frame.time_scale}" if frame.time_scale else ""
+                source = "JPL Horizons" if frame.source == "horizons" else "App-local"
                 self.reference_frame_label.set_label(
-                    f"{frame.epoch} {frame.time_scale} - {center} - "
+                    f"{source} - {epoch}{time} - {frame.center_id} - "
                     f"{frame.reference_system}/{frame.reference_plane}"
                 )
-            else:
-                self.reference_frame_label.set_label(f"App-local frame - {frame.epoch or system.epoch}")
         finally:
             self.editing = False
 

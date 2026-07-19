@@ -235,8 +235,37 @@ class SimulationSession:
         self.context_entity_ids = []
         self.last_trail_sample_elapsed_s = self.state.elapsed_s
 
-    def apply_to_bodies(self, bodies: list[Body]) -> None:
+    def apply_to_bodies(
+        self,
+        bodies: list[Body],
+        groups: list[SystemGroup] | None = None,
+    ) -> None:
+        self._materialized_state(bodies, groups).apply_to_bodies(bodies)
+
+    def materialize_to_bodies(
+        self,
+        bodies: list[Body],
+        groups: list[SystemGroup] | None = None,
+    ) -> None:
+        """Commit aggregate overview motion into detailed state and bodies."""
+
+        self.state = self._materialized_state(bodies, groups)
         self.state.apply_to_bodies(bodies)
+
+    def _materialized_state(
+        self,
+        bodies: list[Body],
+        groups: list[SystemGroup] | None,
+    ) -> SimulationState:
+        state = self.state.copy()
+        if groups is not None and self.overview_state is not None:
+            memberships = [
+                focus_target_body_indices(bodies, groups, f"group:{entity_id}")
+                for entity_id in self.overview_entity_ids
+            ]
+            if memberships and all(memberships):
+                merge_membership_state(state, self.overview_state, memberships)
+        return state
 
     def active_body_indices(
         self,

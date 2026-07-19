@@ -9,6 +9,8 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 - `src/canvas.py`: `SolarSystemCanvas` GTK drawing widget, toggleable 2D/scientific-3D Cairo rendering, camera gestures/tooltips, independent view state, and body/group selection signals.
 - `src/sidebar.py`: sidebar hierarchy widget and panel controllers for system settings and body/orbit inspector state.
 - `src/models.py`: schema-v11 `Body`, `FlybyData`, `SystemGroup`, `SystemReferenceFrame`, and `SolarSystem` dataclasses with validation, hierarchy, migration, canonical-state provenance, trail-frame settings, and JSON conversion.
+- `src/documents.py`: pure validated JSON document parsing, canonical serialization, and collision-safe imported names.
+- `src/reference_frames.py`: pure rigid origin/axis transforms, barycenter origins, matrix validation, and orbital/flyby orientation rotation.
 - `src/orbit_editing.py`: GTK-free body, group-barycenter, and binary-pair orbit mutations with playback-state rebuilding.
 - `src/system_editing.py`: GTK-free system starters and atomic create/update/delete helpers for complete 3D body state and group membership.
 - `src/horizons.py`: GTK-free, serialized JPL Horizons lookup/vector/element and SBDB physical-data client, response parsers, frame checks, atomic import, and whole-system refresh batches.
@@ -37,7 +39,8 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 9. Sidebar panel controllers emit edit/generate/settings intents; `window.py` validates complete body/group edits through GTK-free editing helpers, then rebuilds playback state on the main thread.
 10. Creation supports preset duplication, a JPL-compatible Sun-only system, custom single/binary/hierarchical star state, and persistent unbound flybys. Manual bodies accept complete Cartesian state or orbital elements; the flyby builder converts periapsis, velocity at infinity, starting distance, and 3D angles into canonical Cartesian state.
 11. Horizons lookup, ephemeris, and optional SBDB physical-data requests run on a dedicated single-worker executor. Playback is stopped before a fetch, the request epoch includes current simulation elapsed time, and target vectors are requested relative to the selected cataloged parent. Import drafts prefill mass from GM and radius from mean-radius or diameter data when JPL supplies them. Whole-system refresh captures one current UTC instant, requests every vector in the shared system frame, derives the matching TDB epoch from Horizons, and returns an immutable all-or-nothing batch. Completed results return through `GLib.idle_add` and only mutate the model on the GTK thread.
-12. `SystemLibraryController` coordinates explicit preset duplication, saved-system persistence, guarded selection, and deletion. `window.py` owns dirty-state prompts and loaded snapshots.
+12. `SystemLibraryController` coordinates explicit preset duplication, saved-system persistence, guarded selection, and deletion. Portable imports are duplicated with regenerated linked IDs before entering the library; exports materialize a cloned current simulation state without mutating the library.
+13. Reference-frame edits stop playback, build and validate a transformed candidate through `reference_frames.py`, and only replace the main-thread model after every position, velocity, body/group orbit, and flyby orientation has been transformed successfully. Epoch and time scale are not changed by this workflow.
 
 `Body.parent_id` records local orbital/display parentage. Stars are roots; bound planets, dwarf planets, comets, and asteroids orbit stars; moons orbit planets or dwarf planets. Non-moon bodies may also be unparented Cartesian or flyby bodies. `Body.state_origin` records whether the current canonical vector came from Cartesian entry, orbital generation, Horizons, or the flyby builder. Optional `Body.orbit`, `Body.flyby`, and `Body.data_source` preserve provenance, while `position_m` and `velocity_mps` remain canonical. `SolarSystem.reference_frame` describes the shared epoch, time scale, center, plane, and reference system. `SystemGroup` records larger semantic hierarchy, but physics remains a flat N-body simulation over the active body set.
 
@@ -47,7 +50,7 @@ Schema v11 adds persisted flyby inputs and the `flyby` canonical-state origin. I
 
 ## Reset Flow
 
-`window.py` keeps a loaded-state snapshot of the current `SolarSystem`. Reset restores a deep copy of that snapshot, asks `SimulationSession` to rebuild `SimulationState`, clears trails, and invalidates pending playback worker results through the session generation counter.
+`window.py` keeps a loaded-state snapshot of the current `SolarSystem`. Reset to Loaded State restores that deep copy. Reset to Last Save reloads an editable system through `Library`, while Reset Bundled Preset reloads the active built-in by ID from packaged data. Every variant stops playback, rebuilds `SimulationState`, clears trails, and invalidates pending worker results through the session generation counter.
 
 ## Tests
 
@@ -60,6 +63,8 @@ Tests live in `tests/` and are registered through `tests/meson.build`.
 - `test_viewport.py`: projection, zoom clamping, view-center, scale, and hit-test math.
 - `test_playback.py`: trail sampling/capping, generation checks, worker helpers, session job planning, copied worker state, and active/overview/hybrid result application.
 - `test_storage.py`: local library save/load/list/delete.
+- `test_documents.py`: portable parsing/serialization, migrations, imported naming, and linked-ID regeneration.
+- `test_reference_frames.py`: origin translation, Euler/matrix rotation, barycenters, provenance rotation, and atomic failures.
 - `test_system_editing.py`: starter workflows, full 3D state input/update, reparenting, atomic validation, cascades, and seeded circular orbits.
 - `test_horizons.py`: lookup and ephemeris parsing, URL/frame contracts, API compatibility, duplicates, atomic import, and current-epoch system refresh.
 - `test_system_library.py`: system-library controller new, save, duplicate, rename, selection, and delete behavior.

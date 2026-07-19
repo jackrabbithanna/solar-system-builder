@@ -28,7 +28,7 @@ Selecting a descendant of the active Focus and Fit target changes inspection sel
 
 ## Local JSON Library
 
-User-created systems are stored as JSON in the app data directory. Document import/export is a later feature.
+User-created systems are stored as JSON in the app data directory. Portable JSON imports always become new editable copies with regenerated linked IDs and collision-safe names, so they cannot overwrite local systems or masquerade as bundled presets. Export writes the current simulation vectors from a clone and does not change library or dirty state.
 
 ## Bundled Presets
 
@@ -36,7 +36,11 @@ Bundled systems are versioned JSON data. They are read-only templates. Editing r
 
 ## Canonical State and Reference Frames
 
-Cartesian body vectors are canonical. Orbital elements and sources are provenance. Schema v9 records a body `state_origin` and one system-level reference frame. The UI displays but does not relabel an existing frame because a correct change requires transforming every body vector.
+Cartesian body vectors are canonical. Orbital elements and sources are provenance. Schema v9 records a body `state_origin` and one system-level reference frame. Reference-frame edits are permitted only through an atomic rigid transform: subtract one origin position/velocity, apply one proper rotation to every canonical vector, and rotate body/group orbital and flyby orientations into the target plane. Guided rotations use `Rz @ Ry @ Rx`; expert matrices must be finite, orthonormal, and have determinant `+1`. Epoch and time scale remain fixed.
+
+## Reset Sources
+
+The quick reset restores the snapshot captured on load or save. Explicit source resets reload editable systems from the local library or active bundled systems from packaged preset data. Saved preset-derived copies do not keep template lineage.
 
 ## Horizons Requests
 

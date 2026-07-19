@@ -30,3 +30,13 @@ def load_builtin_solar_system() -> SolarSystem:
 
 def load_builtin_solar_systems() -> list[SolarSystem]:
     return [_load_preset(filename) for filename in BUILTIN_PRESET_FILES]
+
+
+def load_builtin_solar_system_by_id(system_id: str) -> SolarSystem:
+    system = next(
+        (item for item in load_builtin_solar_systems() if item.id == system_id),
+        None,
+    )
+    if system is None:
+        raise ValueError(f"unknown bundled preset id {system_id}")
+    return system

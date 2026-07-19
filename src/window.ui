@@ -367,6 +367,12 @@
                       </object>
                     </child>
                     <child>
+                      <object class="GtkButton" id="transform_frame_button">
+                        <property name="label" translatable="yes">Transform Reference Frame…</property>
+                        <property name="tooltip-text" translatable="yes">Re-center or rotate every canonical body state</property>
+                      </object>
+                    </child>
+                    <child>
                       <object class="GtkButton" id="horizons_refresh_button">
                         <property name="label" translatable="yes">Refresh from JPL Horizons</property>
                         <property name="tooltip-text" translatable="yes">Update all JPL Horizons bodies to the current instant</property>
@@ -945,6 +951,30 @@
     </property>
   </template>
   <menu id="primary_menu">
+    <section>
+      <item>
+        <attribute name="label" translatable="yes">_Import System…</attribute>
+        <attribute name="action">win.import-document</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">_Export Current System…</attribute>
+        <attribute name="action">win.export-document</attribute>
+      </item>
+    </section>
+    <section>
+      <item>
+        <attribute name="label" translatable="yes">Reset to _Loaded State</attribute>
+        <attribute name="action">win.reset-loaded</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">Reset to Last _Save</attribute>
+        <attribute name="action">win.reset-last-save</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">Reset _Bundled Preset</attribute>
+        <attribute name="action">win.reset-bundled-preset</attribute>
+      </item>
+    </section>
     <section>
       <item>
         <attribute name="label" translatable="yes">_Preferences</attribute>
