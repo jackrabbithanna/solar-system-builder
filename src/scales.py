@@ -40,12 +40,31 @@ ACCURACY_LABELS: tuple[tuple[str, str], ...] = (
 VIEW_MODE_LABELS: tuple[tuple[str, str], ...] = (
     ("Fit System", "fit_system"),
     ("Follow Selected", "follow_selected"),
+    ("Fixed Scale", "fixed_scale"),
     ("Log Overview", "log_overview"),
 )
 
 TRAIL_FRAME_LABELS: tuple[tuple[str, str], ...] = (
     ("Focused Parent", "focused_parent"),
     ("System / Inertial", "system_inertial"),
+)
+
+ORBIT_VISIBILITY_LABELS: tuple[tuple[str, str], ...] = (
+    ("Off", "off"),
+    ("Selected", "selected"),
+    ("All", "all"),
+)
+
+TRAIL_VISIBILITY_LABELS: tuple[tuple[str, str], ...] = (
+    ("Off", "off"),
+    ("Selected", "selected"),
+    ("All", "all"),
+)
+
+PATH_STYLE_LABELS: tuple[tuple[str, str], ...] = (
+    ("Subtle", "subtle"),
+    ("Standard", "standard"),
+    ("Bold", "bold"),
 )
 
 SIMULATION_SCOPE_LABELS: tuple[tuple[str, str], ...] = (

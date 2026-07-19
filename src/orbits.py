@@ -21,6 +21,232 @@ class OrbitAnchor:
     velocity_mps: list[float]
 
 
+@dataclass(frozen=True)
+class OrbitGuide:
+    """Configured reference conic ready for canvas projection."""
+
+    points_m: tuple[tuple[float, float, float], ...]
+    color: str
+    body_id: str | None = None
+    group_id: str | None = None
+    active_body_ids: tuple[str, ...] = ()
+
+
+def configured_orbit_guides(
+    bodies: list[Body],
+    groups: list[SystemGroup],
+) -> list[OrbitGuide]:
+    """Build display-only guides from stored orbital metadata.
+
+    Cartesian vectors remain canonical. These guides deliberately retain the
+    configured conic shape and orientation while following the anchor's current
+    position.
+    """
+
+    bodies_by_id = {body.id: body for body in bodies}
+    guides: list[OrbitGuide] = []
+    for body in bodies:
+        if body.orbit is None:
+            continue
+        anchor_id = body.parent_id
+        if anchor_id is None and body.flyby is not None:
+            anchor_id = body.flyby.anchor_body_id
+        anchor = bodies_by_id.get(anchor_id) if anchor_id is not None else None
+        if anchor is None:
+            continue
+        points = _anchored_orbit_path(
+            body.orbit,
+            anchor.mass_kg,
+            body.mass_kg,
+            anchor.position_m,
+            math.dist(body.position_m, anchor.position_m),
+        )
+        guides.append(
+            OrbitGuide(
+                points_m=points,
+                color=body.color,
+                body_id=body.id,
+                active_body_ids=(body.id,),
+            )
+        )
+
+    body_indices_by_id = {body.id: index for index, body in enumerate(bodies)}
+    for group in groups:
+        if group.orbit is None:
+            continue
+        member_indices = body_indices_for_group(bodies, groups, group.id)
+        if not member_indices:
+            continue
+        active_body_ids = tuple(bodies[index].id for index in member_indices)
+        color = max(
+            (bodies[index] for index in member_indices),
+            key=lambda item: item.mass_kg,
+        ).color
+        if group.orbit_target_type is not None and group.orbit_target_id is not None:
+            group_center = barycenter_for_indices(bodies, member_indices)
+            anchor = target_anchor(
+                bodies,
+                groups,
+                group.orbit_target_type,
+                group.orbit_target_id,
+            )
+            guides.append(
+                OrbitGuide(
+                    points_m=_anchored_orbit_path(
+                        group.orbit,
+                        anchor.mass_kg,
+                        group_center.mass_kg,
+                        anchor.position_m,
+                        math.dist(group_center.position_m, anchor.position_m),
+                    ),
+                    color=color,
+                    group_id=group.id,
+                    active_body_ids=active_body_ids,
+                )
+            )
+            continue
+
+        direct_indices = [body_indices_by_id.get(body_id) for body_id in group.body_ids]
+        if len(direct_indices) != 2 or any(index is None for index in direct_indices):
+            continue
+        first_index, second_index = (int(direct_indices[0]), int(direct_indices[1]))
+        first = bodies[first_index]
+        second = bodies[second_index]
+        center = barycenter_for_indices(bodies, [first_index, second_index])
+        semi_major_axis_m = _orbit_semi_major_axis(
+            group.orbit,
+            first.mass_kg,
+            second.mass_kg,
+        )
+        relative_points = sample_relative_orbit_path(
+            semi_major_axis_m,
+            group.orbit,
+            math.dist(first.position_m, second.position_m),
+        )
+        total_mass = first.mass_kg + second.mass_kg
+        first_fraction = second.mass_kg / total_mass
+        second_fraction = first.mass_kg / total_mass
+        for body, fraction, direction in (
+            (first, first_fraction, -1.0),
+            (second, second_fraction, 1.0),
+        ):
+            guides.append(
+                OrbitGuide(
+                    points_m=tuple(
+                        tuple(
+                            center.position_m[axis]
+                            + direction * fraction * relative_point[axis]
+                            for axis in range(3)
+                        )
+                        for relative_point in relative_points
+                    ),
+                    color=body.color,
+                    body_id=body.id,
+                    group_id=group.id,
+                    active_body_ids=(body.id,),
+                )
+            )
+    return guides
+
+
+def sample_relative_orbit_path(
+    semi_major_axis_m: float,
+    orbit: OrbitData,
+    current_distance_m: float,
+    *,
+    segments: int = 256,
+) -> tuple[tuple[float, float, float], ...]:
+    """Sample one configured conic in its reference-frame orientation."""
+
+    orbit.validate()
+    if segments < 2:
+        raise ModelError("orbit guide requires at least two segments")
+    eccentricity = orbit.eccentricity if orbit.eccentricity is not None else 0.0
+    inclination = math.radians(orbit.inclination_deg or 0.0)
+    ascending_node = math.radians(orbit.longitude_of_ascending_node_deg or 0.0)
+    argument = math.radians(orbit.argument_of_periapsis_deg or 0.0)
+    plane_points: list[tuple[float, float]] = []
+    if eccentricity < 1.0:
+        for index in range(segments + 1):
+            anomaly = math.tau * index / segments
+            plane_points.append(
+                (
+                    semi_major_axis_m * (math.cos(anomaly) - eccentricity),
+                    semi_major_axis_m
+                    * math.sqrt(1.0 - eccentricity**2)
+                    * math.sin(anomaly),
+                )
+            )
+    else:
+        axis_magnitude = abs(semi_major_axis_m)
+        periapsis_m = axis_magnitude * (eccentricity - 1.0)
+        radius_limit_m = max(current_distance_m, 4.0 * periapsis_m)
+        cosh_limit = max(
+            1.0,
+            (radius_limit_m / axis_magnitude + 1.0) / eccentricity,
+        )
+        anomaly_limit = math.acosh(cosh_limit)
+        for index in range(segments + 1):
+            anomaly = -anomaly_limit + 2.0 * anomaly_limit * index / segments
+            plane_points.append(
+                (
+                    axis_magnitude * (eccentricity - math.cosh(anomaly)),
+                    axis_magnitude
+                    * math.sqrt(eccentricity**2 - 1.0)
+                    * math.sinh(anomaly),
+                )
+            )
+    points = [
+        tuple(
+            _rotate_from_orbital_plane(
+                x,
+                y,
+                inclination,
+                ascending_node,
+                argument,
+            )
+        )
+        for x, y in plane_points
+    ]
+    if eccentricity < 1.0:
+        points[-1] = points[0]
+    return tuple(points)
+
+
+def _anchored_orbit_path(
+    orbit: OrbitData,
+    parent_mass_kg: float,
+    body_mass_kg: float,
+    anchor_position_m: list[float],
+    current_distance_m: float,
+) -> tuple[tuple[float, float, float], ...]:
+    semi_major_axis_m = _orbit_semi_major_axis(orbit, parent_mass_kg, body_mass_kg)
+    return tuple(
+        tuple(anchor_position_m[axis] + point[axis] for axis in range(3))
+        for point in sample_relative_orbit_path(
+            semi_major_axis_m,
+            orbit,
+            current_distance_m,
+        )
+    )
+
+
+def _orbit_semi_major_axis(
+    orbit: OrbitData,
+    parent_mass_kg: float,
+    body_mass_kg: float,
+) -> float:
+    if orbit.semi_major_axis_m is not None:
+        return orbit.semi_major_axis_m
+    if orbit.orbital_period_s is None:
+        raise ModelError("orbit requires semi_major_axis_m or orbital_period_s")
+    return semi_major_axis_from_period(
+        orbit.orbital_period_s,
+        parent_mass_kg,
+        body_mass_kg,
+    )
+
+
 def semi_major_axis_from_period(period_s: float, parent_mass_kg: float, body_mass_kg: float = 0.0) -> float:
     if period_s <= 0.0:
         raise ModelError("orbital_period_s must be positive")

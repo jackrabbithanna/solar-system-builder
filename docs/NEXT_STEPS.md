@@ -2,12 +2,6 @@
 
 Potential follow-up work for future sessions.
 
-## Canvas And Interaction
-
-- Add fixed zoom or follow-selected-body modes.
-- Add orbit/trail visibility and styling options beyond the existing focused-parent perspective.
-- Add visual indication while playback simulation is running.
-
 ## Reference Frames
 
 - Add verified built-in transforms between standard astronomical frames such as ICRF, ecliptic, equatorial, and galactic coordinates.

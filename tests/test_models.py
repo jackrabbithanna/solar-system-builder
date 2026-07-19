@@ -94,6 +94,9 @@ class ModelTests(unittest.TestCase):
                 self.assertEqual(data["schema_version"], SCHEMA_VERSION)
                 self.assertIn("settings", data)
                 self.assertIn("trail_frame", data["settings"])
+                self.assertIn("orbit_visibility", data["settings"])
+                self.assertIn("trail_visibility", data["settings"])
+                self.assertIn("path_style", data["settings"])
                 self.assertIn("reference_frame", data)
                 self.assertTrue(all("state_origin" in body for body in data["bodies"]))
 
@@ -312,6 +315,9 @@ class ModelTests(unittest.TestCase):
             "simulation_scope": "stellar_overview",
             "trail_sample_interval_s": 5.0 * DAY,
             "trail_frame": "system_inertial",
+            "orbit_visibility": "all",
+            "trail_visibility": "selected",
+            "path_style": "bold",
         }
 
         system = SolarSystem.from_dict(data)
@@ -324,6 +330,27 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(clone.settings.simulation_scope, "stellar_overview")
         self.assertEqual(clone.settings.trail_sample_interval_s, 5.0 * DAY)
         self.assertEqual(clone.settings.trail_frame, "system_inertial")
+        self.assertEqual(clone.settings.orbit_visibility, "all")
+        self.assertEqual(clone.settings.trail_visibility, "selected")
+        self.assertEqual(clone.settings.path_style, "bold")
+
+    def test_v11_settings_receive_v12_canvas_defaults(self):
+        data = _sample_system_data(schema_version=11)
+        data["settings"] = {"view_mode": "fit_system"}
+
+        settings = SolarSystem.from_dict(data).settings
+
+        self.assertEqual(settings.orbit_visibility, "all")
+        self.assertEqual(settings.trail_visibility, "all")
+        self.assertEqual(settings.path_style, "subtle")
+
+    def test_fixed_scale_view_mode_round_trips(self):
+        data = _sample_system_data()
+        data["settings"] = {"view_mode": "fixed_scale"}
+
+        clone = SolarSystem.from_dict(SolarSystem.from_dict(data).to_dict())
+
+        self.assertEqual(clone.settings.view_mode, "fixed_scale")
 
     def test_orbit_metadata_round_trip(self):
         data = _sample_system_data()
@@ -397,6 +424,18 @@ class ModelTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ModelError, "unsupported trail_frame"):
             SolarSystem.from_dict(data)
+
+    def test_invalid_canvas_path_settings_fail(self):
+        for field, value in (
+            ("orbit_visibility", "nearby"),
+            ("trail_visibility", "enabled"),
+            ("path_style", "glowing"),
+        ):
+            with self.subTest(field=field):
+                data = _sample_system_data()
+                data["settings"] = {field: value}
+                with self.assertRaisesRegex(ModelError, f"unsupported {field}"):
+                    SolarSystem.from_dict(data)
 
     def test_group_round_trip(self):
         data = _sample_system_data()

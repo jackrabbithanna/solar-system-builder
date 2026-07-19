@@ -22,9 +22,13 @@ The UI `Days / step` value is the visible simulation interval. It must not be us
 
 UI trails are sampled from bounded physics substeps, not just from the final position of each visible UI step. This keeps high `Days / step` playback from drawing sparse line segments that make inner orbits look artificially angular or rosette-like.
 
-Focused Parent is the default trail perspective during Focus and Fit. Body focus subtracts the focused body's position at each recorded sample; group focus subtracts the focused group's same-sample mass barycenter. The canvas re-anchors those relative points at the current reference position. Overview and inset trails stay inertial, and changing frames clears trails and invalidates pending playback work. These are recorded trails, not generated static orbit curves.
+Focused Parent is the default trail perspective during Focus and Fit. Body focus subtracts the focused body's position at each recorded sample; group focus subtracts the focused group's same-sample mass barycenter. The canvas re-anchors those relative points at the current reference position. Overview and inset trails stay inertial, and changing frames clears trails and invalidates pending playback work. Configured orbit guides are a separate dashed display layer built from provenance metadata; they never replace canonical Cartesian state or recorded trails.
 
 Selecting a descendant of the active Focus and Fit target changes inspection selection without changing camera state, focus bounds, zoom, or trails. Selecting outside the focused target exits focus.
+
+## Canvas View State
+
+Fixed Scale saves the mode per system but keeps the exact center, physical scale, pan, and 3D camera session-only. Each renderer captures its own linear view. Configured orbit/trail visibility and style are persisted, while toggling them never clears trail history or changes physics.
 
 ## Local JSON Library
 

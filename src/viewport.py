@@ -57,6 +57,51 @@ class CanvasBounds3D:
     radius_m: float
 
 
+@dataclass(frozen=True)
+class FixedView2D:
+    center_m: tuple[float, float]
+    scale_at_zoom_1: float
+
+
+@dataclass(frozen=True)
+class FixedView3D:
+    center_m: tuple[float, float, float]
+    scale_at_zoom_1: float
+
+
+@dataclass(frozen=True)
+class PathStyle:
+    trail_width_px: float
+    trail_alpha: float
+    guide_width_px: float
+    guide_alpha: float
+
+
+PATH_STYLE_VALUES = {
+    "subtle": PathStyle(0.8, 0.22, 0.75, 0.18),
+    "standard": PathStyle(1.25, 0.40, 1.0, 0.28),
+    "bold": PathStyle(2.0, 0.70, 1.5, 0.50),
+}
+
+
+def path_style_values(style: str, *, selected: bool = False) -> PathStyle:
+    if selected and style == "subtle":
+        style = "standard"
+    return PATH_STYLE_VALUES.get(style, PATH_STYLE_VALUES["standard"])
+
+
+def path_visibility_allows(mode: str, *, selected: bool, active: bool = True) -> bool:
+    if not active or mode == "off":
+        return False
+    return mode == "all" or (mode == "selected" and selected)
+
+
+def fixed_view_scale(scale_at_zoom_1: float, zoom_factor: float) -> float:
+    if scale_at_zoom_1 <= 0.0 or not math.isfinite(scale_at_zoom_1):
+        return 0.0
+    return scale_at_zoom_1 * clamp_zoom_factor(zoom_factor)
+
+
 def overview_inset_rect(width: int, height: int) -> InsetRect:
     inset_width = max(80.0, min(240.0, max(160.0, width * 0.3), width - 24.0))
     inset_height = min(inset_width * 2.0 / 3.0, max(60.0, height - 24.0))

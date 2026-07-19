@@ -1,5 +1,5 @@
 {
-  "schema_version": 11,
+  "schema_version": 12,
   "id": "builtin-dwarf-planets",
   "name": "Dwarf Planets",
   "epoch": "2026-07-19 01:22:12.183628 TDB, JPL Horizons, solar-system barycentric",
@@ -11,7 +11,10 @@
     "view_mode": "fit_system",
     "simulation_scope": "auto",
     "trail_sample_interval_s": 7776000.0,
-    "trail_frame": "focused_parent"
+    "trail_frame": "focused_parent",
+    "orbit_visibility": "all",
+    "trail_visibility": "all",
+    "path_style": "subtle"
   },
   "groups": [
     {

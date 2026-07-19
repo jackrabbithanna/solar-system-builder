@@ -119,6 +119,41 @@ class ViewportTests(unittest.TestCase):
         self.assertEqual(viewport.clamp_zoom_factor(128.0), 64.0)
         self.assertEqual(viewport.clamp_zoom_factor(4.0), 4.0)
 
+    def test_fixed_view_scale_preserves_world_scale_across_viewports(self):
+        fixed = viewport.FixedView2D((12.0, -4.0), 2.5)
+
+        small_canvas_scale = viewport.fixed_view_scale(fixed.scale_at_zoom_1, 1.0)
+        large_canvas_scale = viewport.fixed_view_scale(fixed.scale_at_zoom_1, 1.0)
+
+        self.assertEqual(small_canvas_scale, 2.5)
+        self.assertEqual(large_canvas_scale, 2.5)
+        self.assertEqual(viewport.fixed_view_scale(fixed.scale_at_zoom_1, 3.0), 7.5)
+
+    def test_path_visibility_and_style_presets(self):
+        self.assertFalse(viewport.path_visibility_allows("off", selected=True))
+        self.assertFalse(viewport.path_visibility_allows("selected", selected=False))
+        self.assertTrue(viewport.path_visibility_allows("selected", selected=True))
+        self.assertTrue(viewport.path_visibility_allows("all", selected=False))
+        self.assertFalse(
+            viewport.path_visibility_allows("all", selected=True, active=False)
+        )
+        self.assertEqual(
+            viewport.path_style_values("bold"),
+            viewport.PathStyle(2.0, 0.70, 1.5, 0.50),
+        )
+        self.assertEqual(
+            viewport.path_style_values("unknown"),
+            viewport.path_style_values("standard"),
+        )
+        self.assertEqual(
+            viewport.path_style_values("subtle", selected=True),
+            viewport.path_style_values("standard"),
+        )
+        self.assertEqual(
+            viewport.path_style_values("bold", selected=True),
+            viewport.path_style_values("bold"),
+        )
+
     def test_linear_pan_delta_keeps_dragged_view_center_under_pointer(self):
         delta = viewport.pan_center_delta(20.0, -10.0, 2.0, "fit_system")
 

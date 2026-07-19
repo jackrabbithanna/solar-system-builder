@@ -5,7 +5,9 @@ from src.constants import AU, DAY, G
 from src.models import Body, ModelError, OrbitData, SystemGroup
 from src.orbits import (
     binary_pair_state_vectors,
+    configured_orbit_guides,
     group_barycenter,
+    sample_relative_orbit_path,
     semi_major_axis_from_period,
     shift_group_to_barycenter,
     state_vectors_from_orbit,
@@ -16,6 +18,93 @@ EARTH_MASS = 5.97237e24
 
 
 class OrbitConversionTests(unittest.TestCase):
+    def test_elliptical_guide_is_closed_and_oriented_in_3d(self):
+        orbit = OrbitData(
+            semi_major_axis_m=10.0,
+            eccentricity=0.2,
+            inclination_deg=90.0,
+        )
+
+        points = sample_relative_orbit_path(10.0, orbit, 8.0)
+
+        self.assertEqual(len(points), 257)
+        self.assertEqual(points[0], points[-1])
+        self.assertAlmostEqual(math.dist(points[0], (0.0, 0.0, 0.0)), 8.0)
+        self.assertTrue(any(abs(point[2]) > 1.0 for point in points))
+
+    def test_hyperbolic_guide_reaches_symmetric_radius_limit(self):
+        orbit = OrbitData(semi_major_axis_m=-10.0, eccentricity=1.5)
+
+        points = sample_relative_orbit_path(-10.0, orbit, 5.0)
+
+        self.assertEqual(len(points), 257)
+        self.assertAlmostEqual(math.dist(points[128], (0.0, 0.0, 0.0)), 5.0)
+        self.assertAlmostEqual(math.dist(points[0], (0.0, 0.0, 0.0)), 20.0)
+        self.assertAlmostEqual(math.dist(points[-1], (0.0, 0.0, 0.0)), 20.0)
+        self.assertAlmostEqual(points[0][1], -points[-1][1])
+
+    def test_configured_guides_resolve_body_and_binary_anchors(self):
+        star = Body(
+            "Star", "star", 3.0, 1.0, [100.0, 0.0, 0.0], [0.0, 0.0, 0.0], "#fff", id="star"
+        )
+        planet = Body(
+            "Planet",
+            "planet",
+            1.0,
+            1.0,
+            [110.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            "#00f",
+            id="planet",
+            parent_id="star",
+            orbit=OrbitData(semi_major_axis_m=10.0, eccentricity=0.0),
+        )
+        first = Body(
+            "A", "star", 3.0, 1.0, [-2.0, 0.0, 0.0], [0.0, 0.0, 0.0], "#f00", id="a"
+        )
+        second = Body(
+            "B", "star", 1.0, 1.0, [6.0, 0.0, 0.0], [0.0, 0.0, 0.0], "#0f0", id="b"
+        )
+        groups = [
+            SystemGroup("Planetary", "planetary_system", ["star"], id="planetary"),
+            SystemGroup(
+                "Binary",
+                "binary_system",
+                ["a", "b"],
+                id="binary",
+                orbit=OrbitData(semi_major_axis_m=8.0, eccentricity=0.0),
+            ),
+        ]
+
+        guides = configured_orbit_guides([star, planet, first, second], groups)
+
+        planet_guide = next(guide for guide in guides if guide.body_id == "planet")
+        self.assertAlmostEqual(planet_guide.points_m[0][0], 110.0)
+        binary_guides = [guide for guide in guides if guide.group_id == "binary"]
+        self.assertEqual({guide.body_id for guide in binary_guides}, {"a", "b"})
+        self.assertEqual(len(binary_guides), 2)
+
+    def test_configured_group_guide_uses_target_barycenter(self):
+        target = Body(
+            "Target", "star", 10.0, 1.0, [50.0, 0.0, 0.0], [0.0, 0.0, 0.0], "#fff", id="target"
+        )
+        member = Body(
+            "Member", "star", 1.0, 1.0, [70.0, 0.0, 0.0], [0.0, 0.0, 0.0], "#f00", id="member"
+        )
+        group = SystemGroup(
+            "Orbiting",
+            "stellar_system",
+            ["member"],
+            id="orbiting",
+            orbit=OrbitData(semi_major_axis_m=20.0, eccentricity=0.0),
+            orbit_target_type="body",
+            orbit_target_id="target",
+        )
+
+        guide = configured_orbit_guides([target, member], [group])[0]
+
+        self.assertEqual(guide.group_id, "orbiting")
+        self.assertAlmostEqual(guide.points_m[0][0], 70.0)
     def test_circular_earth_like_orbit(self):
         sun = Body("Sun", "star", SOLAR_MASS, 1.0, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], "#fff")
         earth = Body("Earth", "planet", EARTH_MASS, 1.0, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], "#00f")

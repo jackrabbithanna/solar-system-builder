@@ -13,15 +13,18 @@ from uuid import uuid4
 
 from .constants import DAY
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 ACCURACY_PROFILES = {"high", "balanced", "fast"}
 BODY_KINDS = frozenset({"star", "planet", "dwarf planet", "moon", "comet", "asteroid"})
 STATE_ORIGINS = frozenset({"cartesian", "orbital", "horizons", "flyby"})
 REFERENCE_FRAME_SOURCES = frozenset({"app_local", "horizons"})
 DISTANCE_UNITS = {"km", "AU", "kAU", "ly"}
-VIEW_MODES = {"fit_system", "follow_selected", "log_overview"}
+VIEW_MODES = {"fit_system", "follow_selected", "fixed_scale", "log_overview"}
 TRAIL_FRAMES = {"focused_parent", "system_inertial"}
+ORBIT_VISIBILITY_MODES = {"off", "selected", "all"}
+TRAIL_VISIBILITY_MODES = {"off", "selected", "all"}
+PATH_STYLES = {"subtle", "standard", "bold"}
 SIMULATION_SCOPES = {
     "auto",
     "full_nbody",
@@ -491,6 +494,9 @@ class SystemSettings:
     simulation_scope: str = "auto"
     trail_sample_interval_s: float = DAY
     trail_frame: str = "focused_parent"
+    orbit_visibility: str = "all"
+    trail_visibility: str = "all"
+    path_style: str = "subtle"
 
     @classmethod
     def default_for_system(cls, system_id: str) -> "SystemSettings":
@@ -513,6 +519,13 @@ class SystemSettings:
                 data.get("trail_sample_interval_s", defaults.trail_sample_interval_s)
             ),
             trail_frame=str(data.get("trail_frame", defaults.trail_frame)),
+            orbit_visibility=str(
+                data.get("orbit_visibility", defaults.orbit_visibility)
+            ),
+            trail_visibility=str(
+                data.get("trail_visibility", defaults.trail_visibility)
+            ),
+            path_style=str(data.get("path_style", defaults.path_style)),
         )
         settings.validate()
         return settings
@@ -532,6 +545,12 @@ class SystemSettings:
             raise ModelError(f"unsupported simulation_scope {self.simulation_scope}")
         if self.trail_frame not in TRAIL_FRAMES:
             raise ModelError(f"unsupported trail_frame {self.trail_frame}")
+        if self.orbit_visibility not in ORBIT_VISIBILITY_MODES:
+            raise ModelError(f"unsupported orbit_visibility {self.orbit_visibility}")
+        if self.trail_visibility not in TRAIL_VISIBILITY_MODES:
+            raise ModelError(f"unsupported trail_visibility {self.trail_visibility}")
+        if self.path_style not in PATH_STYLES:
+            raise ModelError(f"unsupported path_style {self.path_style}")
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -543,6 +562,9 @@ class SystemSettings:
             "simulation_scope": self.simulation_scope,
             "trail_sample_interval_s": self.trail_sample_interval_s,
             "trail_frame": self.trail_frame,
+            "orbit_visibility": self.orbit_visibility,
+            "trail_visibility": self.trail_visibility,
+            "path_style": self.path_style,
         }
 
 

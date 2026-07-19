@@ -8,7 +8,8 @@ The canvas shows the active simulation view.
 
 - Colored dots represent visible bodies, or group markers when the app is showing a system overview.
 - Moons use compact circles, asteroids use irregular markers, and comets have a short tail pointing away from their parent star.
-- Faint colored lines show orbital trails collected during playback and manual stepping.
+- Solid colored lines show trails collected during playback and manual stepping.
+- Dashed colored lines show configured reference conics when orbit guides are enabled. They come from saved orbital metadata and are not live N-body predictions.
 - A white ring marks the selected body or selected overview group.
 - A small red dot marks the shared barycenter when the visible active set has enough mass data to compute one.
 - In Hybrid Focus mode, a lower-left overview inset shows outside systems while the focused subsystem remains fitted in the main view. The focused system has a white ring in the inset; click another inset marker to select it and leave the focused view.
@@ -25,7 +26,9 @@ The canvas has overlay zoom buttons in the upper-right corner.
 - Reset Zoom returns the canvas to the fitted default zoom and centered position.
 - Zoom In increases the current zoom level.
 
-Zoom is clamped between the default fitted scale and the maximum zoom level. Panning is enabled above the default fitted scale. Zoom Out and Reset Zoom are disabled while the canvas is already at the default fitted scale.
+Zoom is clamped between the default fitted scale and the maximum zoom level. Panning is enabled above the default fitted scale, and at any zoom in Fixed Scale mode. Zoom Out and Reset Zoom are disabled while the canvas is already at its default view.
+
+The Paths menu beside the zoom controls configures Orbit Guides, Recorded Trails, and Path Style. It remains open while options are selected and closes when its three-dots button is clicked again. Orbit and trail visibility can be Off, Selected, or All; both default to All. Selected applies to the selected body or overview group; binary-group selection shows both configured component guides. Subtle, Standard, and Bold change line width and opacity, with Subtle as the default. A selected path is promoted from Subtle to Standard so it remains distinct; Standard and Bold selections are preserved. These settings are saved per system. Visibility and style changes only redraw existing path data, so hiding and showing trails does not clear recorded history. A body's own Trail switch still controls whether its trail is recorded.
 
 ## Playback Controls
 
@@ -37,6 +40,8 @@ The header bar contains the main simulation controls.
 - Step forward moves the simulation forward by one visible time step.
 
 The label below the canvas shows the current elapsed simulation time. Playback and stepping append trails for active bodies or overview markers.
+
+An indicator in the upper-left of the canvas shows `Simulating` during continuous playback. If playback is paused while a worker step is already in progress, it shows `Finishing current step…` until that result returns.
 
 ## Simulation Settings
 
@@ -73,6 +78,7 @@ The view mode controls how the canvas is centered and scaled.
 
 - Fit System centers the full active system around its mass-weighted center and fits it into the canvas.
 - Follow Selected centers the view around the selected body, the selected body's parent, or the selected group.
+- Fixed Scale freezes the current linear center and physical scale through playback and selection changes. Pan and zoom adjust that frozen view; Reset Zoom fits the current state and freezes it again. The 2D and 3D renderers keep independent fixed views.
 - Log Overview compresses large distances so wide systems can be inspected more easily.
 
 Changing the view mode clears existing trails because the active display context may change.
@@ -97,7 +103,7 @@ Trail Perspective controls the coordinates used for recorded body trails during 
 - Focused Parent is the default. Each physics sample is stored relative to the moving focused body, or relative to the focused group's mass-weighted barycenter. This makes moon and planet trails show their local motion instead of the larger heliocentric or system-level path.
 - System / Inertial stores the original system coordinates, preserving the larger path through the system.
 
-This setting changes recorded playback trails only; it does not draw a separate static orbit curve. System Overview and the context inset remain inertial. Changing Trail Perspective clears existing trails and invalidates a pending playback result so coordinates from different frames are never joined.
+This setting changes recorded playback trails only. Configured orbit guides are a separate display layer and do not use recorded trail coordinates. System Overview and the context inset remain inertial. Changing Trail Perspective clears existing trails and invalidates a pending playback result so coordinates from different frames are never joined.
 
 ## Focus and Selection
 

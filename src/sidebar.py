@@ -22,7 +22,10 @@ from .models import BODY_KINDS, Body, DataSource, ModelError, OrbitData, SolarSy
 from .scales import (
     ACCURACY_LABELS,
     DISTANCE_UNITS,
+    ORBIT_VISIBILITY_LABELS,
+    PATH_STYLE_LABELS,
     TIME_UNITS,
+    TRAIL_VISIBILITY_LABELS,
     VIEW_MODE_LABELS,
     SIMULATION_SCOPE_LABELS,
     TRAIL_FRAME_LABELS,
@@ -184,6 +187,9 @@ class SystemPropertiesPanel(GObject.GObject):
         "view-mode-changed": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
         "simulation-scope-changed": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
         "trail-frame-changed": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
+        "orbit-visibility-changed": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
+        "trail-visibility-changed": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
+        "path-style-changed": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
         "distance-unit-changed": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
     }
 
@@ -200,6 +206,9 @@ class SystemPropertiesPanel(GObject.GObject):
         view_mode_dropdown,
         simulation_scope_dropdown,
         trail_frame_dropdown,
+        orbit_visibility_dropdown,
+        trail_visibility_dropdown,
+        path_style_dropdown,
         distance_unit_dropdown,
     ):
         super().__init__()
@@ -214,6 +223,9 @@ class SystemPropertiesPanel(GObject.GObject):
         self.view_mode_dropdown = view_mode_dropdown
         self.simulation_scope_dropdown = simulation_scope_dropdown
         self.trail_frame_dropdown = trail_frame_dropdown
+        self.orbit_visibility_dropdown = orbit_visibility_dropdown
+        self.trail_visibility_dropdown = trail_visibility_dropdown
+        self.path_style_dropdown = path_style_dropdown
         self.distance_unit_dropdown = distance_unit_dropdown
         self.editing = False
 
@@ -222,6 +234,9 @@ class SystemPropertiesPanel(GObject.GObject):
         self._setup_dropdown(self.view_mode_dropdown, VIEW_MODE_LABELS)
         self._setup_dropdown(self.simulation_scope_dropdown, SIMULATION_SCOPE_LABELS)
         self._setup_dropdown(self.trail_frame_dropdown, TRAIL_FRAME_LABELS)
+        self._setup_dropdown(self.orbit_visibility_dropdown, ORBIT_VISIBILITY_LABELS)
+        self._setup_dropdown(self.trail_visibility_dropdown, TRAIL_VISIBILITY_LABELS)
+        self._setup_dropdown(self.path_style_dropdown, PATH_STYLE_LABELS)
         self._setup_dropdown(self.distance_unit_dropdown, DISTANCE_UNITS)
 
         self.system_name_entry.connect("activate", self._on_system_name_edit)
@@ -238,6 +253,15 @@ class SystemPropertiesPanel(GObject.GObject):
         self.view_mode_dropdown.connect("notify::selected", self._on_view_mode_changed)
         self.simulation_scope_dropdown.connect("notify::selected", self._on_simulation_scope_changed)
         self.trail_frame_dropdown.connect("notify::selected", self._on_trail_frame_changed)
+        self.orbit_visibility_dropdown.connect(
+            "notify::selected",
+            self._on_orbit_visibility_changed,
+        )
+        self.trail_visibility_dropdown.connect(
+            "notify::selected",
+            self._on_trail_visibility_changed,
+        )
+        self.path_style_dropdown.connect("notify::selected", self._on_path_style_changed)
         self.distance_unit_dropdown.connect("notify::selected", self._on_distance_unit_changed)
 
     def load_system(self, system: SolarSystem, editable: bool) -> None:
@@ -274,6 +298,15 @@ class SystemPropertiesPanel(GObject.GObject):
             self.view_mode_dropdown.set_selected(unit_index(VIEW_MODE_LABELS, settings.view_mode))
             self.simulation_scope_dropdown.set_selected(unit_index(SIMULATION_SCOPE_LABELS, settings.simulation_scope))
             self.trail_frame_dropdown.set_selected(unit_index(TRAIL_FRAME_LABELS, settings.trail_frame))
+            self.orbit_visibility_dropdown.set_selected(
+                unit_index(ORBIT_VISIBILITY_LABELS, settings.orbit_visibility)
+            )
+            self.trail_visibility_dropdown.set_selected(
+                unit_index(TRAIL_VISIBILITY_LABELS, settings.trail_visibility)
+            )
+            self.path_style_dropdown.set_selected(
+                unit_index(PATH_STYLE_LABELS, settings.path_style)
+            )
             self.distance_unit_dropdown.set_selected(unit_index(DISTANCE_UNITS, settings.distance_unit))
         finally:
             self.editing = False
@@ -329,6 +362,30 @@ class SystemPropertiesPanel(GObject.GObject):
             selected = dropdown.get_selected()
             if selected < len(TRAIL_FRAME_LABELS):
                 self.emit("trail-frame-changed", TRAIL_FRAME_LABELS[selected][1])
+
+    def _on_orbit_visibility_changed(self, dropdown, _param) -> None:
+        if not self.editing:
+            selected = dropdown.get_selected()
+            if selected < len(ORBIT_VISIBILITY_LABELS):
+                self.emit(
+                    "orbit-visibility-changed",
+                    ORBIT_VISIBILITY_LABELS[selected][1],
+                )
+
+    def _on_trail_visibility_changed(self, dropdown, _param) -> None:
+        if not self.editing:
+            selected = dropdown.get_selected()
+            if selected < len(TRAIL_VISIBILITY_LABELS):
+                self.emit(
+                    "trail-visibility-changed",
+                    TRAIL_VISIBILITY_LABELS[selected][1],
+                )
+
+    def _on_path_style_changed(self, dropdown, _param) -> None:
+        if not self.editing:
+            selected = dropdown.get_selected()
+            if selected < len(PATH_STYLE_LABELS):
+                self.emit("path-style-changed", PATH_STYLE_LABELS[selected][1])
 
     def _on_distance_unit_changed(self, dropdown, _param) -> None:
         if not self.editing:

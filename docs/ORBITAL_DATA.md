@@ -23,6 +23,8 @@ When a user generates a body state vector from orbital data, the app:
 
 Playback then advances the generated vectors directly.
 
+When orbit guides are enabled, the canvas samples this stored metadata as a dashed reference conic around the anchor's current position. The guide is explanatory provenance: it does not affect fitting or physics and is not recomputed as a live osculating orbit after N-body playback changes the canonical vectors.
+
 When a user generates group orbital state, the app computes the selected group's barycenter from its member bodies, generates a desired barycenter state around the selected target body or target group, and applies the same position/velocity delta to every body in the group. This preserves the group's internal layout while moving the whole subsystem.
 
 Binary pair generation is different: for a group with exactly two direct bodies, the app generates both bodies around their shared barycenter and splits positions and velocities by mass so total momentum remains centered on the original group barycenter.
@@ -52,7 +54,7 @@ The converter supports bound Keplerian ellipses and unbound hyperbolic trajector
 - Inclination, longitude of ascending node, argument of periapsis, and mean anomaly default to `0`.
 - The reference plane is the app-local XY plane. Hyperbolic mean anomaly is not angle-wrapped.
 
-The converter preserves 3D vectors internally, but the current canvas is still a top-down X/Y view.
+The converter and canvas preserve full 3D vectors. The 2D renderer projects X/Y, while the scientific 3D renderer projects the configured orbital plane through its orbit camera.
 
 ## Body Orbits
 

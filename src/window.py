@@ -54,6 +54,7 @@ from .orbit_editing import (
     generate_group_barycenter_orbit,
 )
 from .orbits import body_indices_for_group, group_barycenter
+from .orbits import configured_orbit_guides
 from .presets import (
     load_builtin_solar_system,
     load_builtin_solar_system_by_id,
@@ -124,6 +125,13 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     zoom_out_button = Gtk.Template.Child()
     reset_zoom_button = Gtk.Template.Child()
     zoom_in_button = Gtk.Template.Child()
+    path_options_button = Gtk.Template.Child()
+    orbit_visibility_dropdown = Gtk.Template.Child()
+    trail_visibility_dropdown = Gtk.Template.Child()
+    path_style_dropdown = Gtk.Template.Child()
+    playback_status_box = Gtk.Template.Child()
+    playback_spinner = Gtk.Template.Child()
+    playback_status_label = Gtk.Template.Child()
     new_system_button = Gtk.Template.Child()
     save_button = Gtk.Template.Child()
     duplicate_button = Gtk.Template.Child()
@@ -260,6 +268,9 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.view_mode_dropdown,
             self.simulation_scope_dropdown,
             self.trail_frame_dropdown,
+            self.orbit_visibility_dropdown,
+            self.trail_visibility_dropdown,
+            self.path_style_dropdown,
             self.distance_unit_dropdown,
         )
         self.body_inspector = BodyInspectorPanel(
@@ -385,6 +396,15 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.system_panel.connect("view-mode-changed", self._on_view_mode_changed)
         self.system_panel.connect("simulation-scope-changed", self._on_simulation_scope_changed)
         self.system_panel.connect("trail-frame-changed", self._on_trail_frame_changed)
+        self.system_panel.connect(
+            "orbit-visibility-changed",
+            self._on_orbit_visibility_changed,
+        )
+        self.system_panel.connect(
+            "trail-visibility-changed",
+            self._on_trail_visibility_changed,
+        )
+        self.system_panel.connect("path-style-changed", self._on_path_style_changed)
         self.system_panel.connect("distance-unit-changed", self._on_distance_unit_changed)
         self.system_panel.connect("system-description-edited", self._on_system_description_edit)
         self.body_inspector.connect("body-edited", self._on_body_edit)
@@ -405,6 +425,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._set_zoom_factor(1.0)
         self._sync_structural_controls()
         self._set_dirty(False)
+        self._sync_playback_status()
 
     def do_close_request(self):
         if self.dirty and not self.allow_close:
@@ -578,8 +599,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.horizons_refresh_cancel = None
         self.horizons_refresh_in_progress = False
         self.horizons_generation += 1
-        self.playing = False
-        self.play_button.set_icon_name("media-playback-start-symbolic")
+        self._set_playing(False)
         self._replace_system(system, refresh_snapshot=True)
 
     def _replace_system(
@@ -1544,8 +1564,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             body.data_source = None
             body.state_origin = "cartesian"
             body.flyby = None
-            self.playing = False
-            self.play_button.set_icon_name("media-playback-start-symbolic")
+            self._set_playing(False)
             self._clear_dynamic_simulation_state()
         self.simulation.replace_bodies(self.system.bodies)
         self._populate_body_list()
@@ -1699,6 +1718,27 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._update_title()
         self._refresh_canvas()
 
+    def _on_orbit_visibility_changed(self, _panel, visibility: str) -> None:
+        if visibility == self.system.settings.orbit_visibility:
+            return
+        self.system.settings.orbit_visibility = visibility
+        self._mark_dirty_if_editable()
+        self._refresh_canvas()
+
+    def _on_trail_visibility_changed(self, _panel, visibility: str) -> None:
+        if visibility == self.system.settings.trail_visibility:
+            return
+        self.system.settings.trail_visibility = visibility
+        self._mark_dirty_if_editable()
+        self._refresh_canvas()
+
+    def _on_path_style_changed(self, _panel, path_style: str) -> None:
+        if path_style == self.system.settings.path_style:
+            return
+        self.system.settings.path_style = path_style
+        self._mark_dirty_if_editable()
+        self._refresh_canvas()
+
     def _prompt_reset_for_full_physics(self) -> None:
         dialog = Adw.AlertDialog.new(
             "Reset for Full N-body?",
@@ -1716,8 +1756,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         if response != "reset":
             return
         selected_body_id = self.system.bodies[self.selected_index].id if self.system.bodies else None
-        self.playing = False
-        self.play_button.set_icon_name("media-playback-start-symbolic")
+        self._set_playing(False)
         self._replace_system(
             self.loaded_system_snapshot,
             refresh_snapshot=False,
@@ -2362,8 +2401,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         except (ModelError, ValueError) as error:
             self._show_error_dialog("Cannot Create System", str(error))
             return
-        self.playing = False
-        self.play_button.set_icon_name("media-playback-start-symbolic")
+        self._set_playing(False)
         self.system_library.save_new_system(system)
 
     def _star_state_from_dialog(self, controls: dict, color: str) -> BodyStateInput:
@@ -3161,8 +3199,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         raise ModelError("Bundled presets are read-only. Use Duplicate to Edit first.")
 
     def _stop_playback_for_structural_work(self) -> None:
-        self.playing = False
-        self.play_button.set_icon_name("media-playback-start-symbolic")
+        self._set_playing(False)
         self.simulation.increment_generation()
 
     def _after_structural_edit(
@@ -3171,8 +3208,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         selected_group_id: str | None = None,
         offer_horizons_refresh: bool = False,
     ) -> None:
-        self.playing = False
-        self.play_button.set_icon_name("media-playback-start-symbolic")
+        self._set_playing(False)
         self.focus_target = None
         self.focus_state = None
         self.selected_group_id = None
@@ -3304,9 +3340,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self._select_group(group_id)
 
     def _on_play_clicked(self, _button) -> None:
-        self.playing = not self.playing
-        icon = "media-playback-pause-symbolic" if self.playing else "media-playback-start-symbolic"
-        self.play_button.set_icon_name(icon)
+        self._set_playing(not self.playing)
         if self.playing:
             self._queue_simulation_job()
 
@@ -3405,8 +3439,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         selected_body_id = None
         if self.system.bodies:
             selected_body_id = self.system.bodies[self.selected_index].id
-        self.playing = False
-        self.play_button.set_icon_name("media-playback-start-symbolic")
+        self._set_playing(False)
         self._replace_system(
             self.loaded_system_snapshot,
             refresh_snapshot=False,
@@ -3445,6 +3478,29 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _clone_system(self, system: SolarSystem) -> SolarSystem:
         return SolarSystem.from_dict(system.to_dict())
 
+    def _set_playing(self, playing: bool) -> None:
+        self.playing = playing
+        icon = (
+            "media-playback-pause-symbolic"
+            if playing
+            else "media-playback-start-symbolic"
+        )
+        self.play_button.set_icon_name(icon)
+        self._sync_playback_status()
+
+    def _sync_playback_status(self) -> None:
+        worker_active = self.simulation_future is not None
+        active = self.playing or worker_active
+        if self.playing:
+            label = "Simulating"
+        elif worker_active:
+            label = "Finishing current step…"
+        else:
+            label = ""
+        self.playback_status_label.set_label(label)
+        self.playback_spinner.set_spinning(active)
+        self.playback_status_box.set_visible(active)
+
     def _tick(self) -> bool:
         if self.playing:
             self._queue_simulation_job()
@@ -3463,6 +3519,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
 
         job = self._simulation_job(self._step_seconds())
         self.simulation_future = self.simulation_executor.submit(playback.run_simulation_job, job)
+        self._sync_playback_status()
         self.simulation_future.add_done_callback(
             lambda future: GLib.idle_add(
                 self._finish_simulation_job,
@@ -3484,6 +3541,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _finish_simulation_job(self, future: Future) -> bool:
         if future is self.simulation_future:
             self.simulation_future = None
+            self._sync_playback_status()
 
         if self.closed:
             return False
@@ -3492,8 +3550,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             result = future.result()
         except Exception:
             traceback.print_exc()
-            self.playing = False
-            self.play_button.set_icon_name("media-playback-start-symbolic")
+            self._set_playing(False)
             return False
 
         if self.simulation.apply_result(
@@ -3598,6 +3655,13 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             focused_fit_session=self.focus_fit_session,
             selected_group_center=selected_group_center,
             trail_reference_position=trail_reference_position,
+            orbit_guides=configured_orbit_guides(
+                self.system.bodies,
+                self.system.groups,
+            ),
+            orbit_visibility=settings.orbit_visibility,
+            trail_visibility=settings.trail_visibility,
+            path_style=settings.path_style,
             trails=list(self.simulation.trails),
             overview_entities=self._overview_entities(),
             overview_positions=self._overview_positions(),

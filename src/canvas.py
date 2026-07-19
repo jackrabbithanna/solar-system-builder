@@ -20,6 +20,7 @@ from gi.repository import Gdk, GObject, Gtk
 
 from . import viewport
 from .models import Body
+from .orbits import OrbitGuide
 from .scales import CanvasBounds, OverviewEntity, collapsed_child_counts
 
 Trail = list[tuple[float, float, float]]
@@ -42,6 +43,10 @@ class CanvasScene:
     focused_fit_session: int = 0
     selected_group_center: tuple[float, float, float] | None = None
     trail_reference_position: tuple[float, float, float] | None = None
+    orbit_guides: list[OrbitGuide] = field(default_factory=list)
+    orbit_visibility: str = "all"
+    trail_visibility: str = "all"
+    path_style: str = "subtle"
     trails: list[Trail] = field(default_factory=list)
     overview_entities: list[OverviewEntity] = field(default_factory=list)
     overview_positions: Positions = field(default_factory=list)
@@ -87,8 +92,12 @@ class SolarSystemCanvas(Gtk.DrawingArea):
         self._focused_fit_key: tuple[int, tuple[int, ...]] | None = None
         self._focused_fit_bounds: CanvasBounds | None = None
         self._focused_fit_bounds_3d: viewport.CanvasBounds3D | None = None
+        self._fixed_view_2d: viewport.FixedView2D | None = None
+        self._fixed_view_3d: viewport.FixedView3D | None = None
+        self._suppress_fixed_transition_capture = False
         self._trail_arrays: list[np.ndarray] = []
         self._overview_trail_arrays: dict[str, np.ndarray] = {}
+        self._guide_arrays: list[np.ndarray] = []
         self.set_draw_func(self._draw)
         self.set_has_tooltip(True)
         self.connect("query-tooltip", self._on_query_tooltip)
@@ -108,7 +117,24 @@ class SolarSystemCanvas(Gtk.DrawingArea):
         self.add_controller(drag_gesture)
 
     def set_scene(self, scene: CanvasScene) -> None:
+        previous_mode = self._scene.view_mode
+        if (
+            scene.view_mode == "fixed_scale"
+            and previous_mode != "fixed_scale"
+            and previous_mode != "log_overview"
+            and not self._scene.using_focused_fit
+            and not self._suppress_fixed_transition_capture
+        ):
+            self._capture_current_fixed_view()
+        elif scene.view_mode != "fixed_scale" and previous_mode == "fixed_scale":
+            self._fixed_view_2d = None
+            self._fixed_view_3d = None
         self._scene = scene
+        self._suppress_fixed_transition_capture = False
+        self._guide_arrays = [
+            np.asarray(guide.points_m, dtype=float).reshape((-1, 3))
+            for guide in scene.orbit_guides
+        ]
         if self._render_mode == "3d":
             self._cache_3d_trails()
         self._update_focused_fit()
@@ -199,12 +225,14 @@ class SolarSystemCanvas(Gtk.DrawingArea):
 
     def reset_view(self) -> None:
         zoom_changed = self._zoom_factor != 1.0
-        changed = not self.view_is_default()
+        changed = not self.view_is_default() or self._scene.view_mode == "fixed_scale"
         self._zoom_factor = 1.0
         if self._render_mode == "2d":
             self._pan_offset_m = (0.0, 0.0)
+            self._fixed_view_2d = None
         else:
             self._pan_offset_3d_m = (0.0, 0.0, 0.0)
+            self._fixed_view_3d = None
             self._camera = viewport.Camera3D()
             self._camera_basis = viewport.camera_basis(self._camera)
         self._finish_drag()
@@ -222,6 +250,9 @@ class SolarSystemCanvas(Gtk.DrawingArea):
         self._pan_offset_3d_m = (0.0, 0.0, 0.0)
         self._camera = viewport.Camera3D()
         self._camera_basis = viewport.camera_basis(self._camera)
+        self._fixed_view_2d = None
+        self._fixed_view_3d = None
+        self._suppress_fixed_transition_capture = True
         self._finish_drag()
         self._update_pan_cursor()
         if active_zoom_changed:
@@ -232,7 +263,12 @@ class SolarSystemCanvas(Gtk.DrawingArea):
     def set_zoom_factor(self, zoom_factor: float) -> None:
         clamped = viewport.clamp_zoom_factor(zoom_factor)
         pan_changed = False
-        if self._render_mode == "2d" and clamped == 1.0 and self._pan_offset_m != (0.0, 0.0):
+        if (
+            self._render_mode == "2d"
+            and clamped == 1.0
+            and self._scene.view_mode != "fixed_scale"
+            and self._pan_offset_m != (0.0, 0.0)
+        ):
             self._pan_offset_m = (0.0, 0.0)
             self._drag_active = False
             pan_changed = True
@@ -264,7 +300,11 @@ class SolarSystemCanvas(Gtk.DrawingArea):
         width = self.get_width()
         height = self.get_height()
         if (
-            (self._render_mode == "2d" and self._zoom_factor <= 1.0)
+            (
+                self._render_mode == "2d"
+                and self._zoom_factor <= 1.0
+                and self._scene.view_mode != "fixed_scale"
+            )
             or width <= 0
             or height <= 0
             or self._point_in_overview_inset(start_x, start_y)
@@ -344,7 +384,11 @@ class SolarSystemCanvas(Gtk.DrawingArea):
     def _update_pan_cursor(self) -> None:
         if self._drag_active:
             cursor_name = "grabbing"
-        elif self._render_mode == "3d" or self._zoom_factor > 1.0:
+        elif (
+            self._render_mode == "3d"
+            or self._zoom_factor > 1.0
+            or self._scene.view_mode == "fixed_scale"
+        ):
             cursor_name = "grab"
         else:
             cursor_name = None
@@ -398,6 +442,112 @@ class SolarSystemCanvas(Gtk.DrawingArea):
         if entity is not None and entity.id in self._scene.selectable_group_ids:
             self.emit("group-selected", entity.id)
 
+    def _selected_body_id(self) -> str | None:
+        if self._scene.selected_group_id is not None or not self._scene.bodies:
+            return None
+        index = max(0, min(self._scene.selected_body_index, len(self._scene.bodies) - 1))
+        return self._scene.bodies[index].id
+
+    def _guide_is_selected(self, guide: OrbitGuide) -> bool:
+        return (
+            guide.body_id is not None and guide.body_id == self._selected_body_id()
+        ) or (
+            guide.group_id is not None
+            and guide.group_id == self._scene.selected_group_id
+        )
+
+    def _guide_is_visible(self, guide: OrbitGuide) -> bool:
+        if self._scene.using_system_overview:
+            active = guide.group_id in {
+                entity.id for entity in self._scene.overview_entities
+            }
+        else:
+            active_body_ids = {
+                self._scene.bodies[index].id
+                for index in self._scene.active_indices
+                if 0 <= index < len(self._scene.bodies)
+            }
+            active = bool(active_body_ids.intersection(guide.active_body_ids))
+        return viewport.path_visibility_allows(
+            self._scene.orbit_visibility,
+            selected=self._guide_is_selected(guide),
+            active=active,
+        )
+
+    def _body_trail_is_selected(self, body_index: int) -> bool:
+        return (
+            self._scene.selected_group_id is None
+            and body_index == self._scene.selected_body_index
+        )
+
+    def _body_trail_is_visible(self, body_index: int) -> bool:
+        return viewport.path_visibility_allows(
+            self._scene.trail_visibility,
+            selected=self._body_trail_is_selected(body_index),
+        )
+
+    def _entity_trail_is_selected(self, entity_id: str, *, inset: bool = False) -> bool:
+        selected_id = (
+            self._scene.focused_inset_entity_id
+            if inset and self._scene.selected_group_id is None
+            else self._scene.selected_group_id
+        )
+        return entity_id == selected_id
+
+    def _entity_trail_is_visible(self, entity_id: str, *, inset: bool = False) -> bool:
+        return viewport.path_visibility_allows(
+            self._scene.trail_visibility,
+            selected=self._entity_trail_is_selected(entity_id, inset=inset),
+        )
+
+    def _draw_orbit_guides_2d(
+        self,
+        cr,
+        origin_x: float,
+        origin_y: float,
+        scale: float,
+        center_x_m: float,
+        center_y_m: float,
+    ) -> None:
+        cr.save()
+        cr.set_dash([5.0, 4.0])
+        for guide in self._scene.orbit_guides:
+            if not self._guide_is_visible(guide) or len(guide.points_m) < 2:
+                continue
+            style = viewport.path_style_values(
+                self._scene.path_style,
+                selected=self._guide_is_selected(guide),
+            )
+            cr.set_line_width(style.guide_width_px)
+            rgba = self._rgba(guide.color)
+            cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, style.guide_alpha)
+            first = guide.points_m[0]
+            cr.move_to(
+                *self._project(
+                    first[0],
+                    first[1],
+                    origin_x,
+                    origin_y,
+                    scale,
+                    center_x_m,
+                    center_y_m,
+                )
+            )
+            for point in guide.points_m[1:]:
+                cr.line_to(
+                    *self._project(
+                        point[0],
+                        point[1],
+                        origin_x,
+                        origin_y,
+                        scale,
+                        center_x_m,
+                        center_y_m,
+                    )
+                )
+            cr.stroke()
+        cr.restore()
+
     def _draw(self, _area, cr, width: int, height: int) -> None:
         cr.set_source_rgb(0.02, 0.025, 0.032)
         cr.paint()
@@ -417,12 +567,28 @@ class SolarSystemCanvas(Gtk.DrawingArea):
         origin_y = height / 2.0
         active_indices = set(self._scene.active_indices)
 
-        cr.set_line_width(1.0)
+        self._draw_orbit_guides_2d(
+            cr,
+            origin_x,
+            origin_y,
+            scale,
+            center_x_m,
+            center_y_m,
+        )
         for index, trail in enumerate(self._scene.trails):
-            if index not in active_indices or len(trail) < 2:
+            if (
+                index not in active_indices
+                or len(trail) < 2
+                or not self._body_trail_is_visible(index)
+            ):
                 continue
+            style = viewport.path_style_values(
+                self._scene.path_style,
+                selected=self._body_trail_is_selected(index),
+            )
+            cr.set_line_width(style.trail_width_px)
             rgba = self._rgba(self._scene.bodies[index].color)
-            cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.35)
+            cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, style.trail_alpha)
             trail_x, trail_y = viewport.trail_point_in_system_frame(
                 trail[0][0], trail[0][1], self._scene.trail_reference_position
             )
@@ -479,9 +645,14 @@ class SolarSystemCanvas(Gtk.DrawingArea):
         active_indices = set(self._scene.active_indices)
 
         self._draw_reference_plane_3d(cr, width, height, scale, center)
+        self._draw_orbit_guides_3d(cr, origin_x, origin_y, scale, center, width, height)
         projected_trails = []
         for index, trail in enumerate(self._trail_arrays):
-            if index not in active_indices or len(trail) < 2:
+            if (
+                index not in active_indices
+                or len(trail) < 2
+                or not self._body_trail_is_visible(index)
+            ):
                 continue
             points = self._project_trail_3d(
                 trail,
@@ -497,9 +668,10 @@ class SolarSystemCanvas(Gtk.DrawingArea):
                         float(points[:, 2].mean()),
                         self._rgba(self._scene.bodies[index].color),
                         points,
+                        self._body_trail_is_selected(index),
                     )
                 )
-        self._draw_projected_trails_3d(cr, projected_trails, scale, width, height, 0.35)
+        self._draw_projected_trails_3d(cr, projected_trails, scale, width, height)
 
         projected_bodies = []
         for index, body in enumerate(self._scene.bodies):
@@ -565,24 +737,18 @@ class SolarSystemCanvas(Gtk.DrawingArea):
         positions = self._scene.overview_positions
         if not entities or len(positions) < len(entities):
             return
-        base_center = viewport.overview_view_center_3d(entities, positions)
+        base_center = self._overview_base_center_3d()
         center = self._view_center_3d(base_center)
-        scale = viewport.overview_canvas_scale_3d(
-            width,
-            height,
-            positions,
-            base_center,
-            self._zoom_factor,
-            self._scene.view_mode,
-        )
+        scale = self._overview_canvas_scale_3d(width, height)
         origin_x = width / 2.0
         origin_y = height / 2.0
         self._draw_reference_plane_3d(cr, width, height, scale, center)
+        self._draw_orbit_guides_3d(cr, origin_x, origin_y, scale, center, width, height)
 
         projected_trails = []
         for entity in entities:
             trail = self._overview_trail_arrays.get(entity.id, np.empty((0, 3), dtype=float))
-            if len(trail) < 2:
+            if len(trail) < 2 or not self._entity_trail_is_visible(entity.id):
                 continue
             points = self._project_trail_3d(
                 trail,
@@ -597,9 +763,10 @@ class SolarSystemCanvas(Gtk.DrawingArea):
                     float(points[:, 2].mean()),
                     self._rgba(entity.color),
                     points,
+                    self._entity_trail_is_selected(entity.id),
                 )
             )
-        self._draw_projected_trails_3d(cr, projected_trails, scale, width, height, 0.45)
+        self._draw_projected_trails_3d(cr, projected_trails, scale, width, height)
 
         projected_entities = [
             (
@@ -665,11 +832,17 @@ class SolarSystemCanvas(Gtk.DrawingArea):
         scale: float,
         width: int,
         height: int,
-        base_alpha: float,
     ) -> None:
-        cr.set_line_width(1.1)
-        for mean_depth, rgba, points in sorted(trails, key=lambda item: item[0]):
-            alpha = base_alpha * (
+        for mean_depth, rgba, points, selected in sorted(
+            trails,
+            key=lambda item: item[0],
+        ):
+            style = viewport.path_style_values(
+                self._scene.path_style,
+                selected=selected,
+            )
+            cr.set_line_width(style.trail_width_px)
+            alpha = style.trail_alpha * (
                 0.65 + 0.35 * self._depth_factor(mean_depth, scale, width, height)
             )
             cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, alpha)
@@ -677,6 +850,59 @@ class SolarSystemCanvas(Gtk.DrawingArea):
             for point in points[1:]:
                 cr.line_to(point[0], point[1])
             cr.stroke()
+
+    def _draw_orbit_guides_3d(
+        self,
+        cr,
+        origin_x: float,
+        origin_y: float,
+        scale: float,
+        center: tuple[float, float, float],
+        width: int,
+        height: int,
+    ) -> None:
+        projected_guides = []
+        for guide, points in zip(self._scene.orbit_guides, self._guide_arrays):
+            if not self._guide_is_visible(guide) or len(points) < 2:
+                continue
+            projected = viewport.project_points_3d(
+                points,
+                origin_x,
+                origin_y,
+                scale,
+                center,
+                self._scene.view_mode,
+                self._camera,
+                self._camera_basis,
+            )
+            projected_guides.append(
+                (
+                    float(projected[:, 2].mean()),
+                    self._rgba(guide.color),
+                    projected,
+                    self._guide_is_selected(guide),
+                )
+            )
+        cr.save()
+        cr.set_dash([5.0, 4.0])
+        for mean_depth, rgba, points, selected in sorted(
+            projected_guides,
+            key=lambda item: item[0],
+        ):
+            style = viewport.path_style_values(
+                self._scene.path_style,
+                selected=selected,
+            )
+            cr.set_line_width(style.guide_width_px)
+            alpha = style.guide_alpha * (
+                0.65 + 0.35 * self._depth_factor(mean_depth, scale, width, height)
+            )
+            cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, alpha)
+            cr.move_to(points[0][0], points[0][1])
+            for point in points[1:]:
+                cr.line_to(point[0], point[1])
+            cr.stroke()
+        cr.restore()
 
     def _draw_reference_plane_3d(
         self,
@@ -863,27 +1089,31 @@ class SolarSystemCanvas(Gtk.DrawingArea):
         positions = self._scene.overview_positions
         if not entities or len(positions) == 0:
             return
-        base_center_x_m, base_center_y_m = viewport.overview_view_center(entities, positions)
+        base_center_x_m, base_center_y_m = self._overview_base_center_2d()
         center_x_m, center_y_m = self._view_center(base_center_x_m, base_center_y_m)
-        scale = viewport.overview_canvas_scale(
-            width,
-            height,
-            positions,
-            base_center_x_m,
-            base_center_y_m,
-            self._zoom_factor,
-            self._scene.view_mode,
-        )
+        scale = self._overview_canvas_scale_2d(width, height)
         origin_x = width / 2.0
         origin_y = height / 2.0
 
-        cr.set_line_width(1.25)
+        self._draw_orbit_guides_2d(
+            cr,
+            origin_x,
+            origin_y,
+            scale,
+            center_x_m,
+            center_y_m,
+        )
         for entity in entities:
             trail = self._scene.overview_trails.get(entity.id, [])
-            if len(trail) < 2:
+            if len(trail) < 2 or not self._entity_trail_is_visible(entity.id):
                 continue
+            style = viewport.path_style_values(
+                self._scene.path_style,
+                selected=self._entity_trail_is_selected(entity.id),
+            )
+            cr.set_line_width(style.trail_width_px)
             rgba = self._rgba(entity.color)
-            cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.45)
+            cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, style.trail_alpha)
             first_x, first_y = self._project(trail[0][0], trail[0][1], origin_x, origin_y, scale, center_x_m, center_y_m)
             cr.move_to(first_x, first_y)
             for point in trail[1:]:
@@ -951,10 +1181,23 @@ class SolarSystemCanvas(Gtk.DrawingArea):
 
         for entity in entities:
             trail = self._scene.inset_trails.get(entity.id, [])
-            if len(trail) < 2:
+            if (
+                len(trail) < 2
+                or not self._entity_trail_is_visible(entity.id, inset=True)
+            ):
                 continue
+            style = viewport.path_style_values(
+                self._scene.path_style,
+                selected=self._entity_trail_is_selected(entity.id, inset=True),
+            )
+            cr.set_line_width(style.trail_width_px)
             rgba = self._rgba(entity.color)
-            cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.35)
+            cr.set_source_rgba(
+                rgba.red,
+                rgba.green,
+                rgba.blue,
+                style.trail_alpha * 0.85,
+            )
             first_x, first_y = viewport.project(
                 trail[0][0], trail[0][1], origin_x, origin_y, scale, center_x_m, center_y_m, "fit_system"
             )
@@ -1091,16 +1334,9 @@ class SolarSystemCanvas(Gtk.DrawingArea):
         if not entities or len(positions) == 0:
             return None
         if self._render_mode == "3d":
-            base_center = viewport.overview_view_center_3d(entities, positions)
+            base_center = self._overview_base_center_3d()
             center = self._view_center_3d(base_center)
-            scale = viewport.overview_canvas_scale_3d(
-                width,
-                height,
-                positions,
-                base_center,
-                self._zoom_factor,
-                self._scene.view_mode,
-            )
+            scale = self._overview_canvas_scale_3d(width, height)
             return viewport.entity_at_point_3d(
                 entities,
                 positions,
@@ -1114,17 +1350,9 @@ class SolarSystemCanvas(Gtk.DrawingArea):
                 self._camera,
                 hit_radius,
             )
-        base_center_x_m, base_center_y_m = viewport.overview_view_center(entities, positions)
+        base_center_x_m, base_center_y_m = self._overview_base_center_2d()
         center_x_m, center_y_m = self._view_center(base_center_x_m, base_center_y_m)
-        scale = viewport.overview_canvas_scale(
-            width,
-            height,
-            positions,
-            base_center_x_m,
-            base_center_y_m,
-            self._zoom_factor,
-            self._scene.view_mode,
-        )
+        scale = self._overview_canvas_scale_2d(width, height)
         return viewport.entity_at_point(
             entities,
             positions,
@@ -1140,6 +1368,10 @@ class SolarSystemCanvas(Gtk.DrawingArea):
         )
 
     def _base_view_center(self) -> tuple[float, float]:
+        if self._scene.view_mode == "fixed_scale" and not self._scene.using_focused_fit:
+            self._ensure_fixed_view_2d(self.get_width(), self.get_height())
+            if self._fixed_view_2d is not None:
+                return self._fixed_view_2d.center_m
         return viewport.body_view_center(
             self._scene.bodies,
             self._scene.view_mode,
@@ -1155,6 +1387,10 @@ class SolarSystemCanvas(Gtk.DrawingArea):
         )
 
     def _base_view_center_3d(self) -> tuple[float, float, float]:
+        if self._scene.view_mode == "fixed_scale" and not self._scene.using_focused_fit:
+            self._ensure_fixed_view_3d(self.get_width(), self.get_height())
+            if self._fixed_view_3d is not None:
+                return self._fixed_view_3d.center_m
         return viewport.body_view_center_3d(
             self._scene.bodies,
             self._scene.view_mode,
@@ -1180,16 +1416,7 @@ class SolarSystemCanvas(Gtk.DrawingArea):
             positions = self._scene.overview_positions
             if not entities or len(positions) < len(entities):
                 return None
-            center_x_m, center_y_m = viewport.overview_view_center(entities, positions)
-            return viewport.overview_canvas_scale(
-                width,
-                height,
-                positions,
-                center_x_m,
-                center_y_m,
-                self._zoom_factor,
-                self._scene.view_mode,
-            )
+            return self._overview_canvas_scale_2d(width, height)
         if not self._scene.bodies or not self._scene.active_indices:
             return None
         center_x_m, center_y_m = self._base_view_center()
@@ -1201,20 +1428,19 @@ class SolarSystemCanvas(Gtk.DrawingArea):
             positions = self._scene.overview_positions
             if not entities or len(positions) < len(entities):
                 return None
-            center = viewport.overview_view_center_3d(entities, positions)
-            return viewport.overview_canvas_scale_3d(
-                width,
-                height,
-                positions,
-                center,
-                self._zoom_factor,
-                self._scene.view_mode,
-            )
+            return self._overview_canvas_scale_3d(width, height)
         if not self._scene.bodies or not self._scene.active_indices:
             return None
         return self._canvas_scale_3d(width, height, self._base_view_center_3d())
 
     def _canvas_scale(self, width: int, height: int, center_x_m: float, center_y_m: float) -> float:
+        if self._scene.view_mode == "fixed_scale" and not self._scene.using_focused_fit:
+            self._ensure_fixed_view_2d(width, height)
+            if self._fixed_view_2d is not None:
+                return viewport.fixed_view_scale(
+                    self._fixed_view_2d.scale_at_zoom_1,
+                    self._zoom_factor,
+                )
         return viewport.canvas_scale(
             width,
             height,
@@ -1234,6 +1460,13 @@ class SolarSystemCanvas(Gtk.DrawingArea):
         height: int,
         center: tuple[float, float, float],
     ) -> float:
+        if self._scene.view_mode == "fixed_scale" and not self._scene.using_focused_fit:
+            self._ensure_fixed_view_3d(width, height)
+            if self._fixed_view_3d is not None:
+                return viewport.fixed_view_scale(
+                    self._fixed_view_3d.scale_at_zoom_1,
+                    self._zoom_factor,
+                )
         return viewport.canvas_scale_3d(
             width,
             height,
@@ -1244,6 +1477,186 @@ class SolarSystemCanvas(Gtk.DrawingArea):
             self._scene.view_mode,
             use_focused_bounds=self._scene.using_focused_fit,
             focused_bounds=self._focused_fit_bounds_3d,
+        )
+
+    def _capture_current_fixed_view(self) -> None:
+        width = self.get_width()
+        height = self.get_height()
+        if width <= 0 or height <= 0:
+            return
+        scale = self._current_canvas_scale(width, height)
+        if scale is None or scale <= 0.0 or not math.isfinite(scale):
+            return
+        base_scale = scale / self._zoom_factor
+        if self._render_mode == "2d":
+            if self._scene.using_system_overview:
+                base_center = viewport.overview_view_center(
+                    self._scene.overview_entities,
+                    self._scene.overview_positions,
+                )
+            else:
+                base_center = self._base_view_center()
+            center = self._view_center(*base_center)
+            self._fixed_view_2d = viewport.FixedView2D(center, base_scale)
+            self._pan_offset_m = (0.0, 0.0)
+            return
+        if self._scene.using_system_overview:
+            base_center_3d = viewport.overview_view_center_3d(
+                self._scene.overview_entities,
+                self._scene.overview_positions,
+            )
+        else:
+            base_center_3d = self._base_view_center_3d()
+        center_3d = self._view_center_3d(base_center_3d)
+        self._fixed_view_3d = viewport.FixedView3D(center_3d, base_scale)
+        self._pan_offset_3d_m = (0.0, 0.0, 0.0)
+
+    def _ensure_fixed_view_2d(self, width: int, height: int) -> None:
+        if (
+            self._fixed_view_2d is not None
+            or self._scene.view_mode != "fixed_scale"
+            or self._scene.using_focused_fit
+            or width <= 0
+            or height <= 0
+        ):
+            return
+        if self._scene.using_system_overview:
+            if not self._scene.overview_entities or len(self._scene.overview_positions) == 0:
+                return
+            center = viewport.overview_view_center(
+                self._scene.overview_entities,
+                self._scene.overview_positions,
+            )
+            scale = viewport.overview_canvas_scale(
+                width,
+                height,
+                self._scene.overview_positions,
+                *center,
+                1.0,
+                "fit_system",
+            )
+        else:
+            if not self._scene.bodies or not self._scene.active_indices:
+                return
+            center = viewport.body_view_center(
+                self._scene.bodies,
+                "fit_system",
+                self._scene.selected_body_index,
+            )
+            scale = viewport.canvas_scale(
+                width,
+                height,
+                self._scene.bodies,
+                self._scene.active_indices,
+                *center,
+                1.0,
+                "fit_system",
+            )
+        self._fixed_view_2d = viewport.FixedView2D(center, scale)
+
+    def _ensure_fixed_view_3d(self, width: int, height: int) -> None:
+        if (
+            self._fixed_view_3d is not None
+            or self._scene.view_mode != "fixed_scale"
+            or self._scene.using_focused_fit
+            or width <= 0
+            or height <= 0
+        ):
+            return
+        if self._scene.using_system_overview:
+            if not self._scene.overview_entities or len(self._scene.overview_positions) == 0:
+                return
+            center = viewport.overview_view_center_3d(
+                self._scene.overview_entities,
+                self._scene.overview_positions,
+            )
+            scale = viewport.overview_canvas_scale_3d(
+                width,
+                height,
+                self._scene.overview_positions,
+                center,
+                1.0,
+                "fit_system",
+            )
+        else:
+            if not self._scene.bodies or not self._scene.active_indices:
+                return
+            center = viewport.body_view_center_3d(
+                self._scene.bodies,
+                "fit_system",
+                self._scene.selected_body_index,
+            )
+            scale = viewport.canvas_scale_3d(
+                width,
+                height,
+                self._scene.bodies,
+                self._scene.active_indices,
+                center,
+                1.0,
+                "fit_system",
+            )
+        self._fixed_view_3d = viewport.FixedView3D(center, scale)
+
+    def _overview_base_center_2d(self) -> tuple[float, float]:
+        if self._scene.view_mode == "fixed_scale":
+            self._ensure_fixed_view_2d(self.get_width(), self.get_height())
+            if self._fixed_view_2d is not None:
+                return self._fixed_view_2d.center_m
+        return viewport.overview_view_center(
+            self._scene.overview_entities,
+            self._scene.overview_positions,
+        )
+
+    def _overview_base_center_3d(self) -> tuple[float, float, float]:
+        if self._scene.view_mode == "fixed_scale":
+            self._ensure_fixed_view_3d(self.get_width(), self.get_height())
+            if self._fixed_view_3d is not None:
+                return self._fixed_view_3d.center_m
+        return viewport.overview_view_center_3d(
+            self._scene.overview_entities,
+            self._scene.overview_positions,
+        )
+
+    def _overview_canvas_scale_2d(self, width: int, height: int) -> float:
+        if self._scene.view_mode == "fixed_scale":
+            self._ensure_fixed_view_2d(width, height)
+            if self._fixed_view_2d is not None:
+                return viewport.fixed_view_scale(
+                    self._fixed_view_2d.scale_at_zoom_1,
+                    self._zoom_factor,
+                )
+        center = viewport.overview_view_center(
+            self._scene.overview_entities,
+            self._scene.overview_positions,
+        )
+        return viewport.overview_canvas_scale(
+            width,
+            height,
+            self._scene.overview_positions,
+            *center,
+            self._zoom_factor,
+            self._scene.view_mode,
+        )
+
+    def _overview_canvas_scale_3d(self, width: int, height: int) -> float:
+        if self._scene.view_mode == "fixed_scale":
+            self._ensure_fixed_view_3d(width, height)
+            if self._fixed_view_3d is not None:
+                return viewport.fixed_view_scale(
+                    self._fixed_view_3d.scale_at_zoom_1,
+                    self._zoom_factor,
+                )
+        center = viewport.overview_view_center_3d(
+            self._scene.overview_entities,
+            self._scene.overview_positions,
+        )
+        return viewport.overview_canvas_scale_3d(
+            width,
+            height,
+            self._scene.overview_positions,
+            center,
+            self._zoom_factor,
+            self._scene.view_mode,
         )
 
     def _project(
