@@ -30,7 +30,7 @@ For a complete guide, see the [User Interface documentation](./docs/USER_INTERFA
 
 ### Solar System overview
 
-<img src="./screenshots/solar-system-simulation.png"/>
+![Solar System Simulation](screenshots/solar-system-simulation.png)
 
 ### Focus and Fit
 
