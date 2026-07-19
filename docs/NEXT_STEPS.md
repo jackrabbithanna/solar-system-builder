@@ -4,12 +4,7 @@ Potential follow-up work for future sessions.
 
 ## Reference Frames
 
-- Add verified built-in transforms between standard astronomical frames such as ICRF, ecliptic, equatorial, and galactic coordinates.
-- Add epoch-aware transformations, including state propagation, time-scale conversion, and precession/nutation where applicable.
-- Add authoritative JPL-backed origin changes for compatible systems instead of requiring users to supply translation and rotation values manually.
-- Add continuously translating or rotating analysis frames, with the required Coriolis, centrifugal, and other non-inertial terms kept explicit in the physics model.
-- Add relative diagnostics and export presets centered on a selected body, subsystem barycenter, or whole-system barycenter.
-- Validate that selected standard-frame metadata matches the applied transform instead of trusting arbitrary labels and matrices.
+The standard-frame registry, epoch-aware transforms, JPL origin changes, dynamic analysis frames, explicit non-inertial diagnostics, and relative JSON/CSV exports are implemented and described in [Reference Frames and Coordinate Transformations](./REFERENCE_FRAMES.md). Future work can add additional authoritative ephemeris providers or frame definitions as concrete use cases arise.
 
 ## Packaging And Quality
 

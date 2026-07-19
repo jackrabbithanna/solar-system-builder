@@ -13,11 +13,14 @@ from typing import Literal
 
 import numpy as np
 
-from .models import Body, SystemGroup, SystemSettings
+from .analysis_frames import AnalysisFrameSpec, frame_kinematics, transform_state
+from .models import Body, ModelError, SolarSystem, SystemGroup, SystemSettings
 from .physics import (
     ConservationDiagnostics,
     ConservationDrift,
     SimulationState,
+    SimulationSample,
+    advance_with_state_samples,
     advance_with_samples,
     compute_conservation_diagnostics,
     compute_conservation_drift,
@@ -173,6 +176,7 @@ class SimulationJobPlan:
     moons_collapsed: bool = False
     physics_memberships: list[list[int]] | None = None
     trail_reference_indices: list[int] | None = None
+    analysis_frame: AnalysisFrameSpec | None = None
 
 
 @dataclass(frozen=True)
@@ -180,6 +184,9 @@ class SimulationJob:
     plan: SimulationJobPlan
     state: SimulationState
     context_state: SimulationState | None = None
+    analysis_system: SolarSystem | None = None
+    analysis_base_state: SimulationState | None = None
+    analysis_overview_entities: list | None = None
 
 
 @dataclass(frozen=True)
@@ -189,6 +196,9 @@ class SimulationJobResult:
     position_samples: list[np.ndarray]
     context_result: tuple[SimulationState, list[np.ndarray]] | None = None
     worker_duration_ms: float = 0.0
+    state_samples: list[SimulationSample] | None = None
+    context_state_samples: list[SimulationSample] | None = None
+    analysis_position_samples: list[np.ndarray] | None = None
 
 
 class SimulationSession:
@@ -304,6 +314,13 @@ class SimulationSession:
             if memberships and all(memberships):
                 merge_membership_state(state, self.overview_state, memberships)
         return state
+
+    def materialized_state(
+        self,
+        bodies: list[Body],
+        groups: list[SystemGroup] | None = None,
+    ) -> SimulationState:
+        return self._materialized_state(bodies, groups)
 
     def active_body_indices(
         self,
@@ -455,6 +472,8 @@ class SimulationSession:
         focus_group_id: str | None,
         focus_target: str | None,
         dt_s: float,
+        analysis_frame: AnalysisFrameSpec | None = None,
+        analysis_system: SolarSystem | None = None,
     ) -> SimulationJob:
         decision = self.physics_decision(
             bodies,
@@ -481,9 +500,23 @@ class SimulationSession:
             physics_memberships=decision.physics_memberships,
             trail_reference_indices=(
                 focused_trail_reference_indices(bodies, groups, focus_target)
-                if settings.trail_frame == "focused_parent" and focus_target is not None
+                if (
+                    settings.trail_frame == "focused_parent"
+                    and focus_target is not None
+                    and not (analysis_frame is not None and analysis_frame.active)
+                )
                 else None
             ),
+            analysis_frame=analysis_frame,
+        )
+        analysis_active = analysis_frame is not None and analysis_frame.active
+        analysis_snapshot = (
+            SolarSystem.from_dict(analysis_system.to_dict())
+            if analysis_active and analysis_system is not None
+            else None
+        )
+        analysis_base_state = (
+            self._materialized_state(bodies, groups) if analysis_snapshot is not None else None
         )
 
         if decision.mode == "system_overview":
@@ -495,7 +528,13 @@ class SimulationSession:
                 overview_entity_ids=[entity.id for entity in entities],
                 **common_plan,
             )
-            return SimulationJob(plan, state)
+            return SimulationJob(
+                plan,
+                state,
+                analysis_system=analysis_snapshot,
+                analysis_base_state=analysis_base_state,
+                analysis_overview_entities=entities if analysis_snapshot is not None else None,
+            )
 
         if decision.mode == "hybrid_focus":
             active = decision.physics_indices
@@ -511,7 +550,13 @@ class SimulationSession:
                 context_entity_ids=[entity.id for entity in context_entities],
                 **common_plan,
             )
-            return SimulationJob(plan, state, context_state)
+            return SimulationJob(
+                plan,
+                state,
+                context_state,
+                analysis_snapshot,
+                analysis_base_state,
+            )
 
         active = decision.physics_indices
         state = simulation_state_for_memberships(
@@ -526,7 +571,12 @@ class SimulationSession:
             inset_body_indices=inset_indices,
             **common_plan,
         )
-        return SimulationJob(plan, state)
+        return SimulationJob(
+            plan,
+            state,
+            analysis_system=analysis_snapshot,
+            analysis_base_state=analysis_base_state,
+        )
 
     def physics_decision(
         self,
@@ -756,9 +806,14 @@ class SimulationSession:
             self.overview_state = result.state
             self.overview_entity_ids = result.plan.overview_entity_ids or []
             self.state.elapsed_s = result.state.elapsed_s
+            overview_samples = (
+                result.analysis_position_samples
+                if result.analysis_position_samples is not None
+                else result.position_samples
+            )
             self._append_overview_trails(
                 result.plan.overview_entity_ids or [],
-                result.position_samples,
+                overview_samples,
                 result.plan.start_elapsed_s,
                 result.state.elapsed_s,
                 settings.trail_sample_interval_s,
@@ -828,6 +883,8 @@ class SimulationSession:
             if reference_indices
             else expanded_samples
         )
+        if result.analysis_position_samples is not None:
+            stored_samples = result.analysis_position_samples
         trail_samples = [sample[trail_indices].copy() for sample in stored_samples]
         self._append_body_trails(
             bodies,
@@ -924,27 +981,172 @@ class SimulationSession:
 def run_simulation_job(job: SimulationJob) -> SimulationJobResult:
     started = time.perf_counter()
     if job.plan.mode == "hybrid_focus":
-        focused_result, context_result = advance_hybrid_simulations(
-            job.state,
-            job.context_state,
-            job.plan.dt_s,
-            job.plan.max_step_s,
-            job.plan.physics_mode,
-            job.plan.integrator,
+        focused_result, context_result, focused_state_samples, context_state_samples = (
+            advance_hybrid_simulations_with_state_samples(
+                job.state,
+                job.context_state,
+                job.plan.dt_s,
+                job.plan.max_step_s,
+                job.plan.physics_mode,
+                job.plan.integrator,
+            )
         )
         state, position_samples = focused_result
+        analysis_samples = _job_analysis_position_samples(
+            job,
+            focused_state_samples,
+        )
         duration_ms = (time.perf_counter() - started) * 1_000.0
-        return SimulationJobResult(job.plan, state, position_samples, context_result, duration_ms)
+        return SimulationJobResult(
+            job.plan,
+            state,
+            position_samples,
+            context_result,
+            duration_ms,
+            focused_state_samples,
+            context_state_samples,
+            analysis_samples,
+        )
 
-    state, position_samples = advance_with_samples(
+    state, state_samples = advance_with_state_samples(
         job.state,
         job.plan.dt_s,
         job.plan.physics_mode,
         job.plan.max_step_s,
         job.plan.integrator,
     )
+    position_samples = [sample.positions_m for sample in state_samples]
+    analysis_samples = _job_analysis_position_samples(job, state_samples)
     duration_ms = (time.perf_counter() - started) * 1_000.0
-    return SimulationJobResult(job.plan, state, position_samples, worker_duration_ms=duration_ms)
+    return SimulationJobResult(
+        job.plan,
+        state,
+        position_samples,
+        worker_duration_ms=duration_ms,
+        state_samples=state_samples,
+        analysis_position_samples=analysis_samples,
+    )
+
+
+def _job_analysis_position_samples(
+    job: SimulationJob,
+    samples: list[SimulationSample] | None,
+) -> list[np.ndarray] | None:
+    spec = job.plan.analysis_frame
+    system = job.analysis_system
+    if spec is None or not spec.active or system is None or not samples:
+        return None
+    if job.plan.mode == "system_overview":
+        settings = replace(
+            system.settings,
+            physics_mode=job.plan.physics_mode,
+            integrator=job.plan.integrator,
+        )
+        return _analysis_overview_position_samples(
+            system,
+            spec,
+            job.analysis_overview_entities or [],
+            samples,
+            settings,
+        )
+    if job.analysis_base_state is None:
+        return None
+    memberships = job.plan.physics_memberships or [
+        [index] for index in job.plan.active_indices
+    ]
+    full_samples = expand_membership_state_samples(
+        samples,
+        job.analysis_base_state,
+        memberships,
+    )
+    transformed = []
+    try:
+        for sample in full_samples:
+            sample_state = SimulationState(
+                job.analysis_base_state.masses_kg,
+                sample.positions_m,
+                sample.velocities_mps,
+                sample.elapsed_s,
+            )
+            kinematics = frame_kinematics(
+                system,
+                sample_state,
+                spec,
+                physics_mode=job.plan.physics_mode,
+                include_acceleration=False,
+            )
+            transformed.append(transform_state(sample_state, kinematics).positions_m)
+    except ModelError:
+        return []
+    return transformed
+
+
+def advance_hybrid_simulations_with_state_samples(
+    focused_state: SimulationState,
+    context_state: SimulationState | None,
+    dt_s: float,
+    focused_max_step_s: float,
+    physics_mode: str = "post_newtonian",
+    integrator: str = "velocity_verlet",
+):
+    if context_state is None:
+        state, samples = advance_with_state_samples(
+            focused_state,
+            dt_s,
+            physics_mode,
+            focused_max_step_s,
+            integrator,
+        )
+        return (state, [sample.positions_m for sample in samples]), None, samples, None
+
+    focused_count = len(focused_state.masses_kg)
+    combined_state = SimulationState(
+        masses_kg=np.concatenate((focused_state.masses_kg, context_state.masses_kg)),
+        positions_m=np.concatenate((focused_state.positions_m, context_state.positions_m)),
+        velocities_mps=np.concatenate((focused_state.velocities_mps, context_state.velocities_mps)),
+        elapsed_s=focused_state.elapsed_s,
+    )
+    combined_result, combined_samples = advance_with_state_samples(
+        combined_state,
+        dt_s,
+        physics_mode,
+        focused_max_step_s,
+        integrator,
+    )
+    focused_result = SimulationState(
+        combined_result.masses_kg[:focused_count].copy(),
+        combined_result.positions_m[:focused_count].copy(),
+        combined_result.velocities_mps[:focused_count].copy(),
+        combined_result.elapsed_s,
+    )
+    context_result = SimulationState(
+        combined_result.masses_kg[focused_count:].copy(),
+        combined_result.positions_m[focused_count:].copy(),
+        combined_result.velocities_mps[focused_count:].copy(),
+        combined_result.elapsed_s,
+    )
+    focused_samples = [
+        SimulationSample(
+            sample.elapsed_s,
+            sample.positions_m[:focused_count].copy(),
+            sample.velocities_mps[:focused_count].copy(),
+        )
+        for sample in combined_samples
+    ]
+    context_samples = [
+        SimulationSample(
+            sample.elapsed_s,
+            sample.positions_m[focused_count:].copy(),
+            sample.velocities_mps[focused_count:].copy(),
+        )
+        for sample in combined_samples
+    ]
+    return (
+        (focused_result, [sample.positions_m for sample in focused_samples]),
+        (context_result, [sample.positions_m for sample in context_samples]),
+        focused_samples,
+        context_samples,
+    )
 
 
 def advance_hybrid_simulations(
@@ -1084,6 +1286,151 @@ def expand_membership_position_samples(
             expanded[membership] = sample[membership_index] + offsets[membership_index]
         expanded_samples.append(expanded)
     return expanded_samples
+
+
+def expand_membership_state_samples(
+    samples: list[SimulationSample],
+    state: SimulationState,
+    memberships: list[list[int]],
+) -> list[SimulationSample]:
+    if any(len(sample.positions_m) != len(memberships) for sample in samples):
+        raise ValueError("membership count must match state samples")
+    position_offsets: list[np.ndarray] = []
+    velocity_offsets: list[np.ndarray] = []
+    for membership in memberships:
+        masses = state.masses_kg[membership]
+        weights = masses[:, np.newaxis]
+        total = float(masses.sum())
+        position_center = np.sum(state.positions_m[membership] * weights, axis=0) / total
+        velocity_center = np.sum(state.velocities_mps[membership] * weights, axis=0) / total
+        position_offsets.append(state.positions_m[membership] - position_center)
+        velocity_offsets.append(state.velocities_mps[membership] - velocity_center)
+    expanded = []
+    for sample in samples:
+        positions = state.positions_m.copy()
+        velocities = state.velocities_mps.copy()
+        for index, membership in enumerate(memberships):
+            positions[membership] = sample.positions_m[index] + position_offsets[index]
+            velocities[membership] = sample.velocities_mps[index] + velocity_offsets[index]
+        expanded.append(SimulationSample(sample.elapsed_s, positions, velocities))
+    return expanded
+
+
+def _analysis_overview_position_samples(
+    system: SolarSystem,
+    spec: AnalysisFrameSpec,
+    entities,
+    samples: list[SimulationSample],
+    settings: SystemSettings,
+) -> list[np.ndarray]:
+    if not entities:
+        return []
+    proxy_bodies = [
+        Body(
+            entity.name,
+            "star",
+            entity.mass_kg,
+            1.0,
+            list(entity.position_m),
+            list(entity.velocity_mps),
+            entity.color,
+            id=entity.id,
+        )
+        for entity in entities
+    ]
+    proxy_system = SolarSystem(
+        name=system.name,
+        epoch=system.epoch,
+        bodies=proxy_bodies,
+        groups=[],
+        settings=settings,
+        reference_frame=system.reference_frame,
+    )
+    mapped = spec
+    mapped_origin = _overview_analysis_target(
+        system,
+        entities,
+        spec.origin_kind,
+        spec.origin_id,
+    )
+    if mapped_origin is not None:
+        mapped = replace(
+            mapped,
+            origin_kind=mapped_origin[0],
+            origin_id=mapped_origin[1],
+        )
+    if mapped.rotation_mode == "target_pair" and mapped.secondary_kind is not None:
+        mapped_secondary = _overview_analysis_target(
+            system,
+            entities,
+            mapped.secondary_kind,
+            mapped.secondary_id,
+        )
+        if mapped_secondary is not None:
+            mapped = replace(
+                mapped,
+                secondary_kind=mapped_secondary[0],
+                secondary_id=mapped_secondary[1],
+            )
+    transformed = []
+    masses = np.array([entity.mass_kg for entity in entities], dtype=float)
+    try:
+        for sample in samples:
+            sample_state = SimulationState(
+                masses,
+                sample.positions_m,
+                sample.velocities_mps,
+                sample.elapsed_s,
+            )
+            kinematics = frame_kinematics(
+                proxy_system,
+                sample_state,
+                mapped,
+                physics_mode=settings.physics_mode,
+                include_acceleration=False,
+            )
+            transformed.append(transform_state(sample_state, kinematics).positions_m)
+    except ModelError:
+        return []
+    return transformed
+
+
+def _overview_analysis_target(system, entities, kind: str, target_id: str | None):
+    if kind in {"fixed", "system_barycenter"}:
+        return kind, target_id
+    target = (
+        f"body:{target_id}"
+        if kind == "body"
+        else f"group:{target_id}"
+    )
+    target_indices = set(
+        focus_target_body_indices(system.bodies, system.groups, target)
+    )
+    if not target_indices:
+        return None
+    group_ids = {group.id for group in system.groups}
+    for entity in entities:
+        if entity.id in group_ids:
+            entity_indices = set(
+                focus_target_body_indices(
+                    system.bodies,
+                    system.groups,
+                    f"group:{entity.id}",
+                )
+            )
+        elif entity.id.startswith("context-"):
+            entity_indices = set(
+                focus_target_body_indices(
+                    system.bodies,
+                    system.groups,
+                    f"body:{entity.id.removeprefix('context-')}",
+                )
+            )
+        else:
+            entity_indices = set()
+        if target_indices <= entity_indices:
+            return "body", entity.id
+    return None
 
 
 def overview_simulation_state(

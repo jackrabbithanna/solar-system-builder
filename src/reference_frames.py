@@ -7,13 +7,24 @@
 from __future__ import annotations
 
 import math
+import threading
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Callable, Sequence
 
 import numpy as np
 
 from .models import FlybyData, ModelError, OrbitData, SolarSystem, SystemReferenceFrame
-from .orbits import barycenter_for_indices, group_barycenter
+from .orbits import (
+    OrbitAnchor,
+    barycenter_for_indices,
+    body_indices_for_group,
+    group_barycenter,
+    orbit_from_state_vectors,
+    target_anchor,
+)
+from .physics import SimulationState, step
+from .scales import derived_max_step_s
+from .standard_frames import epoch_delta_seconds, rotation_between_frames, shift_epoch
 
 _MATRIX_TOLERANCE = 1.0e-9
 _ANGLE_SINGULARITY_TOLERANCE = 1.0e-12
@@ -136,6 +147,192 @@ def transform_system_reference_frame(
     return candidate
 
 
+def transform_system_to_standard_frame(
+    system: SolarSystem,
+    target_frame: SystemReferenceFrame,
+    *,
+    elapsed_s: float = 0.0,
+    external_origin: tuple[Sequence[float], Sequence[float]] | None = None,
+    cancel_event: threading.Event | None = None,
+    progress: Callable[[int, int], None] | None = None,
+) -> SolarSystem:
+    """Propagate and atomically transform a complete system into a standard frame.
+
+    ``system`` must already contain the materialized current simulation state.
+    ``elapsed_s`` locates that state relative to the stored frame epoch.
+    """
+
+    source_frame = system.reference_frame
+    if source_frame is None:
+        raise ModelError("source reference frame is required")
+    source_frame.validate()
+    target_frame.validate()
+    if source_frame.axes_id == "custom" or target_frame.axes_id == "custom":
+        raise ModelError("standard-frame transforms require verified source and target axes")
+
+    candidate = SolarSystem.from_dict(system.to_dict())
+    current_epoch = shift_epoch(source_frame.epoch, source_frame.time_scale, elapsed_s)
+    propagation_s = epoch_delta_seconds(
+        current_epoch,
+        source_frame.time_scale,
+        target_frame.epoch,
+        target_frame.time_scale,
+    )
+    if propagation_s:
+        state = SimulationState.from_bodies(candidate.bodies)
+        max_step_s = derived_max_step_s(
+            candidate.bodies,
+            candidate.settings.accuracy_profile,
+        )
+        total_steps = max(1, math.ceil(abs(propagation_s) / max_step_s))
+        dt_s = propagation_s / total_steps
+        for completed in range(total_steps):
+            if cancel_event is not None and cancel_event.is_set():
+                raise ModelError("reference-frame propagation cancelled")
+            state = step(
+                state,
+                dt_s,
+                candidate.settings.physics_mode,
+                candidate.settings.integrator,
+            )
+            if progress is not None and (
+                completed + 1 == total_steps
+                or completed == 0
+                or (completed + 1) % max(1, total_steps // 100) == 0
+            ):
+                progress(completed + 1, total_steps)
+        state.apply_to_bodies(candidate.bodies)
+
+    if external_origin is not None:
+        origin_position, origin_velocity = external_origin
+    elif target_frame.origin is None:
+        raise ModelError("target reference origin is required")
+    elif target_frame.origin.kind == "body":
+        origin_position, origin_velocity = origin_for_body(
+            candidate, target_frame.origin.id or ""
+        )
+    elif target_frame.origin.kind == "group_barycenter":
+        origin_position, origin_velocity = origin_for_group(
+            candidate, target_frame.origin.id or ""
+        )
+    elif target_frame.origin.kind == "system_barycenter":
+        origin_position, origin_velocity = origin_for_system(candidate)
+    elif (
+        target_frame.origin.kind == "jpl"
+        and source_frame.origin is not None
+        and source_frame.origin.kind == "jpl"
+        and target_frame.origin.id == source_frame.origin.id
+    ) or (
+        target_frame.origin.kind == "custom"
+        and source_frame.origin is not None
+        and target_frame.origin == source_frame.origin
+    ):
+        origin_position = origin_velocity = (0.0, 0.0, 0.0)
+    else:
+        raise ModelError("target origin requires an authoritative translation")
+
+    rotation = rotation_between_frames(source_frame, target_frame)
+    transformed = transform_system_reference_frame(
+        candidate,
+        target_frame,
+        ReferenceFrameTransform(
+            tuple(float(value) for value in origin_position),
+            tuple(float(value) for value in origin_velocity),
+            rotation,
+        ),
+    )
+    recompute_osculating_metadata(transformed)
+    transformed.epoch = (
+        f"{target_frame.epoch} {target_frame.time_scale}, "
+        f"{target_frame.reference_system}/{target_frame.reference_plane}, "
+        f"{target_frame.center_id}"
+    )
+    transformed.validate()
+    return transformed
+
+
+def recompute_osculating_metadata(system: SolarSystem) -> None:
+    """Refresh optional Newtonian osculating metadata from canonical state."""
+
+    bodies_by_id = {body.id: body for body in system.bodies}
+    frame = system.reference_frame
+    if frame is None:
+        return
+    orbit_epoch = f"{frame.epoch} {frame.time_scale}".strip()
+    for body in system.bodies:
+        if body.orbit is None:
+            continue
+        anchor_id = body.parent_id
+        if anchor_id is None and body.flyby is not None:
+            anchor_id = body.flyby.anchor_body_id
+        anchor = bodies_by_id.get(anchor_id) if anchor_id is not None else None
+        if anchor is None:
+            continue
+        try:
+            body.orbit = orbit_from_state_vectors(
+                anchor,
+                body,
+                epoch=orbit_epoch,
+                reference_plane=frame.reference_plane,
+            )
+        except ModelError:
+            if body.flyby is None:
+                body.orbit = None
+            else:
+                body.orbit.epoch = orbit_epoch
+                body.orbit.reference_plane = frame.reference_plane
+                body.orbit.approximation_notes = (
+                    "The propagated flyby state is canonical; osculating elements could not "
+                    "be recomputed at this epoch."
+                )
+    for group in system.groups:
+        if group.orbit is None:
+            continue
+        group_center = group_barycenter(system.bodies, system.groups, group.id)
+        if group.orbit_target_type is not None and group.orbit_target_id is not None:
+            anchor = target_anchor(
+                system.bodies,
+                system.groups,
+                group.orbit_target_type,
+                group.orbit_target_id,
+            )
+            try:
+                group.orbit = orbit_from_state_vectors(
+                    anchor,
+                    group_center,
+                    epoch=orbit_epoch,
+                    reference_plane=frame.reference_plane,
+                )
+            except ModelError:
+                group.orbit = None
+            continue
+        indices = body_indices_for_group(system.bodies, system.groups, group.id)
+        direct = [
+            bodies_by_id[body_id]
+            for body_id in group.body_ids
+            if body_id in bodies_by_id
+        ]
+        if len(direct) != 2 or len(indices) < 2:
+            continue
+        try:
+            group.orbit = orbit_from_state_vectors(
+                OrbitAnchor(
+                    direct[0].mass_kg,
+                    direct[0].position_m,
+                    direct[0].velocity_mps,
+                ),
+                OrbitAnchor(
+                    direct[1].mass_kg,
+                    direct[1].position_m,
+                    direct[1].velocity_mps,
+                ),
+                epoch=orbit_epoch,
+                reference_plane=frame.reference_plane,
+            )
+        except ModelError:
+            group.orbit = None
+
+
 def _transform_orbit(orbit: OrbitData, rotation: np.ndarray, reference_plane: str) -> None:
     orbit.reference_plane = reference_plane
     if np.allclose(rotation, np.identity(3), atol=_MATRIX_TOLERANCE, rtol=0.0):
@@ -149,6 +346,22 @@ def _transform_orbit(orbit: OrbitData, rotation: np.ndarray, reference_plane: st
     orbit.inclination_deg = inclination
     orbit.longitude_of_ascending_node_deg = node
     orbit.argument_of_periapsis_deg = periapsis
+
+
+def rotate_orbit_metadata(
+    orbit: OrbitData,
+    rotation_matrix: Sequence[Sequence[float]],
+    reference_plane: str,
+) -> OrbitData:
+    """Rotate one copied orbit record into a new verified reference plane."""
+
+    copy = OrbitData.from_dict(orbit.to_dict())
+    if copy is None:  # pragma: no cover - a serialized OrbitData is never empty
+        raise ModelError("orbit metadata is required")
+    rotation = np.asarray(validate_rotation_matrix(rotation_matrix), dtype=float)
+    _transform_orbit(copy, rotation, reference_plane)
+    copy.validate()
+    return copy
 
 
 def _transform_flyby(flyby: FlybyData, rotation: np.ndarray) -> None:

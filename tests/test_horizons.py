@@ -6,6 +6,8 @@ import unittest
 from collections import deque
 from datetime import datetime, timezone
 
+import numpy as np
+
 from src.horizons import (
     HorizonsClient,
     HorizonsError,
@@ -38,6 +40,7 @@ from src.system_editing import (
     add_flyby_from_state,
     create_system,
 )
+from src.standard_frames import axes_matrix
 
 
 VECTOR_RESULT = """
@@ -351,11 +354,52 @@ class HorizonsTests(unittest.TestCase):
             parent_catalog_id="10",
         )
 
-        for actual, expected in zip(draft.position_m, [-2014.0, 3125.0, 42.0]):
-            self.assertAlmostEqual(actual, expected)
+        expected = np.asarray(
+            axes_matrix(
+                system.reference_frame.axes_id,
+                system.reference_frame.epoch,
+                system.reference_frame.time_scale,
+            )
+        ) @ np.asarray([-2014.0, 3125.0, 42.0])
+        np.testing.assert_allclose(draft.position_m, expected)
         self.assertIsNone(draft.orbit)
         self.assertIn("orbital elements unavailable", draft.warning)
         self.assertEqual(draft.data_source.citation, "JPL Horizons state vector.")
+
+    def test_origin_change_fetches_target_relative_to_current_jpl_center(self):
+        system = create_system("Sol Test", "sol", epoch="2026-06-14 00:00:00")
+        opener = FakeOpener(_payload(VECTOR_RESULT))
+
+        change = HorizonsClient(opener=opener).fetch_origin_change(
+            system.reference_frame,
+            "500@0",
+            target_epoch="2026-06-15 00:00:00",
+            target_time_scale="TDB",
+        )
+
+        expected_rotation = np.asarray(
+            axes_matrix(
+                system.reference_frame.axes_id,
+                system.reference_frame.epoch,
+                system.reference_frame.time_scale,
+            )
+        )
+        source_position = np.asarray([-2014.0, 3125.0, 42.0])
+        source_velocity = np.asarray([-1.0, -2.0, 3.0])
+        expected = expected_rotation @ (
+            -source_position - DAY * source_velocity
+        )
+        np.testing.assert_allclose(change.position_m, expected)
+        np.testing.assert_allclose(
+            change.velocity_mps,
+            expected_rotation @ -source_velocity,
+        )
+        self.assertEqual(change.source_center_id, "500@10")
+        self.assertEqual(change.target_center_id, "500@0")
+        self.assertIn("COMMAND=%2710%27", opener.urls[0][0])
+        self.assertIn("CENTER=%27500%400%27", opener.urls[0][0])
+        self.assertIn("REF_PLANE=FRAME", opener.urls[0][0])
+        self.assertIn("REF_SYSTEM=ICRF", opener.urls[0][0])
 
     def test_system_refresh_uses_one_shared_utc_frame_and_matching_tdb_elements(self):
         system = create_system("Sol Test", "sol", epoch="2026-06-14 00:00:00")

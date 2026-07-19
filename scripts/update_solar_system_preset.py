@@ -326,10 +326,11 @@ def apply_vectors(
     updated["reference_frame"] = {
         "epoch": epoch,
         "time_scale": "TDB",
-        "center_id": "500@0",
-        "reference_plane": "ECLIPTIC",
-        "reference_system": "ICRF",
-        "source": "horizons",
+        "axes_id": "jpl_ecliptic_j2000",
+        "origin": {
+            "kind": "jpl",
+            "id": "500@0",
+        },
     }
     if description is not None:
         updated["description"] = description

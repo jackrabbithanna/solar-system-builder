@@ -2,6 +2,8 @@
 
 The physics layer is intentionally independent of GTK. Keep it pure enough to test with regular Python unit tests.
 
+Canonical integration remains inertial even when the canvas uses a translating or rotating analysis frame. See [Reference Frames and Coordinate Transformations](./REFERENCE_FRAMES.md) for the coordinate equations and apparent-acceleration decomposition.
+
 ## Units
 
 Use SI units internally:

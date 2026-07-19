@@ -209,9 +209,9 @@ class ReferenceFrameTests(unittest.TestCase):
     def test_invalid_target_is_atomic(self):
         original = self.system.to_dict()
         invalid = self.target_frame()
-        invalid.source = "horizons"
+        invalid.axes_id = "not-a-frame"
 
-        with self.assertRaisesRegex(ModelError, "time_scale must be TDB"):
+        with self.assertRaisesRegex(ModelError, "unsupported reference axes"):
             transform_system_reference_frame(
                 self.system,
                 invalid,

@@ -5,8 +5,9 @@ from unittest.mock import patch
 import numpy as np
 
 from src import playback
+from src.analysis_frames import AnalysisFrameSpec
 from src.constants import DAY
-from src.models import Body, SystemGroup, SystemSettings
+from src.models import Body, SolarSystem, SystemGroup, SystemSettings
 from src.physics import SimulationState
 from src.presets import load_builtin_solar_systems
 from src.scales import (
@@ -525,11 +526,74 @@ class PlaybackTests(unittest.TestCase):
         )
         expected = (job.state.copy(), [])
 
-        with patch("src.playback.advance_with_samples", return_value=expected) as advance:
+        with patch("src.playback.advance_with_state_samples", return_value=expected) as advance:
             result = playback.run_simulation_job(job)
 
-        self.assertEqual(result.state, expected[0])
+        np.testing.assert_allclose(result.state.positions_m, expected[0].positions_m)
+        np.testing.assert_allclose(result.state.velocities_mps, expected[0].velocities_mps)
         advance.assert_called_once_with(job.state, 10.0, "newtonian", job.plan.max_step_s, "rk4")
+
+    def test_analysis_frame_transforms_newly_recorded_trails_only(self):
+        bodies = [
+            _body("a", kind="star", position=[0.0, 0.0, 0.0]),
+            _body("b", kind="star", position=[10.0, 0.0, 0.0], velocity=[0.0, 1.0, 0.0]),
+        ]
+        settings = SystemSettings(
+            simulation_scope="full_nbody",
+            physics_mode="newtonian",
+            trail_sample_interval_s=0.1,
+        )
+        system = SolarSystem("Analysis", "custom", bodies, settings=settings)
+        session = playback.SimulationSession.from_bodies(bodies)
+        spec = AnalysisFrameSpec(origin_kind="body", origin_id="a", label="A")
+        job = session.create_job(
+            bodies,
+            [],
+            settings,
+            0,
+            None,
+            None,
+            1.0,
+            spec,
+            system,
+        )
+
+        result = playback.run_simulation_job(job)
+        applied = session.apply_result(result, bodies, [], settings)
+
+        self.assertTrue(applied)
+        self.assertIsNotNone(result.analysis_position_samples)
+        np.testing.assert_allclose(session.trails[0][-1], 0.0, atol=1e-12)
+        np.testing.assert_allclose(
+            np.asarray(session.trails[1][-1]) - np.asarray(session.trails[0][-1]),
+            np.asarray(bodies[1].position_m) - np.asarray(bodies[0].position_m),
+        )
+        self.assertIsNone(system.reference_frame)
+
+    def test_analysis_frame_supersedes_focused_parent_trail_reference(self):
+        bodies = [
+            _body("star", kind="star"),
+            _body("planet", position=[10.0, 0.0, 0.0], parent_id="star"),
+        ]
+        settings = SystemSettings(
+            simulation_scope="full_nbody",
+            trail_frame="focused_parent",
+        )
+        spec = AnalysisFrameSpec(origin_kind="body", origin_id="planet")
+
+        job = playback.SimulationSession.from_bodies(bodies).create_job(
+            bodies,
+            [],
+            settings,
+            1,
+            None,
+            "body:planet",
+            1.0,
+            spec,
+        )
+
+        self.assertIsNone(job.plan.trail_reference_indices)
+        self.assertEqual(job.plan.analysis_frame, spec)
 
     def test_diagnostic_baseline_rebases_with_replaced_bodies(self):
         bodies = [_body("a"), _body("b", position=[1.0, 0.0, 0.0])]
@@ -749,6 +813,48 @@ class PlaybackTests(unittest.TestCase):
         session.materialize_to_bodies(materialized, groups)
 
         self.assertEqual(session.state.positions_m[:, 0].tolist(), [5.0, 105.0])
+
+    def test_system_overview_analysis_trails_are_transformed_in_worker(self):
+        bodies = [
+            _body("a", kind="star", mass=3.0, position=[0.0, 0.0, 0.0]),
+            _body("b", kind="star", mass=1.0, position=[100.0, 0.0, 0.0]),
+        ]
+        groups = [
+            SystemGroup(id="ga", name="A", kind="system", body_ids=["a"]),
+            SystemGroup(id="gb", name="B", kind="system", body_ids=["b"]),
+        ]
+        settings = SystemSettings(
+            simulation_scope="system_overview",
+            physics_mode="newtonian",
+            trail_sample_interval_s=0.1,
+        )
+        system = SolarSystem(
+            "Overview",
+            "custom",
+            bodies,
+            settings=settings,
+            groups=groups,
+        )
+        session = playback.SimulationSession.from_bodies(bodies)
+        spec = AnalysisFrameSpec(origin_kind="body", origin_id="a")
+        job = session.create_job(
+            bodies,
+            groups,
+            settings,
+            0,
+            None,
+            None,
+            1.0,
+            spec,
+            system,
+        )
+
+        result = playback.run_simulation_job(job)
+        session.apply_result(result, bodies, groups, settings)
+
+        self.assertIsNotNone(result.analysis_position_samples)
+        np.testing.assert_allclose(session.overview_trails["ga"][-1], 0.0, atol=1e-12)
+        self.assertGreater(session.overview_trails["gb"][-1][0], 99.0)
 
     def test_session_applies_hybrid_focus_result_with_display_only_context(self):
         bodies = [

@@ -13,6 +13,7 @@ from src.models import (
     FlybyData,
     ModelError,
     OrbitData,
+    ReferenceOrigin,
     SolarSystem,
     SystemGroup,
     SystemReferenceFrame,
@@ -217,6 +218,76 @@ class ModelTests(unittest.TestCase):
 
         self.assertTrue(clone.reference_frame.horizons_compatible)
         self.assertEqual(clone.bodies[1].state_origin, "horizons")
+
+    def test_v14_reference_frame_uses_registered_axes_and_structured_origin(self):
+        frame = SystemReferenceFrame(
+            epoch="2026-07-19 00:00:00",
+            time_scale="TDB",
+            axes_id="true_equator_of_date",
+            origin=ReferenceOrigin("jpl", "500@0"),
+        )
+
+        data = frame.to_dict()
+        clone = SystemReferenceFrame.from_dict(data)
+
+        self.assertEqual(
+            data,
+            {
+                "epoch": "2026-07-19 00:00:00",
+                "time_scale": "TDB",
+                "axes_id": "true_equator_of_date",
+                "origin": {"kind": "jpl", "id": "500@0"},
+            },
+        )
+        self.assertEqual(clone.reference_system, "IAU 2006/2000A")
+        self.assertEqual(clone.reference_plane, "true equator/equinox of date")
+        self.assertFalse(clone.horizons_compatible)
+        with self.assertRaisesRegex(ModelError, "500@"):
+            ReferenceOrigin("jpl", "Sun").validate()
+
+    def test_legacy_free_form_frame_migrates_without_trusting_standard_labels(self):
+        frame = SystemReferenceFrame.from_dict(
+            {
+                "epoch": "Legacy",
+                "time_scale": "",
+                "center_id": "old-center",
+                "reference_plane": "published plane",
+                "reference_system": "published system",
+                "source": "app_local",
+            }
+        )
+
+        self.assertEqual(frame.axes_id, "custom")
+        self.assertEqual(frame.origin.to_dict(), {"kind": "custom", "id": "old-center"})
+        self.assertIn("custom_reference_plane", frame.to_dict())
+
+        labeled_icrf = SystemReferenceFrame.from_dict(
+            {
+                "epoch": "Legacy",
+                "time_scale": "",
+                "center_id": "old-center",
+                "reference_plane": "FRAME",
+                "reference_system": "ICRF",
+                "source": "app_local",
+            }
+        )
+        self.assertEqual(labeled_icrf.axes_id, "custom")
+
+    def test_duplicate_remaps_linked_reference_origin(self):
+        system = SolarSystem.from_dict(_sample_system_data())
+        system.reference_frame = SystemReferenceFrame(
+            epoch="custom",
+            axes_id="custom",
+            origin=ReferenceOrigin("body", "sun"),
+        )
+
+        duplicate = system.duplicate()
+
+        self.assertNotEqual(duplicate.reference_frame.origin.id, "sun")
+        self.assertIn(
+            duplicate.reference_frame.origin.id,
+            {body.id for body in duplicate.bodies},
+        )
 
     def test_body_cannot_have_two_direct_group_owners(self):
         data = _sample_system_data()

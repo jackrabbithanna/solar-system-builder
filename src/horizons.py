@@ -17,8 +17,20 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import urlopen
 
+import numpy as np
+
 from .constants import AU, DAY, G
-from .models import Body, DataSource, ModelError, OrbitData, SolarSystem, SystemReferenceFrame
+from .models import (
+    Body,
+    DataSource,
+    ModelError,
+    OrbitData,
+    ReferenceOrigin,
+    SolarSystem,
+    SystemReferenceFrame,
+)
+from .reference_frames import rotate_orbit_metadata
+from .standard_frames import axes_matrix, convert_epoch, epoch_delta_seconds, shift_epoch
 from .system_editing import (
     BodyStateInput,
     add_body_from_state,
@@ -42,6 +54,15 @@ class HorizonsError(RuntimeError):
 class StateVector:
     position_m: list[float]
     velocity_mps: list[float]
+
+
+@dataclass(frozen=True)
+class HorizonsOriginChange:
+    source_center_id: str
+    target_center_id: str
+    position_m: tuple[float, float, float]
+    velocity_mps: tuple[float, float, float]
+    source_url: str
 
 
 @dataclass(frozen=True)
@@ -470,16 +491,49 @@ def shift_horizons_frame_epoch(
         raise ModelError("simulation elapsed time must be finite")
     if elapsed_s == 0.0:
         return replace(frame)
-    try:
-        epoch = datetime.fromisoformat(frame.epoch.strip())
-    except ValueError as error:
-        raise ModelError(
-            "Horizons reference-frame epoch must be an ISO date and time "
-            "before playback can be offset"
-        ) from error
-    shifted = epoch + timedelta(seconds=elapsed_s)
-    timespec = "microseconds" if shifted.microsecond else "seconds"
-    return replace(frame, epoch=shifted.isoformat(sep=" ", timespec=timespec))
+    return replace(frame, epoch=shift_epoch(frame.epoch, frame.time_scale, elapsed_s))
+
+
+def horizons_request_frame(
+    frame: SystemReferenceFrame,
+    *,
+    epoch: str | None = None,
+    time_scale: str = "TDB",
+) -> SystemReferenceFrame:
+    """Return a JPL-compatible ICRF request frame for one physical instant."""
+
+    frame.validate()
+    if frame.origin is None or frame.origin.kind != "jpl":
+        raise ModelError("Horizons requests require a JPL-addressable origin")
+    target_epoch = convert_epoch(
+        epoch or frame.epoch,
+        frame.time_scale,
+        time_scale,
+    )
+    return SystemReferenceFrame(
+        epoch=target_epoch,
+        time_scale=time_scale,
+        axes_id="icrf",
+        origin=ReferenceOrigin("jpl", frame.origin.id),
+    )
+
+
+def _state_vector_in_frame(
+    vector: StateVector,
+    frame: SystemReferenceFrame,
+) -> StateVector:
+    rotation = np.asarray(axes_matrix(frame.axes_id, frame.epoch, frame.time_scale))
+    return StateVector(
+        position_m=list(rotation @ np.asarray(vector.position_m, dtype=float)),
+        velocity_mps=list(rotation @ np.asarray(vector.velocity_mps, dtype=float)),
+    )
+
+
+def _orbit_in_frame(orbit: OrbitData | None, frame: SystemReferenceFrame) -> OrbitData | None:
+    if orbit is None:
+        return None
+    rotation = axes_matrix(frame.axes_id, frame.epoch, frame.time_scale)
+    return rotate_orbit_metadata(orbit, rotation, frame.reference_plane)
 
 
 def build_elements_url(
@@ -556,9 +610,10 @@ class HorizonsClient:
             raise HorizonsError(f"{result.name} is not a supported physical body")
         parent_catalog_id = parent_catalog_id.strip() if parent_catalog_id else None
         target_command = horizons_command_for_result(result, frame)
+        request_frame = horizons_request_frame(frame)
         vector_url = build_vector_url(
             target_command,
-            frame,
+            request_frame,
             center_catalog_id=parent_catalog_id,
         )
         vector_payload = self._get_json(vector_url, api_name="Horizons")
@@ -583,12 +638,12 @@ class HorizonsClient:
             try:
                 elements_url = build_elements_url(
                     target_command,
-                    frame,
+                    request_frame,
                     parent_catalog_id,
                 )
                 elements_payload = self._get_json(elements_url, api_name="Horizons")
                 elements = parse_horizons_elements(_result_text(elements_payload, result.spkid))
-                orbit = elements.to_orbit_data(frame.epoch)
+                orbit = _orbit_in_frame(elements.to_orbit_data(frame.epoch), frame)
                 source_url = elements_url
             except HorizonsError as error:
                 warning = _append_warning(
@@ -600,12 +655,13 @@ class HorizonsClient:
             citation += " and osculating elements"
         if physical.mass_kg is not None or physical.radius_m is not None:
             citation += "; JPL physical parameters"
+        canonical_vector = _state_vector_in_frame(vector, frame)
         return HorizonsImportDraft(
             name=result.name,
             kind=kind,
             catalog_id=result.spkid,
-            position_m=vector.position_m,
-            velocity_mps=vector.velocity_mps,
+            position_m=canonical_vector.position_m,
+            velocity_mps=canonical_vector.velocity_mps,
             orbit=orbit,
             data_source=DataSource(
                 source_name="JPL Horizons",
@@ -619,6 +675,96 @@ class HorizonsClient:
             radius_m=physical.radius_m,
             physical_data_notes=physical.notes,
             warning=warning,
+        )
+
+    def fetch_origin_change(
+        self,
+        source_frame: SystemReferenceFrame,
+        target_center_id: str,
+        *,
+        target_epoch: str | None = None,
+        target_time_scale: str | None = None,
+    ) -> HorizonsOriginChange:
+        """Fetch a target JPL center relative to the current JPL center."""
+
+        source_frame.validate()
+        if source_frame.origin is None or source_frame.origin.kind != "jpl":
+            raise ModelError("current reference origin is not JPL-addressable")
+        source_center = source_frame.origin.id or ""
+        cleaned_target = target_center_id.strip()
+        if not re.fullmatch(r"500@[-+A-Za-z0-9]+", cleaned_target):
+            raise ModelError("JPL center id must use the 500@<id> form")
+        epoch = target_epoch or source_frame.epoch
+        scale = target_time_scale or source_frame.time_scale
+        elapsed_s = epoch_delta_seconds(
+            source_frame.epoch,
+            source_frame.time_scale,
+            epoch,
+            scale,
+        )
+        if cleaned_target == source_center and elapsed_s == 0.0:
+            return HorizonsOriginChange(
+                source_center,
+                cleaned_target,
+                (0.0, 0.0, 0.0),
+                (0.0, 0.0, 0.0),
+                "",
+            )
+
+        def barycentric_vector(center_id: str, vector_epoch: str, vector_scale: str):
+            if center_id == "500@0":
+                return StateVector([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]), ""
+            frame = SystemReferenceFrame(
+                epoch=vector_epoch,
+                time_scale=vector_scale,
+                axes_id="icrf",
+                origin=ReferenceOrigin("jpl", "500@0"),
+            )
+            request_frame = horizons_request_frame(frame)
+            command = center_id.split("@", 1)[1]
+            url = build_vector_url(
+                command,
+                request_frame,
+                include_object_data=False,
+            )
+            payload = self._get_json(url, api_name="Horizons")
+            return parse_horizons_vector(_result_text(payload, command)), url
+
+        source_vector, source_url = barycentric_vector(
+            source_center,
+            source_frame.epoch,
+            source_frame.time_scale,
+        )
+        target_vector, target_url = barycentric_vector(
+            cleaned_target,
+            epoch,
+            scale,
+        )
+        inertial_origin_position = (
+            np.asarray(source_vector.position_m)
+            + elapsed_s * np.asarray(source_vector.velocity_mps)
+        )
+        relative_position = (
+            np.asarray(target_vector.position_m) - inertial_origin_position
+        )
+        relative_velocity = (
+            np.asarray(target_vector.velocity_mps)
+            - np.asarray(source_vector.velocity_mps)
+        )
+        rotation = np.asarray(
+            axes_matrix(
+                source_frame.axes_id,
+                source_frame.epoch,
+                source_frame.time_scale,
+            ),
+            dtype=float,
+        )
+        return HorizonsOriginChange(
+            source_center,
+            cleaned_target,
+            tuple(float(value) for value in rotation @ relative_position),
+            tuple(float(value) for value in rotation @ relative_velocity),
+            "\n".join(url for url in (source_url, target_url) if url),
         )
 
     def fetch_system_refresh(
@@ -643,7 +789,12 @@ class HorizonsClient:
         utc_calendar = captured_utc.replace(tzinfo=None).isoformat(
             sep=" ", timespec="seconds"
         )
-        utc_frame = replace(frame, epoch=utc_calendar)
+        utc_frame = SystemReferenceFrame(
+            epoch=utc_calendar,
+            time_scale="UTC",
+            axes_id="icrf",
+            origin=ReferenceOrigin("jpl", frame.origin.id if frame.origin else None),
+        )
 
         commands: dict[str, str] = {}
         parent_catalog_ids: dict[str, str] = {}
@@ -695,7 +846,13 @@ class HorizonsClient:
             raise HorizonsError("Horizons refresh did not return a TDB-UT offset")
         tdb_datetime = captured_utc.replace(tzinfo=None) + timedelta(seconds=delta_t_s)
         tdb_epoch = _format_horizons_epoch(tdb_datetime)
-        tdb_frame = replace(frame, epoch=tdb_epoch)
+        request_tdb_frame = SystemReferenceFrame(
+            epoch=tdb_epoch,
+            time_scale="TDB",
+            axes_id="icrf",
+            origin=ReferenceOrigin("jpl", frame.origin.id if frame.origin else None),
+        )
+        target_frame = replace(frame, epoch=tdb_epoch, time_scale="TDB")
 
         updates: list[HorizonsBodyRefresh] = []
         for body in bodies:
@@ -708,7 +865,7 @@ class HorizonsClient:
                 try:
                     elements_url = build_elements_url(
                         commands[body.id],
-                        tdb_frame,
+                        request_tdb_frame,
                         parent_catalog_id,
                     )
                     elements_payload = self._get_json(elements_url, api_name="Horizons")
@@ -717,9 +874,10 @@ class HorizonsClient:
                     )
                 except HorizonsError as error:
                     raise HorizonsError(f"{body.name}: {error}") from error
-                orbit = elements.to_orbit_data(tdb_epoch)
+                orbit = _orbit_in_frame(elements.to_orbit_data(tdb_epoch), target_frame)
                 completed += 1
             vector, vector_url = vectors[body.id]
+            vector = _state_vector_in_frame(vector, target_frame)
             catalog_id = horizons_catalog_id(body) or commands[body.id]
             citation = "JPL Horizons state vector"
             if orbit is not None:

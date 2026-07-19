@@ -116,7 +116,7 @@ Auto starts with a hardware-neutral estimate and refines it from measured full-p
 
 ### Physics Diagnostics
 
-Physics Diagnostics in the main menu shows a snapshot of center-of-mass-frame kinetic, potential, and total energy; angular-momentum components and magnitude; and drift from the loaded or saved baseline. Reopen the dialog to refresh the snapshot. Post-Newtonian energy is labeled as a Newtonian proxy, and approximate policies warn that topology changes can produce expected drift.
+Physics Diagnostics in the main menu shows a snapshot of center-of-mass-frame kinetic, potential, and total energy; angular-momentum components and magnitude; and drift from the loaded or saved baseline. Frame Diagnostics reports relative state plus gravitational, translational, Coriolis, centrifugal, Euler, and total apparent acceleration in the active analysis frame, and can export those values as CSV. Reopen either dialog to refresh its snapshot. Post-Newtonian energy is labeled as a Newtonian proxy, and approximate policies warn that topology changes can produce expected drift.
 
 ### Trail Perspective
 
@@ -157,10 +157,14 @@ The system menu in the header switches between bundled presets and saved systems
 - Save current system writes a dirty user system to the local library. Bundled presets require the explicit Duplicate to Edit action.
 - Delete saved system removes the selected user-saved system. Bundled presets cannot be deleted.
 - Import System reads a validated `.json` document and creates a new editable library copy. Imported system, body, and group IDs are regenerated; name collisions receive an `Imported` suffix rather than replacing an existing system.
-- Export Current System pauses playback and writes the current body vectors and unsaved edits to a `.json` document without saving to the local library. Trails, camera state, and the transient elapsed-time counter are not document data.
+- Export Current System pauses playback and offers an importable current-state JSON snapshot, JSON centered on the selected body, any subsystem barycenter, or the whole-system barycenter, and a CSV of active-frame relative diagnostics. Trails and camera state are not document data.
 - Reset to Last Save reloads an editable system from its library file. Reset Bundled Preset reloads an active preset from packaged data; saved copies do not retain preset lineage.
 
-The System Name and Description fields edit user-saved metadata. The reference-frame summary shows the shared epoch, time scale, center, plane, and reference system. Transform Reference Frame is available for editable systems. It can move the origin to a body, group/system barycenter, or custom position/velocity and can rotate axes using fixed X/Y/Z angles or a validated 3×3 matrix. It applies the same rigid transform to every body vector and rotates body, group, and flyby orientation metadata atomically. Epoch and time scale remain fixed.
+The System Name and Description fields edit user-saved metadata. The reference-frame summary shows the shared epoch, time scale, structured origin, and registered axes. Transform Reference Frame is available for editable systems. Verified mode supports ICRF, FK5 J2000, mean/true equator of date, JPL J2000 ecliptic, mean/true ecliptic of date, and IAU Galactic axes. It propagates a cloned full N-body state to the chosen epoch, performs time-scale conversion and precession/nutation as required, and can fetch an authoritative JPL translation between compatible origins. The work is cancellable and applies atomically on completion. Custom mode retains explicit origin vectors and fixed X/Y/Z or validated matrix transforms, but records the result as custom axes rather than trusting arbitrary standard-frame labels.
+
+Analysis Frame in the main menu changes only the canvas, newly recorded trails, diagnostics, and CSV output. Origins can follow a body, subsystem barycenter, or whole-system barycenter. Axes can remain fixed, follow a registered standard frame of date, use a prescribed angular rate/acceleration, or co-rotate with a pair of targets. Canonical N-body integration and the navigation inset remain inertial. Changing the analysis frame clears trails so coordinates from different frames are never joined.
+
+For the complete coordinate semantics, transformation pipeline, supported axes and time scales, non-inertial equations, export schema, and developer contracts, see [Reference Frames and Coordinate Transformations](./REFERENCE_FRAMES.md).
 
 Refresh from JPL Horizons updates all Horizons-backed bodies to one current instant. It works directly on editable systems and marks them dirty. For a bundled preset, it creates, saves, and selects an editable `<Preset Name> Updated` copy; installed preset files remain unchanged. Systems without compatible Horizons frame metadata or bodies disable the action.
 

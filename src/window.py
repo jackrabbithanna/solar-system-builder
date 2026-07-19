@@ -10,6 +10,7 @@ import math
 import threading
 import traceback
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import replace
 from datetime import date, datetime, timezone
 
 import gi
@@ -20,9 +21,17 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, Gtk
 
 from . import hierarchy, playback
+from .analysis_frames import (
+    AnalysisFrameSpec,
+    frame_kinematics,
+    relative_diagnostics,
+    transform_points,
+    transform_state,
+)
 from .canvas import CanvasScene, SolarSystemCanvas
 from .constants import AU, DAY, G
 from .documents import parse_document, serialize_document, unique_import_name
+from .frame_exports import relative_system_snapshot, serialize_relative_csv
 from .horizons import (
     HorizonsClient,
     HorizonsImportDraft,
@@ -43,6 +52,8 @@ from .models import (
     FlybyData,
     ModelError,
     OrbitData,
+    REFERENCE_AXES,
+    ReferenceOrigin,
     SolarSystem,
     SystemGroup,
     SystemReferenceFrame,
@@ -67,8 +78,10 @@ from .reference_frames import (
     origin_for_system,
     rotation_matrix_from_xyz_degrees,
     transform_system_reference_frame,
+    transform_system_to_standard_frame,
     validate_rotation_matrix,
 )
+from .standard_frames import parse_epoch, rotation_between_frames, shift_epoch
 from .scales import (
     DISTANCE_UNITS,
     FocusState,
@@ -221,6 +234,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.system = load_builtin_solar_system()
         self.loaded_system_snapshot = self._clone_system(self.system)
         self.simulation = playback.SimulationSession.from_bodies(self.system.bodies)
+        self.analysis_frame = AnalysisFrameSpec()
         self.selected_index = 0
         self.focus_group_id: str | None = None
         self.focus_target: str | None = None
@@ -358,6 +372,14 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             "physics-diagnostics",
             self._on_physics_diagnostics_action,
         )
+        self.analysis_frame_action = self._create_window_action(
+            "analysis-frame",
+            self._on_analysis_frame_action,
+        )
+        self.frame_diagnostics_action = self._create_window_action(
+            "frame-diagnostics",
+            self._on_frame_diagnostics_action,
+        )
         self.reset_loaded_action = self._create_window_action(
             "reset-loaded",
             lambda *_args: self._on_reset_clicked(None),
@@ -435,6 +457,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.system_library.refresh()
         self._load_system_editor()
         self._load_settings_editor()
+        self.trail_frame_dropdown.set_sensitive(True)
         self._populate_body_list()
         self._select_body(0)
         self._update_title()
@@ -523,6 +546,246 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.system_library.save_new_system(imported)
         except Exception as error:
             self._show_error_dialog("Cannot Import System", str(error))
+
+    def _on_analysis_frame_action(self, *_args) -> None:
+        origin_options: list[tuple[str, str | None, str]] = [
+            ("fixed", None, "System / Inertial"),
+            ("system_barycenter", None, "Whole-System Barycenter"),
+            *[("body", body.id, f"Body: {body.name}") for body in self.system.bodies],
+            *[
+                ("group_barycenter", group.id, f"Group: {group.name}")
+                for group in self.system.groups
+            ],
+        ]
+        secondary_options = origin_options[1:]
+        axes_options = [("Current canonical axes", "current"), *[
+            (f"{system} / {plane}", axes_id)
+            for axes_id, (system, plane) in REFERENCE_AXES.items()
+            if axes_id != "custom"
+        ]]
+        origin_dropdown = Gtk.DropDown.new_from_strings(
+            [label for _kind, _target_id, label in origin_options]
+        )
+        secondary_dropdown = Gtk.DropDown.new_from_strings(
+            [label for _kind, _target_id, label in secondary_options]
+        )
+        axes_dropdown = Gtk.DropDown.new_from_strings([label for label, _id in axes_options])
+        rotation_dropdown = Gtk.DropDown.new_from_strings(
+            ["Fixed", "Standard Axes of Date", "Prescribed Rate", "Co-rotating Target Pair"]
+        )
+        axis_entry = Gtk.Entry(text=", ".join(str(value) for value in self.analysis_frame.rotation_axis))
+        rate_spin = Gtk.SpinButton.new_with_range(-1.0e9, 1.0e9, 0.01)
+        rate_spin.set_digits(6)
+        rate_spin.set_value(math.degrees(self.analysis_frame.angular_rate_rad_s) * DAY)
+        acceleration_spin = Gtk.SpinButton.new_with_range(-1.0e9, 1.0e9, 0.01)
+        acceleration_spin.set_digits(6)
+        acceleration_spin.set_value(
+            math.degrees(self.analysis_frame.angular_acceleration_rad_s2) * DAY * DAY
+        )
+
+        for index, (kind, target_id, _label) in enumerate(origin_options):
+            if kind == self.analysis_frame.origin_kind and target_id == self.analysis_frame.origin_id:
+                origin_dropdown.set_selected(index)
+                break
+        for index, (_label, axes_id) in enumerate(axes_options):
+            if axes_id == self.analysis_frame.axes_id:
+                axes_dropdown.set_selected(index)
+                break
+        rotation_dropdown.set_selected(
+            {"fixed": 0, "of_date": 1, "prescribed": 2, "target_pair": 3}[
+                self.analysis_frame.rotation_mode
+            ]
+        )
+        for index, (kind, target_id, _label) in enumerate(secondary_options):
+            if (
+                kind == self.analysis_frame.secondary_kind
+                and target_id == self.analysis_frame.secondary_id
+            ):
+                secondary_dropdown.set_selected(index)
+                break
+
+        grid = Gtk.Grid(column_spacing=10, row_spacing=8)
+        for row, (label, widget) in enumerate(
+            (
+                ("Origin", origin_dropdown),
+                ("Axes", axes_dropdown),
+                ("Rotation", rotation_dropdown),
+                ("Second target", secondary_dropdown),
+                ("Rotation axis XYZ", axis_entry),
+                ("Angular rate (deg/day)", rate_spin),
+                ("Angular acceleration (deg/day²)", acceleration_spin),
+            )
+        ):
+            self._attach_dialog_row(grid, row, label, widget)
+        help_label = Gtk.Label(
+            label=(
+                "The main canvas and newly recorded trails use this session-only frame. "
+                "The navigation inset remains inertial."
+            ),
+            xalign=0,
+            wrap=True,
+            css_classes=["dim-label"],
+        )
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.append(grid)
+        box.append(help_label)
+        dialog = Adw.AlertDialog.new("Analysis Frame", "Canonical physics remains inertial.")
+        dialog.set_extra_child(box)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("apply", "Apply")
+        dialog.set_close_response("cancel")
+        dialog.set_default_response("apply")
+        dialog.set_response_appearance("apply", Adw.ResponseAppearance.SUGGESTED)
+
+        def finish(_dialog, response: str) -> None:
+            if response != "apply":
+                return
+            try:
+                origin_index = origin_dropdown.get_selected()
+                secondary_index = secondary_dropdown.get_selected()
+                axes_index = axes_dropdown.get_selected()
+                rotation_index = rotation_dropdown.get_selected()
+                origin_kind, origin_id, origin_label = origin_options[origin_index]
+                secondary_kind, secondary_id, secondary_label = secondary_options[
+                    secondary_index
+                ]
+                axes_label, axes_id = axes_options[axes_index]
+                rotation_mode = ("fixed", "of_date", "prescribed", "target_pair")[
+                    rotation_index
+                ]
+                if rotation_mode == "target_pair":
+                    axes_id = "current"
+                axis = self._parse_vector_entry(axis_entry.get_text(), "rotation axis")
+                label = origin_label
+                if axes_id != "current" and rotation_mode != "target_pair":
+                    label += f" · {axes_label}"
+                if rotation_mode == "prescribed":
+                    label += " · rotating"
+                elif rotation_mode == "of_date":
+                    label += " · of date"
+                elif rotation_mode == "target_pair":
+                    label += f" → {secondary_label}"
+                spec = AnalysisFrameSpec(
+                    origin_kind=origin_kind,
+                    origin_id=origin_id,
+                    axes_id=axes_id,
+                    rotation_mode=rotation_mode,
+                    rotation_axis=axis,
+                    angular_rate_rad_s=math.radians(rate_spin.get_value()) / DAY,
+                    angular_acceleration_rad_s2=(
+                        math.radians(acceleration_spin.get_value()) / (DAY * DAY)
+                    ),
+                    reference_elapsed_s=self.simulation.state.elapsed_s,
+                    secondary_kind=secondary_kind if rotation_mode == "target_pair" else None,
+                    secondary_id=secondary_id if rotation_mode == "target_pair" else None,
+                    label=label,
+                )
+                self._set_analysis_frame(spec)
+            except (ModelError, ValueError, IndexError) as error:
+                self._show_error_dialog("Cannot Apply Analysis Frame", str(error))
+
+        def update_rotation_controls(dropdown, _param) -> None:
+            mode = ("fixed", "of_date", "prescribed", "target_pair")[
+                dropdown.get_selected()
+            ]
+            pair = mode == "target_pair"
+            prescribed = mode == "prescribed"
+            secondary_dropdown.set_sensitive(pair)
+            axes_dropdown.set_sensitive(not pair)
+            axis_entry.set_sensitive(prescribed)
+            rate_spin.set_sensitive(prescribed)
+            acceleration_spin.set_sensitive(prescribed)
+            if mode == "of_date" and axes_dropdown.get_selected() == 0:
+                axes_dropdown.set_selected(1)
+
+        rotation_dropdown.connect("notify::selected", update_rotation_controls)
+        dialog.connect("response", finish)
+        update_rotation_controls(rotation_dropdown, None)
+        dialog.present(self)
+
+    def _set_analysis_frame(self, spec: AnalysisFrameSpec) -> None:
+        spec.validated(self.system)
+        materialized = self.simulation.materialized_state(
+            self.system.bodies,
+            self.system.groups,
+        )
+        frame_kinematics(
+            self.system,
+            materialized,
+            spec,
+            physics_mode=self._effective_settings().physics_mode,
+            include_acceleration=False,
+        )
+        self._set_playing(False)
+        self.analysis_frame = spec
+        self._clear_dynamic_simulation_state()
+        self.trail_frame_dropdown.set_sensitive(not spec.active)
+        self.canvas.reset_all_views()
+        self._update_title()
+        self._refresh_canvas()
+
+    def _on_frame_diagnostics_action(self, *_args) -> None:
+        state = self.simulation.materialized_state(self.system.bodies, self.system.groups)
+        try:
+            kinematics, rows = relative_diagnostics(
+                self.system,
+                state,
+                self.analysis_frame,
+            )
+            selected = rows[self.selected_index]
+            csv_contents = serialize_relative_csv(self.system, state, self.analysis_frame)
+        except (ModelError, ValueError) as error:
+            self._show_error_dialog("Frame Diagnostics Unavailable", str(error))
+            return
+        vector = lambda values: "(" + ", ".join(f"{value:.6e}" for value in values) + ")"
+        lines = [
+            f"Frame: {self.analysis_frame.label}",
+            f"Origin position: {vector(kinematics.origin_position_m)} m",
+            f"Origin velocity: {vector(kinematics.origin_velocity_mps)} m/s",
+            f"Angular velocity: {vector(kinematics.angular_velocity_rad_s)} rad/s",
+            f"Angular acceleration: {vector(kinematics.angular_acceleration_rad_s2)} rad/s²",
+            "",
+            f"Selected body: {selected.name}",
+            f"Relative position: {vector(selected.position_m)} m",
+            f"Relative velocity: {vector(selected.velocity_mps)} m/s",
+            f"Gravitational: {vector(selected.gravitational_acceleration_mps2)} m/s²",
+            f"Translational: {vector(selected.translational_acceleration_mps2)} m/s²",
+            f"Coriolis: {vector(selected.coriolis_acceleration_mps2)} m/s²",
+            f"Centrifugal: {vector(selected.centrifugal_acceleration_mps2)} m/s²",
+            f"Euler: {vector(selected.euler_acceleration_mps2)} m/s²",
+            f"Total apparent: {vector(selected.total_apparent_acceleration_mps2)} m/s²",
+        ]
+        dialog = Adw.AlertDialog.new("Frame Diagnostics", "\n".join(lines))
+        dialog.add_response("close", "Close")
+        dialog.add_response("export", "Export CSV…")
+        dialog.set_close_response("close")
+
+        def finish(_dialog, response: str) -> None:
+            if response == "export":
+                self._save_frame_csv(csv_contents)
+
+        dialog.connect("response", finish)
+        dialog.present(self)
+
+    def _save_frame_csv(self, contents: bytes) -> None:
+        dialog = Gtk.FileDialog(title="Export Frame Diagnostics", modal=True)
+        csv_filter = Gtk.FileFilter()
+        csv_filter.set_name("Comma-separated values")
+        csv_filter.add_suffix("csv")
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(csv_filter)
+        dialog.set_filters(filters)
+        dialog.set_default_filter(csv_filter)
+        dialog.set_initial_name("frame-diagnostics.csv")
+        dialog.save(
+            self,
+            None,
+            lambda source, result, *_args: self._finish_export_document_dialog(
+                source,
+                result,
+                contents,
+            ),
+        )
 
     def _on_physics_diagnostics_action(self, *_args) -> None:
         try:
@@ -626,20 +889,107 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
 
     def _on_export_document_action(self, *_args) -> None:
         self._stop_playback_for_structural_work()
-        exported = self._clone_system(self.system)
-        self.simulation.apply_to_bodies(exported.bodies, exported.groups)
-        try:
-            contents = serialize_document(exported)
-        except Exception as error:
-            self._show_error_dialog("Cannot Export System", str(error))
-            return
+        selected_body = (
+            self.system.bodies[self.selected_index] if self.system.bodies else None
+        )
+        presets: list[tuple[str, str, str | None, str]] = [
+            ("json", "fixed", None, "Current inertial snapshot"),
+        ]
+        if selected_body is not None:
+            presets.append(
+                ("json", "body", selected_body.id, f"Centered on {selected_body.name}")
+            )
+        presets.extend(
+            (
+                "json",
+                "group_barycenter",
+                group.id,
+                f"Centered on subsystem: {group.name}",
+            )
+            for group in self.system.groups
+        )
+        presets.extend(
+            (
+                ("json", "system_barycenter", None, "Centered on whole-system barycenter"),
+                ("csv", "analysis", None, f"CSV diagnostics: {self.analysis_frame.label}"),
+            )
+        )
+        preset_dropdown = Gtk.DropDown.new_from_strings(
+            [label for _format, _kind, _target_id, label in presets]
+        )
+        help_label = Gtk.Label(
+            label=(
+                "JSON presets remain importable canonical inertial snapshots. CSV exports "
+                "include relative state and every explicit non-inertial acceleration term."
+            ),
+            xalign=0,
+            wrap=True,
+            css_classes=["dim-label"],
+        )
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.append(preset_dropdown)
+        box.append(help_label)
+        dialog = Adw.AlertDialog.new("Export Solar System", "Choose an export frame preset.")
+        dialog.set_extra_child(box)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("export", "Export…")
+        dialog.set_close_response("cancel")
+        dialog.set_default_response("export")
+        dialog.set_response_appearance("export", Adw.ResponseAppearance.SUGGESTED)
 
+        def finish(_dialog, response: str) -> None:
+            if response != "export":
+                return
+            try:
+                export_format, origin_kind, origin_id, label = presets[
+                    preset_dropdown.get_selected()
+                ]
+                state = self.simulation.materialized_state(
+                    self.system.bodies,
+                    self.system.groups,
+                )
+                if export_format == "csv":
+                    contents = serialize_relative_csv(
+                        self.system,
+                        state,
+                        self.analysis_frame,
+                    )
+                else:
+                    exported = relative_system_snapshot(
+                        self.system,
+                        state,
+                        origin_kind,
+                        origin_id,
+                    )
+                    contents = serialize_document(exported)
+            except (ModelError, ValueError, IndexError) as error:
+                self._show_error_dialog("Cannot Export System", str(error))
+                return
+            self._save_export_document(contents, export_format, label)
+
+        dialog.connect("response", finish)
+        dialog.present(self)
+
+    def _save_export_document(self, contents: bytes, export_format: str, label: str) -> None:
         filename = "".join(
             character if character.isalnum() or character in {"-", "_"} else "-"
-            for character in self.system.name.strip()
+            for character in f"{self.system.name}-{label}".strip()
         ).strip("-")
-        dialog = self._json_file_dialog("Export Solar System")
-        dialog.set_initial_name(f"{filename or 'solar-system'}.json")
+        if export_format == "csv":
+            dialog = Gtk.FileDialog(title="Export Frame Diagnostics", modal=True)
+            file_filter = Gtk.FileFilter()
+            file_filter.set_name("Comma-separated values")
+            file_filter.add_suffix("csv")
+        else:
+            dialog = Gtk.FileDialog(title="Export Solar System", modal=True)
+            file_filter = Gtk.FileFilter()
+            file_filter.set_name("Solar System JSON")
+            file_filter.add_suffix("json")
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(file_filter)
+        dialog.set_filters(filters)
+        dialog.set_default_filter(file_filter)
+        dialog.set_initial_name(f"{filename or 'solar-system'}.{export_format}")
         dialog.save(
             self,
             None,
@@ -727,6 +1077,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         elapsed_s: float = 0.0,
     ) -> None:
         self.system = self._clone_system(system)
+        self.analysis_frame = AnalysisFrameSpec()
         if refresh_snapshot:
             self.loaded_system_snapshot = self._clone_system(self.system)
             self._set_dirty(False)
@@ -742,6 +1093,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._select_body(self.selected_index)
         self._load_system_editor()
         self._load_settings_editor()
+        self.trail_frame_dropdown.set_sensitive(True)
         self._update_title()
         self._update_time_label()
         self._refresh_canvas()
@@ -988,8 +1340,19 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             ("system", None, "Whole-System Mass Barycenter"),
             *[("body", body.id, f"Body: {body.name}") for body in source_system.bodies],
             *[("group", group.id, f"Group: {group.name}") for group in source_system.groups],
-            ("custom", None, "Custom Position and Velocity"),
+            ("jpl", "500@0", "JPL: Solar System Barycenter (500@0)"),
+            ("jpl", "500@10", "JPL: Sun Center (500@10)"),
         ]
+        known_jpl_origins = {"500@0", "500@10"}
+        for body in source_system.bodies:
+            if body.data_source is None:
+                continue
+            catalog_id = body.data_source.catalog_id.strip().removesuffix(";")
+            center_id = f"500@{catalog_id}"
+            if catalog_id and center_id not in known_jpl_origins:
+                origin_options.append(("jpl", center_id, f"JPL: {body.name}"))
+                known_jpl_origins.add(center_id)
+        origin_options.append(("custom", None, "Custom Position and Velocity"))
         origin_dropdown = Gtk.DropDown.new_from_strings(
             [label for _kind, _target_id, label in origin_options]
         )
@@ -1025,17 +1388,43 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         rotation_stack.add_named(matrix_grid, "matrix")
         rotation_stack.set_visible_child_name("guided")
 
-        source_dropdown = Gtk.DropDown.new_from_strings(["App-local", "JPL Horizons"])
-        source_dropdown.set_selected(1 if frame.source == "horizons" else 0)
+        transform_type_dropdown = Gtk.DropDown.new_from_strings(
+            ["Verified Standard Frame", "Custom Rigid Transform"]
+        )
+        transform_type_dropdown.set_selected(0 if frame.axes_id != "custom" else 1)
+        axes_options = [
+            (axes_id, f"{system} / {plane}")
+            for axes_id, (system, plane) in REFERENCE_AXES.items()
+            if axes_id != "custom"
+        ]
+        axes_dropdown = Gtk.DropDown.new_from_strings(
+            [label for _axes_id, label in axes_options]
+        )
+        if frame.axes_id != "custom":
+            for index, (axes_id, _label) in enumerate(axes_options):
+                if axes_id == frame.axes_id:
+                    axes_dropdown.set_selected(index)
+                    break
+        time_scales = ("UTC", "UT1", "TAI", "TT", "TDB", "TCB", "TCG")
+        time_scale_dropdown = Gtk.DropDown.new_from_strings(list(time_scales))
+        if frame.time_scale in time_scales:
+            time_scale_dropdown.set_selected(time_scales.index(frame.time_scale))
         center_entry = Gtk.Entry(text=frame.center_id)
         plane_entry = Gtk.Entry(text=frame.reference_plane)
         system_entry = Gtk.Entry(text=frame.reference_system)
-        epoch_entry = Gtk.Entry(text=frame.epoch)
-        epoch_entry.set_sensitive(False)
-        time_scale_entry = Gtk.Entry(text=frame.time_scale)
-        time_scale_entry.set_sensitive(False)
+        try:
+            current_epoch = shift_epoch(
+                frame.epoch,
+                frame.time_scale,
+                self.simulation.state.elapsed_s,
+            )
+        except ModelError:
+            current_epoch = frame.epoch
+        epoch_entry = Gtk.Entry(text=current_epoch)
 
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        content.append(Gtk.Label(label="Transform Type", xalign=0, css_classes=["heading"]))
+        content.append(transform_type_dropdown)
         content.append(Gtk.Label(label="New Origin", xalign=0, css_classes=["heading"]))
         content.append(origin_dropdown)
         custom_grid = Gtk.Grid(column_spacing=10, row_spacing=6)
@@ -1045,7 +1434,10 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         content.append(Gtk.Label(label="Axis Rotation", xalign=0, css_classes=["heading"]))
         content.append(rotation_mode_dropdown)
         rotation_help = Gtk.Label(
-            label="Guided rotations apply fixed X, then Y, then Z axes. Expert rows map old components into new components.",
+            label=(
+                "Guided rotations apply fixed X, then Y, then Z axes. Expert rows map "
+                "old components into new components."
+            ),
             xalign=0,
             wrap=True,
             css_classes=["dim-label"],
@@ -1056,12 +1448,12 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         metadata_grid = Gtk.Grid(column_spacing=10, row_spacing=6)
         for row, (label, widget) in enumerate(
             (
-                ("Source", source_dropdown),
+                ("Verified axes", axes_dropdown),
                 ("Center ID", center_entry),
                 ("Reference plane", plane_entry),
                 ("Reference system", system_entry),
-                ("Epoch (fixed)", epoch_entry),
-                ("Time scale (fixed)", time_scale_entry),
+                ("Target epoch", epoch_entry),
+                ("Time scale", time_scale_dropdown),
             )
         ):
             self._attach_dialog_row(metadata_grid, row, label, widget)
@@ -1077,7 +1469,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
 
         dialog = Adw.AlertDialog.new(
             "Transform Reference Frame",
-            "Every canonical body position and velocity will be transformed atomically at the current simulation instant.",
+            "Every canonical body position and velocity will be transformed atomically "
+            "at the current simulation instant.",
         )
         dialog.set_extra_child(scroller)
         dialog.add_response("cancel", "Cancel")
@@ -1095,25 +1488,42 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             "rotation_mode": rotation_mode_dropdown,
             "angles": angle_spins,
             "matrix": matrix_entries,
-            "source": source_dropdown,
+            "transform_type": transform_type_dropdown,
+            "axes_options": axes_options,
+            "axes": axes_dropdown,
             "center": center_entry,
             "plane": plane_entry,
             "system": system_entry,
-            "epoch": frame.epoch,
-            "time_scale": frame.time_scale,
+            "epoch": epoch_entry,
+            "time_scales": time_scales,
+            "time_scale": time_scale_dropdown,
+            "frame": frame,
         }
 
         def update_preview(*_args) -> None:
             try:
-                operation, target = self._reference_transform_from_controls(controls)
-                position = ", ".join(f"{value:.6g}" for value in operation.origin_position_m)
-                velocity = ", ".join(f"{value:.6g}" for value in operation.origin_velocity_mps)
-                preview_label.set_label(
-                    f"r′ = R(r − [{position}])\n"
-                    f"v′ = R(v − [{velocity}])\n"
-                    f"Target: {target.source}, {target.center_id}, "
-                    f"{target.reference_system}/{target.reference_plane}"
-                )
+                if transform_type_dropdown.get_selected() == 0:
+                    target = self._standard_reference_frame_from_controls(controls)
+                    rotation_between_frames(frame, target)
+                    preview_label.set_label(
+                        "The complete N-body state will be propagated to the target epoch, "
+                        "then translated and rotated atomically.\n"
+                        f"Target: {target.center_id}, {target.reference_system}/"
+                        f"{target.reference_plane}, {target.epoch} {target.time_scale}"
+                    )
+                else:
+                    operation, target = self._reference_transform_from_controls(controls)
+                    position = ", ".join(
+                        f"{value:.6g}" for value in operation.origin_position_m
+                    )
+                    velocity = ", ".join(
+                        f"{value:.6g}" for value in operation.origin_velocity_mps
+                    )
+                    preview_label.set_label(
+                        f"r′ = R(r − [{position}])\n"
+                        f"v′ = R(v − [{velocity}])\n"
+                        f"Target: custom axes, {target.center_id}"
+                    )
                 dialog.set_response_enabled("transform", True)
             except (ModelError, ValueError) as error:
                 preview_label.set_label(str(error))
@@ -1124,7 +1534,9 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             kind, target_id, _label = origin_options[
                 selected if selected < len(origin_options) else 0
             ]
-            custom = kind == "custom"
+            custom = (
+                kind == "custom" and transform_type_dropdown.get_selected() == 1
+            )
             custom_position_entry.set_sensitive(custom)
             custom_velocity_entry.set_sensitive(custom)
             if kind == "keep":
@@ -1137,6 +1549,33 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
                 center_entry.set_text(f"500@{catalog_id}" if catalog_id else f"body:{body.id}")
             elif kind == "group" and target_id is not None:
                 center_entry.set_text(f"group:{target_id}")
+            elif kind == "jpl" and target_id is not None:
+                center_entry.set_text(target_id)
+            update_preview()
+
+        def update_transform_type(dropdown, _param) -> None:
+            standard = dropdown.get_selected() == 0
+            axes_dropdown.set_sensitive(standard)
+            epoch_entry.set_sensitive(standard)
+            time_scale_dropdown.set_sensitive(standard)
+            center_entry.set_sensitive(False)
+            plane_entry.set_sensitive(not standard)
+            system_entry.set_sensitive(not standard)
+            rotation_mode_dropdown.set_sensitive(not standard)
+            rotation_stack.set_sensitive(not standard)
+            custom_selected = origin_options[origin_dropdown.get_selected()][0] == "custom"
+            if standard and custom_selected:
+                origin_dropdown.set_selected(0)
+            custom_position_entry.set_sensitive(not standard and custom_selected)
+            custom_velocity_entry.set_sensitive(not standard and custom_selected)
+            update_preview()
+
+        def update_axes(dropdown, _param) -> None:
+            selected = dropdown.get_selected()
+            axes_id = axes_options[selected if selected < len(axes_options) else 0][0]
+            reference_system, reference_plane = REFERENCE_AXES[axes_id]
+            system_entry.set_text(reference_system)
+            plane_entry.set_text(reference_plane)
             update_preview()
 
         def update_rotation_mode(dropdown, _param) -> None:
@@ -1155,14 +1594,17 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             update_preview()
 
         origin_dropdown.connect("notify::selected", update_origin)
+        transform_type_dropdown.connect("notify::selected", update_transform_type)
         rotation_mode_dropdown.connect("notify::selected", update_rotation_mode)
-        source_dropdown.connect("notify::selected", update_preview)
+        axes_dropdown.connect("notify::selected", update_axes)
+        time_scale_dropdown.connect("notify::selected", update_preview)
         for entry in (
             custom_position_entry,
             custom_velocity_entry,
             center_entry,
             plane_entry,
             system_entry,
+            epoch_entry,
             *[entry for row in matrix_entries for entry in row],
         ):
             entry.connect("changed", update_preview)
@@ -1176,7 +1618,9 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
                 controls,
             ),
         )
-        update_preview()
+        if transform_type_dropdown.get_selected() == 0:
+            update_axes(axes_dropdown, None)
+        update_transform_type(transform_type_dropdown, None)
         dialog.present(self)
 
     def _reference_transform_from_controls(
@@ -1197,6 +1641,17 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             position, velocity = origin_for_body(source_system, target_id)
         elif kind == "group" and target_id is not None:
             position, velocity = origin_for_group(source_system, target_id)
+        elif kind == "jpl" and target_id is not None:
+            frame = controls["frame"]
+            if (
+                frame.origin is None
+                or frame.origin.kind != "jpl"
+                or frame.origin.id != target_id
+            ):
+                raise ModelError(
+                    "JPL origin changes require the verified standard-frame transform"
+                )
+            position = velocity = (0.0, 0.0, 0.0)
         elif kind == "custom":
             position = self._parse_vector_entry(
                 controls["custom_position"].get_text(),
@@ -1221,16 +1676,76 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
                 *(spin.get_value() for spin in controls["angles"])
             )
         operation = ReferenceFrameTransform(position, velocity, rotation).validated()
+        scale_index = controls["time_scale"].get_selected()
         target = SystemReferenceFrame(
-            epoch=controls["epoch"],
-            time_scale=controls["time_scale"],
-            center_id=controls["center"].get_text().strip(),
+            epoch=controls["epoch"].get_text().strip(),
+            time_scale=controls["time_scales"][scale_index],
             reference_plane=controls["plane"].get_text().strip(),
             reference_system=controls["system"].get_text().strip(),
-            source="horizons" if controls["source"].get_selected() == 1 else "app_local",
+            axes_id="custom",
+            origin=self._reference_origin_from_controls(controls),
         )
         target.validate()
         return operation, target
+
+    def _reference_origin_from_controls(self, controls: dict) -> ReferenceOrigin:
+        options = controls["origin_options"]
+        selected = controls["origin"].get_selected()
+        kind, target_id, _label = options[selected if selected < len(options) else 0]
+        if kind == "keep":
+            current = controls["frame"].origin
+            if current is None:
+                raise ModelError("current reference origin is unavailable")
+            return ReferenceOrigin.from_dict(current.to_dict())
+        if kind == "system":
+            return ReferenceOrigin("system_barycenter", None)
+        if kind == "body":
+            return ReferenceOrigin("body", target_id)
+        if kind == "group":
+            return ReferenceOrigin("group_barycenter", target_id)
+        if kind == "jpl":
+            return ReferenceOrigin("jpl", target_id)
+        if kind == "custom":
+            return ReferenceOrigin("custom", "user-defined")
+        raise ModelError("select a valid reference-frame origin")
+
+    def _standard_reference_frame_from_controls(
+        self,
+        controls: dict,
+    ) -> SystemReferenceFrame:
+        source = controls["frame"]
+        if source.axes_id == "custom":
+            raise ModelError(
+                "the current custom axes cannot be converted automatically; first use a "
+                "verified import or metadata source"
+            )
+        axes_options = controls["axes_options"]
+        axes_index = controls["axes"].get_selected()
+        axes_id = axes_options[axes_index][0]
+        scale_index = controls["time_scale"].get_selected()
+        time_scale = controls["time_scales"][scale_index]
+        epoch = controls["epoch"].get_text().strip()
+        parse_epoch(epoch, time_scale)
+        origin = self._reference_origin_from_controls(controls)
+        selected_origin = controls["origin_options"][
+            controls["origin"].get_selected()
+        ][0]
+        if selected_origin == "custom":
+            raise ModelError("verified transforms require a defined origin")
+        if origin.kind == "jpl" and (
+            source.origin is None or source.origin.kind != "jpl"
+        ):
+            raise ModelError(
+                "a JPL origin change requires a current JPL-addressable origin"
+            )
+        target = SystemReferenceFrame(
+            epoch=epoch,
+            time_scale=time_scale,
+            axes_id=axes_id,
+            origin=origin,
+        )
+        target.validate()
+        return target
 
     def _finish_reference_frame_dialog(self, _dialog, response: str, controls: dict) -> None:
         if response != "transform":
@@ -1239,6 +1754,19 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.system.bodies[self.selected_index].id if self.system.bodies else None
         )
         elapsed_s = self.simulation.state.elapsed_s
+        if controls["transform_type"].get_selected() == 0:
+            try:
+                target = self._standard_reference_frame_from_controls(controls)
+            except (ModelError, ValueError, IndexError) as error:
+                self._show_error_dialog("Cannot Transform Reference Frame", str(error))
+                return
+            self._start_standard_reference_transform(
+                controls["source_system"],
+                target,
+                elapsed_s,
+                selected_body_id,
+            )
+            return
         try:
             operation, target = self._reference_transform_from_controls(controls)
             transformed = transform_system_reference_frame(
@@ -1246,6 +1774,10 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
                 target,
                 operation,
             )
+            transformed.epoch = (
+                f"{target.epoch} {target.time_scale}, custom axes, {target.center_id}"
+            )
+            transformed.validate()
         except (ModelError, ValueError) as error:
             self._show_error_dialog("Cannot Transform Reference Frame", str(error))
             return
@@ -1253,11 +1785,148 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             transformed,
             refresh_snapshot=False,
             selected_body_id=selected_body_id,
-            elapsed_s=elapsed_s,
+            elapsed_s=0.0,
         )
         self.system_library.refresh(self.system)
         self._mark_dirty()
         self._sync_structural_controls()
+
+    def _start_standard_reference_transform(
+        self,
+        source_system: SolarSystem,
+        target: SystemReferenceFrame,
+        elapsed_s: float,
+        selected_body_id: str | None,
+    ) -> None:
+        source_frame = source_system.reference_frame
+        if source_frame is None:
+            self._show_error_dialog(
+                "Cannot Transform Reference Frame",
+                "the current system has no reference-frame metadata",
+            )
+            return
+        self.horizons_generation += 1
+        generation = self.horizons_generation
+        cancel_event = threading.Event()
+        self.horizons_refresh_cancel = cancel_event
+        self.horizons_refresh_in_progress = True
+        self._sync_structural_controls()
+
+        progress_dialog = Adw.AlertDialog.new(
+            "Transforming Reference Frame",
+            "Preparing epoch propagation and coordinate transform…",
+        )
+        progress_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        progress_box.set_margin_top(12)
+        progress_box.set_margin_bottom(12)
+        progress_box.append(Gtk.Spinner(spinning=True, halign=Gtk.Align.CENTER))
+        progress_label = Gtk.Label(label="Starting", xalign=0.5, wrap=True)
+        progress_box.append(progress_label)
+        progress_dialog.set_extra_child(progress_box)
+        progress_dialog.add_response("cancel", "Cancel")
+        progress_dialog.set_close_response("cancel")
+        dialog_state = {"finishing": False}
+
+        def cancel_transform(_dialog, _response: str) -> None:
+            if dialog_state["finishing"]:
+                return
+            cancel_event.set()
+            if generation == self.horizons_generation:
+                self.horizons_generation += 1
+            if self.horizons_refresh_cancel is cancel_event:
+                self.horizons_refresh_cancel = None
+            self.horizons_refresh_in_progress = False
+            self._sync_structural_controls()
+
+        progress_dialog.connect("response", cancel_transform)
+        progress_dialog.present(self)
+
+        def report_progress(completed: int, total: int) -> None:
+            GLib.idle_add(
+                self._update_reference_transform_progress,
+                generation,
+                progress_label,
+                completed,
+                total,
+            )
+
+        def perform_transform() -> SolarSystem:
+            external_origin = None
+            if target.origin is not None and target.origin.kind == "jpl":
+                change = self.horizons_client.fetch_origin_change(
+                    source_frame,
+                    target.origin.id or "",
+                    target_epoch=target.epoch,
+                    target_time_scale=target.time_scale,
+                )
+                external_origin = (change.position_m, change.velocity_mps)
+            return transform_system_to_standard_frame(
+                source_system,
+                target,
+                elapsed_s=elapsed_s,
+                external_origin=external_origin,
+                cancel_event=cancel_event,
+                progress=report_progress,
+            )
+
+        future = self.horizons_executor.submit(perform_transform)
+        future.add_done_callback(
+            lambda completed: GLib.idle_add(
+                self._finish_standard_reference_transform,
+                completed,
+                generation,
+                progress_dialog,
+                dialog_state,
+                cancel_event,
+                selected_body_id,
+            )
+        )
+
+    def _update_reference_transform_progress(
+        self,
+        generation: int,
+        label,
+        completed: int,
+        total: int,
+    ) -> bool:
+        if self.closed or generation != self.horizons_generation:
+            return GLib.SOURCE_REMOVE
+        label.set_label(f"Propagating full N-body state: {completed} of {total} steps")
+        return GLib.SOURCE_REMOVE
+
+    def _finish_standard_reference_transform(
+        self,
+        future: Future,
+        generation: int,
+        progress_dialog,
+        dialog_state: dict,
+        cancel_event: threading.Event,
+        selected_body_id: str | None,
+    ) -> bool:
+        if self.closed or generation != self.horizons_generation:
+            return GLib.SOURCE_REMOVE
+        dialog_state["finishing"] = True
+        progress_dialog.close()
+        if self.horizons_refresh_cancel is cancel_event:
+            self.horizons_refresh_cancel = None
+        self.horizons_refresh_in_progress = False
+        try:
+            transformed = future.result()
+        except Exception as error:
+            if not cancel_event.is_set():
+                self._show_error_dialog("Cannot Transform Reference Frame", str(error))
+            self._sync_structural_controls()
+            return GLib.SOURCE_REMOVE
+        self._replace_system(
+            transformed,
+            refresh_snapshot=False,
+            selected_body_id=selected_body_id,
+            elapsed_s=0.0,
+        )
+        self.system_library.refresh(self.system)
+        self._mark_dirty()
+        self._sync_structural_controls()
+        return GLib.SOURCE_REMOVE
 
     def _orbit_editor_widgets(self):
         return self.body_inspector.orbit_editor_widgets()
@@ -3646,7 +4315,12 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         settings = self._effective_settings()
         job = self._simulation_job(dt_s)
         result = playback.run_simulation_job(job)
-        if self.simulation.apply_result(result, self.system.bodies, self.system.groups, settings):
+        if self.simulation.apply_result(
+            result,
+            self.system.bodies,
+            self.system.groups,
+            settings,
+        ):
             self._after_simulation_applied()
 
     def _queue_simulation_job(self) -> None:
@@ -3672,6 +4346,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.focus_group_id,
             self.focus_target,
             dt_s,
+            self.analysis_frame,
+            self.system,
         )
 
     def _finish_simulation_job(self, future: Future) -> bool:
@@ -3754,6 +4430,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.window_title.set_subtitle(
             f"{self.system.epoch} - {policy}, {mode}/{integrator}, "
             f"max step {max_step_days:,.2f} days"
+            + (f" - frame: {self.analysis_frame.label}" if self.analysis_frame.active else "")
         )
 
     def _update_time_label(self) -> None:
@@ -3766,23 +4443,71 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         settings = self._effective_settings()
         active_indices = self._active_body_indices()
         using_hybrid_focus = self._using_hybrid_focus()
+        canvas_bodies = self.system.bodies
+        orbit_guides = configured_orbit_guides(self.system.bodies, self.system.groups)
+        overview_positions = self._overview_positions()
+        selected_group_center = (
+            self._group_center(self.selected_group_id)
+            if settings.view_mode == "follow_selected" and self.selected_group_id is not None
+            else None
+        )
+        if self.analysis_frame.active:
+            materialized = self.simulation.materialized_state(
+                self.system.bodies,
+                self.system.groups,
+            )
+            try:
+                kinematics = frame_kinematics(
+                    self.system,
+                    materialized,
+                    self.analysis_frame,
+                    physics_mode=settings.physics_mode,
+                    include_acceleration=False,
+                )
+                transformed = transform_state(materialized, kinematics)
+                canvas_bodies = [
+                    replace(
+                        body,
+                        position_m=transformed.positions_m[index].tolist(),
+                        velocity_mps=transformed.velocities_mps[index].tolist(),
+                    )
+                    for index, body in enumerate(self.system.bodies)
+                ]
+                orbit_guides = [
+                    replace(
+                        guide,
+                        points_m=tuple(transform_points(guide.points_m, kinematics)),
+                    )
+                    for guide in orbit_guides
+                ]
+                overview_positions = transform_points(overview_positions, kinematics)
+                if selected_group_center is not None:
+                    selected_group_center = transform_points(
+                        [selected_group_center], kinematics
+                    )[0]
+            except ModelError:
+                canvas_bodies = self.system.bodies
+                orbit_guides = configured_orbit_guides(
+                    self.system.bodies,
+                    self.system.groups,
+                )
+                overview_positions = self._overview_positions()
         trail_reference_position = (
             focused_trail_reference_position(
                 self.system.bodies,
                 self.system.groups,
                 self.focus_state.target,
             )
-            if self.focus_state is not None and settings.trail_frame == "focused_parent"
-            else None
-        )
-        selected_group_center = (
-            self._group_center(self.selected_group_id)
-            if settings.view_mode == "follow_selected" and self.selected_group_id is not None
+            if (
+                self.focus_state is not None
+                and settings.trail_frame == "focused_parent"
+                and not self.analysis_frame.active
+            )
             else None
         )
         inset_entities, inset_positions, inset_targets, focused_inset_id = self._inset_overview_data()
         return CanvasScene(
-            bodies=self.system.bodies,
+            bodies=canvas_bodies,
             active_indices=active_indices,
             selected_body_index=self.selected_index,
             selected_group_id=self.selected_group_id,
@@ -3794,16 +4519,13 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             focused_fit_session=self.focus_fit_session,
             selected_group_center=selected_group_center,
             trail_reference_position=trail_reference_position,
-            orbit_guides=configured_orbit_guides(
-                self.system.bodies,
-                self.system.groups,
-            ),
+            orbit_guides=orbit_guides,
             orbit_visibility=settings.orbit_visibility,
             trail_visibility=settings.trail_visibility,
             path_style=settings.path_style,
             trails=list(self.simulation.trails),
             overview_entities=self._overview_entities(),
-            overview_positions=self._overview_positions(),
+            overview_positions=overview_positions,
             overview_trails=dict(self.simulation.overview_trails),
             context_entities=self._context_entities(),
             context_positions=self._context_positions(),

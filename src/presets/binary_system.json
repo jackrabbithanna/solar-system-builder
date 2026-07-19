@@ -1,5 +1,5 @@
 {
-  "schema_version": 13,
+  "schema_version": 14,
   "id": "builtin-binary-system",
   "name": "Alpha Centauri",
   "epoch": "Approximate Alpha Centauri seed",
@@ -201,9 +201,12 @@
   "reference_frame": {
     "epoch": "Approximate Alpha Centauri seed",
     "time_scale": "",
-    "center_id": "app-local",
-    "reference_plane": "app-local XY",
-    "reference_system": "app-local",
-    "source": "app_local"
+    "axes_id": "custom",
+    "origin": {
+      "kind": "custom",
+      "id": "app-local"
+    },
+    "custom_reference_plane": "app-local XY",
+    "custom_reference_system": "app-local"
   }
 }

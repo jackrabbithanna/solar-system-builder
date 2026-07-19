@@ -291,7 +291,11 @@ class SystemPropertiesPanel(GObject.GObject):
             else:
                 epoch = frame.epoch or system.epoch
                 time = f" {frame.time_scale}" if frame.time_scale else ""
-                source = "JPL Horizons" if frame.source == "horizons" else "App-local"
+                source = {
+                    "horizons": "JPL origin / verified axes",
+                    "standard": "Verified standard frame",
+                    "app_local": "Custom app-local frame",
+                }.get(frame.source, frame.source)
                 self.reference_frame_label.set_label(
                     f"{source} - {epoch}{time} - {frame.center_id} - "
                     f"{frame.reference_system}/{frame.reference_plane}"

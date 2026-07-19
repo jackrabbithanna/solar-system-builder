@@ -278,6 +278,127 @@ def state_vectors_from_orbit(parent: Body, body: Body, orbit: OrbitData) -> tupl
     )
 
 
+def orbit_from_state_vectors(
+    parent: Body | OrbitAnchor,
+    body: Body | OrbitAnchor,
+    *,
+    epoch: str,
+    reference_plane: str,
+) -> OrbitData:
+    """Return Newtonian osculating elements for one relative Cartesian state."""
+
+    import numpy as np
+
+    relative_position = np.asarray(body.position_m, dtype=float) - np.asarray(
+        parent.position_m, dtype=float
+    )
+    relative_velocity = np.asarray(body.velocity_mps, dtype=float) - np.asarray(
+        parent.velocity_mps, dtype=float
+    )
+    distance = float(np.linalg.norm(relative_position))
+    if distance <= 0.0:
+        raise ModelError("osculating orbit is undefined at zero separation")
+    mu = _gravitational_parameter(parent.mass_kg, body.mass_kg)
+    angular_momentum = np.cross(relative_position, relative_velocity)
+    angular_momentum_magnitude = float(np.linalg.norm(angular_momentum))
+    if angular_momentum_magnitude <= 0.0:
+        raise ModelError("osculating orbit requires non-radial motion")
+    node_vector = np.cross((0.0, 0.0, 1.0), angular_momentum)
+    node_magnitude = float(np.linalg.norm(node_vector))
+    eccentricity_vector = (
+        np.cross(relative_velocity, angular_momentum) / mu
+        - relative_position / distance
+    )
+    eccentricity = float(np.linalg.norm(eccentricity_vector))
+    if math.isclose(eccentricity, 1.0, abs_tol=1.0e-12):
+        raise ModelError("parabolic osculating elements are not supported")
+    specific_energy = 0.5 * float(np.dot(relative_velocity, relative_velocity)) - mu / distance
+    if math.isclose(specific_energy, 0.0, abs_tol=np.finfo(float).eps * mu / distance):
+        raise ModelError("parabolic osculating elements are not supported")
+    semi_major_axis = -mu / (2.0 * specific_energy)
+    inclination = math.acos(
+        max(-1.0, min(1.0, float(angular_momentum[2]) / angular_momentum_magnitude))
+    )
+    node = math.atan2(float(node_vector[1]), float(node_vector[0])) if node_magnitude else 0.0
+
+    if eccentricity > 1.0e-12:
+        if node_magnitude:
+            argument = _oriented_angle(
+                node_vector,
+                eccentricity_vector,
+                angular_momentum,
+            )
+        else:
+            argument = math.atan2(
+                float(eccentricity_vector[1]), float(eccentricity_vector[0])
+            )
+        true_anomaly = _oriented_angle(
+            eccentricity_vector,
+            relative_position,
+            angular_momentum,
+        )
+    else:
+        argument = 0.0
+        true_anomaly = (
+            _oriented_angle(node_vector, relative_position, angular_momentum)
+            if node_magnitude
+            else math.atan2(float(relative_position[1]), float(relative_position[0]))
+        )
+
+    if eccentricity < 1.0:
+        denominator = 1.0 + eccentricity * math.cos(true_anomaly)
+        sin_anomaly = (
+            math.sqrt(max(0.0, 1.0 - eccentricity**2))
+            * math.sin(true_anomaly)
+            / denominator
+        )
+        cos_anomaly = (eccentricity + math.cos(true_anomaly)) / denominator
+        eccentric_anomaly = math.atan2(sin_anomaly, cos_anomaly)
+        mean_anomaly = eccentric_anomaly - eccentricity * math.sin(eccentric_anomaly)
+        period = math.tau * math.sqrt(semi_major_axis**3 / mu)
+    else:
+        denominator = 1.0 + eccentricity * math.cos(true_anomaly)
+        sinh_anomaly = (
+            math.sqrt(eccentricity**2 - 1.0)
+            * math.sin(true_anomaly)
+            / denominator
+        )
+        hyperbolic_anomaly = math.asinh(sinh_anomaly)
+        mean_anomaly = eccentricity * math.sinh(hyperbolic_anomaly) - hyperbolic_anomaly
+        period = None
+
+    return OrbitData(
+        semi_major_axis_m=float(semi_major_axis),
+        orbital_period_s=float(period) if period is not None else None,
+        eccentricity=eccentricity,
+        inclination_deg=math.degrees(inclination),
+        longitude_of_ascending_node_deg=math.degrees(node) % 360.0,
+        argument_of_periapsis_deg=math.degrees(argument) % 360.0,
+        mean_anomaly_deg=(
+            math.degrees(mean_anomaly) % 360.0
+            if eccentricity < 1.0
+            else math.degrees(mean_anomaly)
+        ),
+        epoch=epoch,
+        reference_plane=reference_plane,
+        approximation_notes=(
+            "Newtonian osculating elements recomputed from the propagated canonical state."
+        ),
+    )
+
+
+def _oriented_angle(first, second, normal) -> float:
+    import numpy as np
+
+    first_unit = np.asarray(first, dtype=float) / np.linalg.norm(first)
+    second_unit = np.asarray(second, dtype=float) / np.linalg.norm(second)
+    normal_unit = np.asarray(normal, dtype=float) / np.linalg.norm(normal)
+    return math.atan2(
+        float(np.dot(np.cross(first_unit, second_unit), normal_unit)),
+        float(np.dot(first_unit, second_unit)),
+    )
+
+
 def group_barycenter(bodies: list[Body], groups: list[SystemGroup], group_id: str) -> OrbitAnchor:
     indices = body_indices_for_group(bodies, groups, group_id)
     if not indices:

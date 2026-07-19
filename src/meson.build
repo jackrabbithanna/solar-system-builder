@@ -28,10 +28,12 @@ configure_file(
 
 solar_system_builder_sources = [
   '__init__.py',
+  'analysis_frames.py',
   'canvas.py',
   'constants.py',
   'documents.py',
   'flybys.py',
+  'frame_exports.py',
   'hierarchy.py',
   'horizons.py',
   'main.py',
@@ -43,6 +45,7 @@ solar_system_builder_sources = [
   'presets.py',
   'reference_frames.py',
   'scales.py',
+  'standard_frames.py',
   'sidebar.py',
   'storage.py',
   'system_editing.py',

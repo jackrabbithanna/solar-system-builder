@@ -92,7 +92,8 @@ class UpdateSolarSystemPresetTests(unittest.TestCase):
 
         self.assertEqual(preset, original)
         self.assertIn("2026-06-14 00:00:00 TDB", updated["epoch"])
-        self.assertEqual(updated["reference_frame"]["center_id"], "500@0")
+        self.assertEqual(updated["reference_frame"]["axes_id"], "jpl_ecliptic_j2000")
+        self.assertEqual(updated["reference_frame"]["origin"]["id"], "500@0")
         for body in updated["bodies"]:
             original_body = next(item for item in original["bodies"] if item["id"] == body["id"])
             self.assertEqual(body["name"], original_body["name"])

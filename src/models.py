@@ -7,20 +7,36 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
 from .constants import DAY
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 ACCURACY_PROFILES = {"high", "balanced", "fast"}
 PHYSICS_MODES = {"newtonian", "post_newtonian"}
 INTEGRATORS = {"velocity_verlet", "rk4"}
 BODY_KINDS = frozenset({"star", "planet", "dwarf planet", "moon", "comet", "asteroid"})
 STATE_ORIGINS = frozenset({"cartesian", "orbital", "horizons", "flyby"})
-REFERENCE_FRAME_SOURCES = frozenset({"app_local", "horizons"})
+REFERENCE_FRAME_SOURCES = frozenset({"app_local", "horizons", "standard"})
+REFERENCE_ORIGIN_KINDS = frozenset(
+    {"custom", "jpl", "body", "group_barycenter", "system_barycenter"}
+)
+REFERENCE_TIME_SCALES = frozenset({"UTC", "UT1", "TAI", "TT", "TDB", "TCB", "TCG"})
+REFERENCE_AXES = {
+    "custom": ("app-local", "app-local XY"),
+    "icrf": ("ICRF", "FRAME"),
+    "fk5_j2000": ("FK5", "mean equator/equinox J2000"),
+    "mean_equator_of_date": ("IAU 2006", "mean equator/equinox of date"),
+    "true_equator_of_date": ("IAU 2006/2000A", "true equator/equinox of date"),
+    "jpl_ecliptic_j2000": ("ICRF", "ECLIPTIC"),
+    "mean_ecliptic_of_date": ("IAU 2006", "mean ecliptic/equinox of date"),
+    "true_ecliptic_of_date": ("IAU 2006/2000A", "true ecliptic/equinox of date"),
+    "galactic_iau1958": ("IAU Galactic", "Galactic plane"),
+}
 DISTANCE_UNITS = {"km", "AU", "kAU", "ly"}
 VIEW_MODES = {"fit_system", "follow_selected", "fixed_scale", "log_overview"}
 TRAIL_FRAMES = {"focused_parent", "system_inertial"}
@@ -263,6 +279,72 @@ class DataSource:
 
 
 @dataclass
+class ReferenceOrigin:
+    """Origin identifier for the canonical state at its reference epoch."""
+
+    kind: str = "custom"
+    id: str | None = "app-local"
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "ReferenceOrigin":
+        if data is None:
+            return cls()
+        origin = cls(
+            kind=str(data.get("kind", "custom")),
+            id=str(data["id"]) if data.get("id") is not None else None,
+        )
+        origin.validate()
+        return origin
+
+    def validate(self) -> None:
+        if self.kind not in REFERENCE_ORIGIN_KINDS:
+            raise ModelError(f"unsupported reference origin kind {self.kind}")
+        if self.kind == "system_barycenter":
+            if self.id not in {None, ""}:
+                raise ModelError("system-barycenter origin must not have an id")
+            return
+        if self.id is None or not self.id.strip():
+            raise ModelError(f"reference origin {self.kind} requires an id")
+        if self.kind == "jpl" and not re.fullmatch(
+            r"500@[-+A-Za-z0-9]+",
+            self.id.strip(),
+        ):
+            raise ModelError("JPL reference origin id must use the 500@<id> form")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        data: dict[str, Any] = {"kind": self.kind}
+        if self.id:
+            data["id"] = self.id
+        return data
+
+
+def _legacy_axes_id(reference_system: str, reference_plane: str, source: str) -> str:
+    if source != "horizons":
+        return "custom"
+    system = reference_system.strip().casefold()
+    plane = reference_plane.strip().casefold()
+    if system == "icrf" and plane == "frame":
+        return "icrf"
+    if system == "icrf" and plane in {"ecliptic", "j2000 ecliptic"}:
+        return "jpl_ecliptic_j2000"
+    return "custom"
+
+
+def _legacy_origin(source: str, center_id: str) -> ReferenceOrigin:
+    cleaned = center_id.strip() or "app-local"
+    if source == "horizons" or cleaned.startswith("500@"):
+        return ReferenceOrigin("jpl", cleaned)
+    if cleaned == "system-barycenter":
+        return ReferenceOrigin("system_barycenter", None)
+    if cleaned.startswith("body:"):
+        return ReferenceOrigin("body", cleaned.removeprefix("body:"))
+    if cleaned.startswith("group:"):
+        return ReferenceOrigin("group_barycenter", cleaned.removeprefix("group:"))
+    return ReferenceOrigin("custom", cleaned)
+
+
+@dataclass
 class SystemReferenceFrame:
     """Coordinate-frame metadata shared by every canonical body state."""
 
@@ -272,48 +354,113 @@ class SystemReferenceFrame:
     reference_plane: str = "app-local XY"
     reference_system: str = "app-local"
     source: str = "app_local"
+    axes_id: str = ""
+    origin: ReferenceOrigin | None = None
+
+    def __post_init__(self) -> None:
+        if not self.axes_id:
+            self.axes_id = _legacy_axes_id(
+                self.reference_system,
+                self.reference_plane,
+                self.source,
+            )
+        if self.origin is None:
+            self.origin = _legacy_origin(self.source, self.center_id)
+        self._sync_legacy_metadata()
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "SystemReferenceFrame | None":
         if data is None:
             return None
+        axes_id = str(data.get("axes_id", ""))
+        origin_data = data.get("origin")
+        reference_system = str(data.get("reference_system", "app-local"))
+        reference_plane = str(data.get("reference_plane", "app-local XY"))
+        source = str(data.get("source", "app_local"))
+        center_id = str(data.get("center_id", "app-local"))
         frame = cls(
             epoch=str(data.get("epoch", "")),
             time_scale=str(data.get("time_scale", "")),
-            center_id=str(data.get("center_id", "app-local")),
-            reference_plane=str(data.get("reference_plane", "app-local XY")),
-            reference_system=str(data.get("reference_system", "app-local")),
-            source=str(data.get("source", "app_local")),
+            center_id=center_id,
+            reference_plane=str(data.get("custom_reference_plane", reference_plane)),
+            reference_system=str(data.get("custom_reference_system", reference_system)),
+            source=source,
+            axes_id=axes_id,
+            origin=(
+                ReferenceOrigin.from_dict(origin_data)
+                if isinstance(origin_data, dict)
+                else _legacy_origin(source, center_id)
+            ),
         )
         frame.validate()
         return frame
 
+    def _sync_legacy_metadata(self) -> None:
+        if self.axes_id not in REFERENCE_AXES:
+            return
+        if self.axes_id != "custom":
+            self.reference_system, self.reference_plane = REFERENCE_AXES[self.axes_id]
+        if self.origin is None:
+            return
+        if self.origin.kind == "jpl":
+            self.center_id = self.origin.id or ""
+            self.source = "horizons"
+        elif self.origin.kind == "body":
+            self.center_id = f"body:{self.origin.id}"
+            self.source = "standard" if self.axes_id != "custom" else "app_local"
+        elif self.origin.kind == "group_barycenter":
+            self.center_id = f"group:{self.origin.id}"
+            self.source = "standard" if self.axes_id != "custom" else "app_local"
+        elif self.origin.kind == "system_barycenter":
+            self.center_id = "system-barycenter"
+            self.source = "standard" if self.axes_id != "custom" else "app_local"
+        else:
+            self.center_id = self.origin.id or "app-local"
+            self.source = "standard" if self.axes_id != "custom" else "app_local"
+
     def validate(self) -> None:
+        self._sync_legacy_metadata()
+        if self.axes_id not in REFERENCE_AXES:
+            raise ModelError(f"unsupported reference axes {self.axes_id}")
+        if self.origin is None:
+            raise ModelError("reference frame origin is required")
+        self.origin.validate()
         if self.source not in REFERENCE_FRAME_SOURCES:
             raise ModelError(f"unsupported reference frame source {self.source}")
         for field_name in ("center_id", "reference_plane", "reference_system"):
             if not getattr(self, field_name).strip():
                 raise ModelError(f"reference frame {field_name} is required")
-        if self.source == "horizons":
+        if self.axes_id != "custom":
             if not self.epoch.strip():
-                raise ModelError("Horizons reference frame epoch is required")
-            if self.time_scale != "TDB":
-                raise ModelError("Horizons reference frame time_scale must be TDB")
+                raise ModelError("standard reference frame epoch is required")
+            if self.time_scale not in REFERENCE_TIME_SCALES:
+                raise ModelError(f"unsupported reference frame time scale {self.time_scale}")
+        if self.origin.kind == "jpl" and self.time_scale not in REFERENCE_TIME_SCALES:
+            raise ModelError("JPL reference frame requires a supported time scale")
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
-        return {
+        data = {
             "epoch": self.epoch,
             "time_scale": self.time_scale,
-            "center_id": self.center_id,
-            "reference_plane": self.reference_plane,
-            "reference_system": self.reference_system,
-            "source": self.source,
+            "axes_id": self.axes_id,
+            "origin": self.origin.to_dict(),
         }
+        if self.axes_id == "custom":
+            data["custom_reference_plane"] = self.reference_plane
+            data["custom_reference_system"] = self.reference_system
+        return data
 
     @property
     def horizons_compatible(self) -> bool:
-        return self.source == "horizons" and self.center_id in {"500@0", "500@10"}
+        return bool(
+            self.origin is not None
+            and self.origin.kind == "jpl"
+            and self.origin.id
+            and self.axes_id
+            in {"icrf", "fk5_j2000", "jpl_ecliptic_j2000", "galactic_iau1958"}
+            and self.time_scale in REFERENCE_TIME_SCALES
+        )
 
 
 @dataclass
@@ -706,6 +853,18 @@ class SolarSystem:
         self._validate_flybys(seen_ids)
         self._validate_groups(seen_ids)
         self._validate_group_orbit_targets(seen_ids)
+        self._validate_reference_origin(seen_ids)
+
+    def _validate_reference_origin(self, body_ids: set[str]) -> None:
+        frame = self.reference_frame
+        if frame is None or frame.origin is None:
+            return
+        if frame.origin.kind == "body" and frame.origin.id not in body_ids:
+            raise ModelError(f"reference-frame body origin {frame.origin.id} does not exist")
+        if frame.origin.kind == "group_barycenter":
+            group_ids = {group.id for group in self.groups}
+            if frame.origin.id not in group_ids:
+                raise ModelError(f"reference-frame group origin {frame.origin.id} does not exist")
 
     def _validate_body_parent_kinds(self) -> None:
         bodies_by_id = {body.id: body for body in self.bodies}
@@ -892,4 +1051,9 @@ class SolarSystem:
                 body_id_map[body_id]
                 for body_id in group.get("body_ids", [])
             ]
+        origin = data.get("reference_frame", {}).get("origin")
+        if origin is not None and origin.get("kind") == "body":
+            origin["id"] = body_id_map[origin["id"]]
+        if origin is not None and origin.get("kind") == "group_barycenter":
+            origin["id"] = group_id_map[origin["id"]]
         return SolarSystem.from_dict(data)

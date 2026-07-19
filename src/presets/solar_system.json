@@ -1,5 +1,5 @@
 {
-  "schema_version": 13,
+  "schema_version": 14,
   "id": "builtin-solar-system",
   "name": "Solar System",
   "epoch": "2026-07-19 01:22:12.183628 TDB, JPL Horizons, solar-system barycentric",
@@ -594,9 +594,10 @@
   "reference_frame": {
     "epoch": "2026-07-19 01:22:12.183628",
     "time_scale": "TDB",
-    "center_id": "500@0",
-    "reference_plane": "ECLIPTIC",
-    "reference_system": "ICRF",
-    "source": "horizons"
+    "axes_id": "jpl_ecliptic_j2000",
+    "origin": {
+      "kind": "jpl",
+      "id": "500@0"
+    }
   }
 }

@@ -50,7 +50,9 @@ Bundled systems are versioned JSON data. They are read-only templates. Editing r
 
 ## Canonical State and Reference Frames
 
-Cartesian body vectors are canonical. Orbital elements and sources are provenance. Schema v9 records a body `state_origin` and one system-level reference frame. Reference-frame edits are permitted only through an atomic rigid transform: subtract one origin position/velocity, apply one proper rotation to every canonical vector, and rotate body/group orbital and flyby orientations into the target plane. Guided rotations use `Rz @ Ry @ Rx`; expert matrices must be finite, orthonormal, and have determinant `+1`. Epoch and time scale remain fixed.
+Cartesian body vectors are canonical. Orbital elements and sources are provenance. Schema v14 records registered axes, a structured origin, epoch, and time scale in one system-level frame. Verified edits may propagate a cloned complete N-body state to a new physical epoch before applying an atomic origin translation and proper rotation. Custom edits remain rigid transforms at the materialized current instant and are always labeled custom. Guided rotations use `Rz @ Ry @ Rx`; expert matrices must be finite, orthonormal, and have determinant `+1`.
+
+Canonical axes and origins are inertial and frozen at the stored frame epoch. Continuously translating or rotating coordinates are session-only analysis frames; they affect the main canvas, new trails, diagnostics, and CSV output without changing force integration or saved vectors. See [Reference Frames and Coordinate Transformations](./REFERENCE_FRAMES.md) for the full rationale and contracts.
 
 ## Reset Sources
 

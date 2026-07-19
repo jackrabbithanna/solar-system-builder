@@ -11,9 +11,12 @@ The model stores complete three-dimensional positions and velocities in SI units
 - Add and organize stars, planets, dwarf planets, moons, comets, asteroids, nested system groups, and persistent unbound flybys.
 - Edit complete Cartesian state vectors or generate them from elliptic and hyperbolic orbital elements.
 - Search JPL Horizons for bodies, import available physical data, and atomically refresh an entire compatible system to one current epoch.
+- Convert verified ICRF, equatorial, ecliptic, and Galactic frames with time-scale-aware epoch propagation, precession/nutation, and JPL-backed origin changes.
+- Inspect the canvas in translating, prescribed-rotation, axes-of-date, or target-pair co-rotating analysis frames without changing the canonical inertial simulation.
 - Run NumPy-backed N-body playback with Newtonian or first post-Newtonian gravity, Velocity Verlet or RK4 integration, bounded internal substeps, and scalable focus or barycenter approximation policies.
 - Follow selected bodies and systems, focus on planet-and-moon subsystems, use logarithmic overviews, and compare focused motion with coarse outside context.
-- Inspect barycenters, distances, orbital trails, elapsed simulation time, reference-frame provenance, and saved simulation settings.
+- Inspect barycenters, distances, orbital trails, elapsed simulation time, explicit non-inertial acceleration terms, reference-frame provenance, and saved simulation settings.
+- Export importable JSON snapshots centered on a body, subsystem, or system barycenter, or export relative diagnostics as CSV.
 
 ## Using the App
 
@@ -39,6 +42,13 @@ For a complete guide, see the [User Interface documentation](./docs/USER_INTERFA
 
 ## Development
 
+For host-side tests, create a virtual environment and install the pinned numerical/astronomy dependencies:
+
+```sh
+python3 -m venv --system-site-packages .venv
+.venv/bin/python -m pip install -r requirements.txt
+```
+
 Configure and test with Meson:
 
 ```sh
@@ -49,15 +59,16 @@ meson test -C builddir
 Run the Python unit tests directly:
 
 ```sh
-python3 -m unittest discover -s tests
+.venv/bin/python -m unittest discover -s tests
 ```
 
-GNOME Builder runs the app inside the Flatpak sandbox described by `io.github.jackrabbithanna.solarsystembuilder.json`. NumPy is installed by an inline Flatpak module in that manifest.
+GNOME Builder runs the app inside the Flatpak sandbox described by `io.github.jackrabbithanna.solarsystembuilder.json`. NumPy, Astropy, PyERFA, and the offline IERS data are installed by inline Flatpak modules in that manifest; host Python packages are not visible to the app.
 
 ## Documentation
 
 Start with:
 
 - [User Interface](./docs/USER_INTERFACE.md)
+- [Reference Frames and Coordinate Transformations](./docs/REFERENCE_FRAMES.md)
 - [Orbital Data](./docs/ORBITAL_DATA.md)
 - [Physics](./docs/PHYSICS.md)

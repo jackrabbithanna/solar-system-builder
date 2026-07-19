@@ -56,6 +56,13 @@ class SimulationState:
 
 
 @dataclass(frozen=True)
+class SimulationSample:
+    elapsed_s: float
+    positions_m: np.ndarray
+    velocities_mps: np.ndarray
+
+
+@dataclass(frozen=True)
 class ConservationDiagnostics:
     kinetic_energy_j: float
     potential_energy_j: float
@@ -237,6 +244,42 @@ def advance_with_samples(
         integrator,
         collect_samples=True,
     )
+
+
+def advance_with_state_samples(
+    state: SimulationState,
+    total_dt_s: float,
+    mode: PhysicsMode = "post_newtonian",
+    max_step_s: float = DEFAULT_MAX_STEP_S,
+    integrator: Integrator = "velocity_verlet",
+) -> tuple[SimulationState, list[SimulationSample]]:
+    """Advance using bounded steps and retain time-tagged position/velocity samples."""
+
+    _validate_physics_mode(mode)
+    _validate_integrator(integrator)
+    if not np.isfinite(total_dt_s):
+        raise ValueError("total_dt_s must be finite")
+    if max_step_s <= 0.0 or not np.isfinite(max_step_s):
+        raise ValueError("max_step_s must be finite and positive")
+    if total_dt_s == 0.0:
+        return state.copy(), []
+    next_state = state.copy()
+    samples: list[SimulationSample] = []
+    remaining = float(total_dt_s)
+    direction = 1.0 if remaining > 0.0 else -1.0
+    bounded_step = abs(float(max_step_s))
+    while abs(remaining) > 0.0:
+        dt_s = direction * min(abs(remaining), bounded_step)
+        next_state = step(next_state, dt_s, mode, integrator)
+        samples.append(
+            SimulationSample(
+                next_state.elapsed_s,
+                next_state.positions_m.copy(),
+                next_state.velocities_mps.copy(),
+            )
+        )
+        remaining -= dt_s
+    return next_state, samples
 
 
 def _advance(
