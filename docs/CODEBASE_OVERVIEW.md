@@ -6,7 +6,7 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 
 - `src/main.py`: application object, app actions, About dialog, shortcuts dialog.
 - `src/window.py`: main GTK window coordinator, playback controls, body inspector, worker scheduling, and main-thread UI refreshes.
-- `src/canvas.py`: `SolarSystemCanvas` GTK drawing widget, canvas gestures/tooltips, zoom state, and body/group selection signals.
+- `src/canvas.py`: `SolarSystemCanvas` GTK drawing widget, toggleable 2D/scientific-3D Cairo rendering, camera gestures/tooltips, independent view state, and body/group selection signals.
 - `src/sidebar.py`: sidebar hierarchy widget and panel controllers for system settings and body/orbit inspector state.
 - `src/models.py`: schema-v11 `Body`, `FlybyData`, `SystemGroup`, `SystemReferenceFrame`, and `SolarSystem` dataclasses with validation, hierarchy, migration, canonical-state provenance, trail-frame settings, and JSON conversion.
 - `src/orbit_editing.py`: GTK-free body, group-barycenter, and binary-pair orbit mutations with playback-state rebuilding.
@@ -17,7 +17,7 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 - `src/physics.py`: NumPy-backed simulation state, acceleration, low-level `step()`, user-facing `advance()`, and sampled `advance_with_samples()`.
 - `src/scales.py`: pure scale helpers for time/distance units, elapsed-time formatting, adaptive internal step policy, approximation selection, focus containment, and trail reference frames.
 - `src/hierarchy.py`: GTK-free body/group hierarchy helpers for sidebar ordering, depth, group membership, relationship labels, and group centers.
-- `src/viewport.py`: GTK-free canvas projection, scale, view-center, barycenter, trail anchoring, zoom clamp, and hit-test helpers.
+- `src/viewport.py`: GTK-free 2D/3D canvas projection, orbit-camera, scale, view-center, barycenter, trail anchoring, zoom clamp, and depth-aware hit-test helpers.
 - `src/playback.py`: GTK-free `SimulationSession`, worker job/result contracts, active/overview/context state orchestration, generation checks, and inertial/relative trail appending and capping.
 - `src/presets.py`: loads bundled preset data from `src/presets/`.
 - `src/storage.py`: local JSON library using GLib app data paths.
@@ -33,7 +33,7 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 5. `playback.SimulationSession` builds copied full/active/overview/context `SimulationState` data and `SimulationJob` records for workers. At star-scale detail, Auto and scoped body policies replace each planet and its moons with a mass-weighted proxy; completed proxy deltas translate every member so local moon state remains intact. Hybrid focus combines focused bodies and coarse context into one temporary coupled state, then splits completed results so context gravity affects the focus without merging context proxies into the body model. Playback advances worker copies through `physics.advance_with_samples()` so internal substep positions can be reused for body and aggregate trails. Focused-parent trails translate each sample against the focused body or group barycenter before storage.
 6. Completed `SimulationJobResult` values are applied by `SimulationSession` on the GTK main thread; active body states are merged back into the full UI state, while temporary overview/context states update elapsed time and group trails without mutating bodies.
 7. `window.py` builds a `CanvasScene` snapshot from main-thread state and passes it to `SolarSystemCanvas`.
-8. `canvas.py` draws body positions/trails, system overview group positions/trails, or focused bodies with muted context markers, while delegating coordinate math, relative-trail anchoring, and hit tests to `viewport.py`.
+8. `canvas.py` draws body positions/trails, system overview group positions/trails, or focused bodies with muted context markers. The session-only canvas toggle selects the existing top-down 2D path or an orthographic XYZ view with an orbit camera, reference plane, and depth cues; the hybrid navigation inset remains 2D. Coordinate math, relative-trail anchoring, and hit tests stay in `viewport.py`, while playback retains all transient trail points as XYZ data so either view can be selected without losing history.
 9. Sidebar panel controllers emit edit/generate/settings intents; `window.py` validates complete body/group edits through GTK-free editing helpers, then rebuilds playback state on the main thread.
 10. Creation supports preset duplication, a JPL-compatible Sun-only system, custom single/binary/hierarchical star state, and persistent unbound flybys. Manual bodies accept complete Cartesian state or orbital elements; the flyby builder converts periapsis, velocity at infinity, starting distance, and 3D angles into canonical Cartesian state.
 11. Horizons lookup, ephemeris, and optional SBDB physical-data requests run on a dedicated single-worker executor. Playback is stopped before a fetch, the request epoch includes current simulation elapsed time, and target vectors are requested relative to the selected cataloged parent. Import drafts prefill mass from GM and radius from mean-radius or diameter data when JPL supplies them. Whole-system refresh captures one current UTC instant, requests every vector in the shared system frame, derives the matching TDB epoch from Horizons, and returns an immutable all-or-nothing batch. Completed results return through `GLib.idle_add` and only mutate the model on the GTK thread.
@@ -43,7 +43,7 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 
 Schema v11 adds persisted flyby inputs and the `flyby` canonical-state origin. It retains v10 trail-frame migration and v9 body-provenance/reference-frame migration. The bundled Solar System and Dwarf Planets presets migrate to their known JPL solar-system-barycentric frame; other legacy systems migrate to an app-local frame. A body can have only one direct group owner.
 
-`SolarSystem.settings` stores per-system playback and view preferences. The UI exposes the visible time step, time unit, accuracy profile, view mode, physics policy (serialized under the compatibility key `simulation_scope`), trail perspective, and distance editor unit, while the physics layer still receives SI values only.
+`SolarSystem.settings` stores per-system playback and view preferences. The UI exposes the visible time step, time unit, accuracy profile, view mode, physics policy (serialized under the compatibility key `simulation_scope`), trail perspective, and distance editor unit, while the physics layer still receives SI values only. The 2D/3D canvas choice is window-session state: it defaults to 2D at launch, survives system switches during that session, and is not serialized or treated as a dirty system edit.
 
 ## Reset Flow
 

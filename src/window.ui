@@ -116,39 +116,71 @@
                         <property name="margin-top">12</property>
                         <property name="margin-end">12</property>
                         <child>
-                          <object class="GtkButton" id="zoom_out_button">
-                            <property name="icon-name">zoom-out-symbolic</property>
-                            <property name="tooltip-text" translatable="yes">Zoom out</property>
-                            <style>
-                              <class name="osd"/>
-                            </style>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkButton" id="reset_zoom_button">
-                            <property name="tooltip-text" translatable="yes">Reset zoom and position</property>
-                            <property name="child">
-                              <object class="GtkImage">
-                                <property name="resource">/io/github/jackrabbithanna/solarsystembuilder/icons/reset-zoom-symbolic.svg</property>
+                          <object class="GtkBox">
+                            <property name="orientation">horizontal</property>
+                            <child>
+                              <object class="GtkToggleButton" id="view_2d_button">
+                                <property name="label" translatable="yes">2D</property>
+                                <property name="active">True</property>
+                                <property name="tooltip-text" translatable="yes">Show the top-down 2D canvas</property>
+                                <style>
+                                  <class name="osd"/>
+                                </style>
                               </object>
-                            </property>
+                            </child>
+                            <child>
+                              <object class="GtkToggleButton" id="view_3d_button">
+                                <property name="label" translatable="yes">3D</property>
+                                <property name="tooltip-text" translatable="yes">Show the rotatable scientific 3D canvas</property>
+                                <style>
+                                  <class name="osd"/>
+                                </style>
+                              </object>
+                            </child>
                             <style>
-                              <class name="osd"/>
+                              <class name="linked"/>
                             </style>
                           </object>
                         </child>
                         <child>
-                          <object class="GtkButton" id="zoom_in_button">
-                            <property name="icon-name">zoom-in-symbolic</property>
-                            <property name="tooltip-text" translatable="yes">Zoom in</property>
+                          <object class="GtkBox">
+                            <property name="orientation">horizontal</property>
+                            <child>
+                              <object class="GtkButton" id="zoom_out_button">
+                                <property name="icon-name">zoom-out-symbolic</property>
+                                <property name="tooltip-text" translatable="yes">Zoom out</property>
+                                <style>
+                                  <class name="osd"/>
+                                </style>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkButton" id="reset_zoom_button">
+                                <property name="tooltip-text" translatable="yes">Reset zoom, position, and camera</property>
+                                <property name="child">
+                                  <object class="GtkImage">
+                                    <property name="resource">/io/github/jackrabbithanna/solarsystembuilder/icons/reset-zoom-symbolic.svg</property>
+                                  </object>
+                                </property>
+                                <style>
+                                  <class name="osd"/>
+                                </style>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkButton" id="zoom_in_button">
+                                <property name="icon-name">zoom-in-symbolic</property>
+                                <property name="tooltip-text" translatable="yes">Zoom in</property>
+                                <style>
+                                  <class name="osd"/>
+                                </style>
+                              </object>
+                            </child>
                             <style>
-                              <class name="osd"/>
+                              <class name="linked"/>
                             </style>
                           </object>
                         </child>
-                        <style>
-                          <class name="linked"/>
-                        </style>
                       </object>
                     </child>
                   </object>

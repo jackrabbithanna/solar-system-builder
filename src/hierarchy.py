@@ -251,16 +251,23 @@ def group_label(bodies: list[Body], groups: list[SystemGroup], group: SystemGrou
     return f"{label} - {count} bodies"
 
 
-def group_center(bodies: list[Body], groups: list[SystemGroup], group_id: str) -> tuple[float, float] | None:
+def group_center(
+    bodies: list[Body],
+    groups: list[SystemGroup],
+    group_id: str,
+) -> tuple[float, float, float] | None:
     indices = body_indices_for_group(bodies, groups, group_id)
     if not indices:
         return None
     total_mass = sum(bodies[index].mass_kg for index in indices)
     if total_mass <= 0.0:
         return None
-    return (
-        sum(bodies[index].mass_kg * bodies[index].position_m[0] for index in indices) / total_mass,
-        sum(bodies[index].mass_kg * bodies[index].position_m[1] for index in indices) / total_mass,
+    return tuple(
+        sum(
+            bodies[index].mass_kg * bodies[index].position_m[axis]
+            for index in indices
+        ) / total_mass
+        for axis in range(3)
     )
 
 

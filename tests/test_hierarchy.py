@@ -74,6 +74,25 @@ class HierarchyTests(unittest.TestCase):
         self.assertIn("proxima-centauri-b", body_ids)
         self.assertIn("proxima-centauri-c-candidate", body_ids)
 
+    def test_group_center_retains_all_three_coordinates(self):
+        bodies = _sample_bodies()
+        bodies[0].position_m[2] = 3.0
+        bodies[1].position_m[2] = 6.0
+        bodies[2].position_m[2] = 9.0
+        groups = [
+            SystemGroup(
+                id="sol",
+                name="Sol",
+                kind="planetary_system",
+                body_ids=["sun", "earth"],
+            )
+        ]
+
+        center = hierarchy.group_center(bodies, groups, "sol")
+
+        self.assertAlmostEqual(center[0], AU / 2.0 + 0.25)
+        self.assertEqual(center[1:], (0.0, 5.25))
+
 
 def _sample_bodies() -> list[Body]:
     return [

@@ -1,4 +1,7 @@
+import math
 import unittest
+
+import numpy as np
 
 from src import viewport
 from src.constants import AU
@@ -12,6 +15,79 @@ class ViewportTests(unittest.TestCase):
 
         self.assertAlmostEqual(x, 101.0)
         self.assertAlmostEqual(y, 99.0)
+
+    def test_3d_projection_uses_xyz_and_reports_camera_depth(self):
+        camera = viewport.Camera3D(azimuth_deg=-90.0, elevation_deg=90.0)
+
+        point = viewport.project_3d(
+            (AU, AU, 2.0 * AU),
+            100.0,
+            100.0,
+            1.0 / AU,
+            (0.0, 0.0, 0.0),
+            "fit_system",
+            camera,
+        )
+
+        self.assertAlmostEqual(point.x, 101.0)
+        self.assertAlmostEqual(point.y, 99.0)
+        self.assertAlmostEqual(point.depth, 2.0 * AU)
+
+    def test_orthographic_projection_preserves_size_across_depth(self):
+        camera = viewport.Camera3D(azimuth_deg=-90.0, elevation_deg=90.0)
+
+        near = viewport.project_3d((AU, 0.0, AU), 0.0, 0.0, 1.0 / AU, (0.0, 0.0, 0.0), "fit_system", camera)
+        far = viewport.project_3d((AU, 0.0, -AU), 0.0, 0.0, 1.0 / AU, (0.0, 0.0, 0.0), "fit_system", camera)
+
+        self.assertAlmostEqual(near.x, far.x)
+        self.assertAlmostEqual(near.y, far.y)
+        self.assertGreater(near.depth, far.depth)
+
+    def test_3d_log_projection_compresses_full_radial_distance(self):
+        camera = viewport.Camera3D(azimuth_deg=0.0, elevation_deg=0.0)
+
+        point = viewport.project_3d(
+            (0.0, 0.0, AU),
+            0.0,
+            0.0,
+            1.0 / AU,
+            (0.0, 0.0, 0.0),
+            "log_overview",
+            camera,
+        )
+
+        self.assertAlmostEqual(point.y, -math.log(2.0))
+
+    def test_batch_3d_projection_matches_scalar_projection(self):
+        camera = viewport.Camera3D()
+        positions = np.array([[AU, 2.0 * AU, 3.0 * AU], [-AU, 0.0, AU]])
+
+        batch = viewport.project_points_3d(
+            positions,
+            100.0,
+            80.0,
+            1.0 / AU,
+            (0.0, 0.0, 0.0),
+            "log_overview",
+            camera,
+        )
+        scalar = [
+            viewport.project_3d(
+                position,
+                100.0,
+                80.0,
+                1.0 / AU,
+                (0.0, 0.0, 0.0),
+                "log_overview",
+                camera,
+            )
+            for position in positions
+        ]
+
+        np.testing.assert_allclose(
+            batch,
+            [(point.x, point.y, point.depth) for point in scalar],
+        )
 
     def test_zoom_clamping_honors_limits(self):
         self.assertEqual(viewport.clamp_zoom_factor(0.1), 1.0)
@@ -36,6 +112,21 @@ class ViewportTests(unittest.TestCase):
 
     def test_pan_delta_ignores_invalid_scale(self):
         self.assertEqual(viewport.pan_center_delta(20.0, 10.0, 0.0, "fit_system"), (0.0, 0.0))
+
+    def test_3d_pan_moves_in_the_camera_plane(self):
+        camera = viewport.Camera3D(azimuth_deg=-90.0, elevation_deg=90.0)
+
+        delta = viewport.pan_center_delta_3d(20.0, -10.0, 2.0, "fit_system", camera)
+
+        self.assertAlmostEqual(delta[0], -10.0)
+        self.assertAlmostEqual(delta[1], -5.0)
+        self.assertAlmostEqual(delta[2], 0.0)
+
+    def test_camera_drag_wraps_azimuth_and_clamps_elevation(self):
+        camera = viewport.camera_after_drag(viewport.Camera3D(5.0, 80.0), 20.0, 100.0)
+
+        self.assertAlmostEqual(camera.azimuth_deg, 358.0)
+        self.assertEqual(camera.elevation_deg, viewport.CAMERA_ELEVATION_LIMIT_DEG)
 
     def test_relative_trail_points_are_anchored_to_current_reference(self):
         self.assertEqual(
@@ -105,6 +196,30 @@ class ViewportTests(unittest.TestCase):
         self.assertEqual(horizontal.half_width_m, vertical.half_width_m)
         self.assertEqual(horizontal.half_height_m, vertical.half_height_m)
 
+    def test_3d_focused_fit_includes_out_of_plane_extent(self):
+        bodies = _bodies()
+        bodies[0].mass_kg = 1.0
+        bodies[1].mass_kg = 1.0
+        bodies[0].position_m = [0.0, 0.0, -AU]
+        bodies[1].position_m = [0.0, 0.0, AU]
+
+        bounds = viewport.focused_fit_bounds_3d(bodies, [0, 1])
+        scale = viewport.canvas_scale_3d(
+            400,
+            300,
+            bodies,
+            [0, 1],
+            bounds.center,
+            1.0,
+            "follow_selected",
+            use_focused_bounds=True,
+            focused_bounds=bounds,
+        )
+
+        self.assertEqual(bounds.center, (0.0, 0.0, 0.0))
+        self.assertGreater(bounds.radius_m, AU)
+        self.assertAlmostEqual(scale, 300.0 * 0.45 / bounds.radius_m)
+
     def test_focused_extent_expands_immediately_and_contracts_gradually(self):
         self.assertEqual(viewport.stabilize_focused_extent(100.0, 110.0), 110.0)
         self.assertEqual(viewport.stabilize_focused_extent(100.0, 90.0), 100.0)
@@ -164,6 +279,27 @@ class ViewportTests(unittest.TestCase):
         )
 
         self.assertEqual(entity.id, "b")
+
+    def test_3d_hit_test_selects_frontmost_overlapping_body(self):
+        bodies = _bodies()
+        bodies[0].position_m = [0.0, 0.0, -AU]
+        bodies[1].position_m = [0.0, 0.0, AU]
+
+        selected = viewport.body_index_at_point_3d(
+            bodies,
+            [0, 1],
+            100.0,
+            100.0,
+            200,
+            200,
+            1.0 / AU,
+            (0.0, 0.0, 0.0),
+            "fit_system",
+            viewport.Camera3D(azimuth_deg=-90.0, elevation_deg=90.0),
+            lambda _body: 4.0,
+        )
+
+        self.assertEqual(selected, 1)
 
     def test_empty_systems_return_safe_defaults(self):
         self.assertEqual(viewport.body_view_center([], "fit_system", 0), (0.0, 0.0))

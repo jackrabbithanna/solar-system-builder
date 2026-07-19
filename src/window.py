@@ -104,6 +104,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     step_back_button = Gtk.Template.Child()
     reset_button = Gtk.Template.Child()
     step_forward_button = Gtk.Template.Child()
+    view_2d_button = Gtk.Template.Child()
+    view_3d_button = Gtk.Template.Child()
     zoom_out_button = Gtk.Template.Child()
     reset_zoom_button = Gtk.Template.Child()
     zoom_in_button = Gtk.Template.Child()
@@ -209,6 +211,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.horizons_generation = 0
         self.horizons_refresh_cancel: threading.Event | None = None
         self.horizons_refresh_in_progress = False
+        self.render_mode = "2d"
         self.zoom_factor = 1.0
         self.timer_id = GLib.timeout_add(33, self._tick)
         self.sidebar_resize_id = 0
@@ -309,10 +312,14 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.canvas.connect("group-selected", self._on_canvas_group_selected)
         self.canvas.connect("focus-target-selected", self._on_canvas_focus_target_selected)
         self.canvas.connect("zoom-factor-changed", self._on_canvas_zoom_factor_changed)
+        self.canvas.connect("view-state-changed", self._on_canvas_view_state_changed)
         self.play_button.connect("clicked", self._on_play_clicked)
         self.step_back_button.connect("clicked", self._on_step_back_clicked)
         self.reset_button.connect("clicked", self._on_reset_clicked)
         self.step_forward_button.connect("clicked", self._on_step_forward_clicked)
+        self.view_3d_button.set_group(self.view_2d_button)
+        self.view_2d_button.connect("toggled", self._on_render_mode_toggled, "2d")
+        self.view_3d_button.connect("toggled", self._on_render_mode_toggled, "3d")
         self.zoom_out_button.connect("clicked", self._on_zoom_out_clicked)
         self.reset_zoom_button.connect("clicked", self._on_reset_zoom_clicked)
         self.zoom_in_button.connect("clicked", self._on_zoom_in_clicked)
@@ -451,6 +458,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.focus_target = None
         self.focus_state = None
         self.selected_group_id = None
+        self.canvas.reset_all_views()
+        self.zoom_factor = self.canvas.get_zoom_factor()
         self._populate_body_list()
         self._select_body(self.selected_index)
         self._load_system_editor()
@@ -673,8 +682,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             self.focus_group_id = self.selected_group_id
         else:
             self.focus_group_id = self._group_id_for_body_index(self.selected_index)
-        self.zoom_factor = 1.0
-        self.canvas.set_zoom_factor(1.0)
+        self.canvas.reset_all_views()
+        self.zoom_factor = self.canvas.get_zoom_factor()
         self._clear_dynamic_simulation_state()
         if reload_settings:
             self._load_settings_editor()
@@ -2845,8 +2854,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             trail_sample_interval_s=recommended_trail_sample_interval_s(visible_step_s),
         )
         self.focus_fit_session += 1
-        self.zoom_factor = 1.0
-        self.canvas.set_zoom_factor(1.0)
+        self.canvas.reset_all_views()
+        self.zoom_factor = self.canvas.get_zoom_factor()
         self._clear_dynamic_simulation_state()
         self._load_settings_editor()
         self._configure_focus_button(target)
@@ -2880,7 +2889,17 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self._set_zoom_factor(self.zoom_factor / 1.5)
 
     def _on_reset_zoom_clicked(self, _button) -> None:
-        self._set_zoom_factor(1.0)
+        self.canvas.reset_view()
+        self.zoom_factor = self.canvas.get_zoom_factor()
+        self._sync_zoom_controls()
+
+    def _on_render_mode_toggled(self, button, render_mode: str) -> None:
+        if not button.get_active():
+            return
+        self.render_mode = render_mode
+        self.canvas.set_render_mode(render_mode)
+        self.zoom_factor = self.canvas.get_zoom_factor()
+        self._sync_zoom_controls()
 
     def _on_zoom_in_clicked(self, _button) -> None:
         self._set_zoom_factor(self.zoom_factor * 1.5)
@@ -2907,6 +2926,10 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.zoom_factor = zoom_factor
         self._sync_zoom_controls()
 
+    def _on_canvas_view_state_changed(self, _canvas: SolarSystemCanvas) -> None:
+        self.zoom_factor = self.canvas.get_zoom_factor()
+        self._sync_zoom_controls()
+
     def _set_zoom_factor(self, zoom_factor: float) -> None:
         self.canvas.set_zoom_factor(zoom_factor)
         self.zoom_factor = self.canvas.get_zoom_factor()
@@ -2915,7 +2938,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
 
     def _sync_zoom_controls(self) -> None:
         self.zoom_out_button.set_sensitive(self.zoom_factor > 1.0)
-        self.reset_zoom_button.set_sensitive(self.zoom_factor > 1.0)
+        self.reset_zoom_button.set_sensitive(not self.canvas.view_is_default())
         self.zoom_in_button.set_sensitive(self.zoom_factor < 64.0)
 
     def _on_reset_clicked(self, _button) -> None:
@@ -3205,7 +3228,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _context_positions(self):
         return self.simulation.context_positions(self.system.bodies, self.system.groups, self.focus_target)
 
-    def _group_center(self, group_id: str) -> tuple[float, float] | None:
+    def _group_center(self, group_id: str) -> tuple[float, float, float] | None:
         return hierarchy.group_center(self.system.bodies, self.system.groups, group_id)
 
     def _distance_factor(self) -> float:

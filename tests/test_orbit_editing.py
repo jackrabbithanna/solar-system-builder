@@ -209,9 +209,9 @@ def _system(bodies: list[Body], groups: list[SystemGroup] | None = None) -> Sola
 
 def _session_with_dynamic_state(bodies: list[Body]) -> SimulationSession:
     simulation = SimulationSession.from_bodies(bodies)
-    simulation.trails[0].append((1.0, 1.0))
-    simulation.overview_trails["overview"] = [(2.0, 2.0)]
-    simulation.context_trails["context"] = [(3.0, 3.0)]
+    simulation.trails[0].append((1.0, 1.0, 1.0))
+    simulation.overview_trails["overview"] = [(2.0, 2.0, 2.0)]
+    simulation.context_trails["context"] = [(3.0, 3.0, 3.0)]
     simulation.overview_state = simulation.state.copy()
     simulation.context_state = simulation.state.copy()
     return simulation

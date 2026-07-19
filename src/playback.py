@@ -188,11 +188,11 @@ class SimulationSession:
     def __init__(self, state: SimulationState):
         self.state = state
         self.generation = 0
-        self.trails: list[list[tuple[float, float]]] = [[] for _ in state.masses_kg]
-        self.overview_trails: dict[str, list[tuple[float, float]]] = {}
+        self.trails: list[list[tuple[float, float, float]]] = [[] for _ in state.masses_kg]
+        self.overview_trails: dict[str, list[tuple[float, float, float]]] = {}
         self.overview_state: SimulationState | None = None
         self.overview_entity_ids: list[str] = []
-        self.context_trails: dict[str, list[tuple[float, float]]] = {}
+        self.context_trails: dict[str, list[tuple[float, float, float]]] = {}
         self.context_state: SimulationState | None = None
         self.context_entity_ids: list[str] = []
         self.last_trail_sample_elapsed_s = state.elapsed_s
@@ -1090,7 +1090,7 @@ def select_trail_samples(
 
 
 def append_body_trails(
-    trails: list[list[tuple[float, float]]],
+    trails: list[list[tuple[float, float, float]]],
     bodies: list[Body],
     position_samples,
     active_indices: list[int],
@@ -1116,13 +1116,13 @@ def append_body_trails(
             continue
         trail = trails[body_index]
         for positions_m in selected_samples:
-            trail.append((float(positions_m[sample_index][0]), float(positions_m[sample_index][1])))
+            trail.append(tuple(float(positions_m[sample_index][axis]) for axis in range(3)))
         cap_trail(trail, limit)
     return updated_last_elapsed_s
 
 
 def append_entity_trails(
-    trails: dict[str, list[tuple[float, float]]],
+    trails: dict[str, list[tuple[float, float, float]]],
     entity_ids: list[str],
     position_samples,
     start_elapsed_s: float,
@@ -1145,12 +1145,12 @@ def append_entity_trails(
     for entity_index, entity_id in enumerate(entity_ids):
         trail = trails.setdefault(entity_id, [])
         for positions_m in selected_samples:
-            trail.append((float(positions_m[entity_index][0]), float(positions_m[entity_index][1])))
+            trail.append(tuple(float(positions_m[entity_index][axis]) for axis in range(3)))
         cap_trail(trail, limit)
     return updated_last_elapsed_s if update_last_elapsed and selected_samples else last_trail_sample_elapsed_s
 
 
-def cap_trail(trail: list[tuple[float, float]], limit: int = TRAIL_POINT_LIMIT) -> None:
+def cap_trail(trail: list[tuple[float, float, float]], limit: int = TRAIL_POINT_LIMIT) -> None:
     if len(trail) > limit:
         del trail[: len(trail) - limit]
 

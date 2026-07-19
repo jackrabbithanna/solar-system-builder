@@ -116,7 +116,7 @@ class PlaybackTests(unittest.TestCase):
                 settings,
             )
         )
-        self.assertEqual(session.trails[1], [(11.0, 0.0)])
+        self.assertEqual(session.trails[1], [(11.0, 0.0, 0.0)])
         self.assertEqual(session.trails[2], [])
 
     def test_focused_timing_collapses_moons_only_above_planet_detail(self):
@@ -194,17 +194,17 @@ class PlaybackTests(unittest.TestCase):
 
     def test_focused_trail_reference_uses_body_or_group_barycenter(self):
         bodies = [
-            _body("sun", kind="star", mass=3.0, position=[0.0, 0.0, 0.0]),
-            _body("planet", mass=1.0, position=[4.0, 0.0, 0.0], parent_id="sun"),
+            _body("sun", kind="star", mass=3.0, position=[0.0, 0.0, 3.0]),
+            _body("planet", mass=1.0, position=[4.0, 0.0, 7.0], parent_id="sun"),
         ]
         groups = [
             SystemGroup(id="system", name="System", kind="planetary_system", body_ids=["sun"])
         ]
 
         self.assertEqual(focused_trail_reference_indices(bodies, groups, "body:sun"), [0])
-        self.assertEqual(focused_trail_reference_position(bodies, groups, "body:sun"), (0.0, 0.0))
+        self.assertEqual(focused_trail_reference_position(bodies, groups, "body:sun"), (0.0, 0.0, 3.0))
         self.assertEqual(focused_trail_reference_indices(bodies, groups, "group:system"), [0, 1])
-        self.assertEqual(focused_trail_reference_position(bodies, groups, "group:system"), (1.0, 0.0))
+        self.assertEqual(focused_trail_reference_position(bodies, groups, "group:system"), (1.0, 0.0, 4.0))
 
     def test_proxy_state_conserves_mass_barycenter_and_momentum(self):
         state = SimulationState(
@@ -251,7 +251,7 @@ class PlaybackTests(unittest.TestCase):
 
         self.assertEqual(bodies[2].position_m[0] - bodies[1].position_m[0], 4.0)
         self.assertEqual(bodies[2].velocity_mps[0] - bodies[1].velocity_mps[0], 4.0)
-        self.assertEqual(session.trails[1], [(10.0, 0.0)])
+        self.assertEqual(session.trails[1], [(10.0, 0.0, 0.0)])
         self.assertEqual(session.trails[2], [])
 
     def test_work_estimate_uses_absolute_substeps_and_body_count_squared(self):
@@ -369,16 +369,16 @@ class PlaybackTests(unittest.TestCase):
         self.assertTrue(session.apply_result(result, bodies, [], settings))
 
         self.assertEqual(bodies[2].position_m[0], 30.0)
-        self.assertEqual(session.context_trails["star"], [(15.0, 0.0)])
-        self.assertEqual(session.context_trails["context-other"], [(30.0, 0.0)])
+        self.assertEqual(session.context_trails["star"], [(15.0, 0.0, 0.0)])
+        self.assertEqual(session.context_trails["context-other"], [(30.0, 0.0, 0.0)])
 
     def test_trail_appending_uses_sampled_positions_and_caps_limit(self):
         bodies = [_body("a"), _body("b")]
-        trails = [[(-10.0, -10.0)], []]
+        trails = [[(-10.0, -10.0, -10.0)], []]
         samples = [
-            np.array([[1.0, 2.0, 0.0], [10.0, 20.0, 0.0]]),
-            np.array([[3.0, 4.0, 0.0], [30.0, 40.0, 0.0]]),
-            np.array([[5.0, 6.0, 0.0], [50.0, 60.0, 0.0]]),
+            np.array([[1.0, 2.0, 3.0], [10.0, 20.0, 30.0]]),
+            np.array([[3.0, 4.0, 5.0], [30.0, 40.0, 50.0]]),
+            np.array([[5.0, 6.0, 7.0], [50.0, 60.0, 70.0]]),
         ]
 
         last_elapsed = playback.append_body_trails(
@@ -394,8 +394,8 @@ class PlaybackTests(unittest.TestCase):
         )
 
         self.assertEqual(last_elapsed, 3.0)
-        self.assertEqual(trails[0], [(3.0, 4.0), (5.0, 6.0)])
-        self.assertEqual(trails[1], [(30.0, 40.0), (50.0, 60.0)])
+        self.assertEqual(trails[0], [(3.0, 4.0, 5.0), (5.0, 6.0, 7.0)])
+        self.assertEqual(trails[1], [(30.0, 40.0, 50.0), (50.0, 60.0, 70.0)])
 
     def test_negative_step_returns_frame_samples_with_correct_elapsed_direction(self):
         samples = [
@@ -564,8 +564,8 @@ class PlaybackTests(unittest.TestCase):
 
         self.assertEqual(bodies[0].position_m[0], 10.0)
         self.assertEqual(bodies[1].position_m[0], 20.0)
-        self.assertEqual(session.trails[0], [(10.0, 0.0)])
-        self.assertEqual(session.trails[1], [(20.0, 0.0)])
+        self.assertEqual(session.trails[0], [(10.0, 0.0, 0.0)])
+        self.assertEqual(session.trails[1], [(20.0, 0.0, 0.0)])
 
     def test_focused_parent_frame_records_moon_relative_to_planet(self):
         bodies = [
@@ -591,7 +591,7 @@ class PlaybackTests(unittest.TestCase):
         self.assertEqual(job.plan.trail_reference_indices, [1])
         self.assertTrue(session.apply_result(result, bodies, [], settings))
         self.assertEqual(session.trails[1], [])
-        self.assertEqual(session.trails[2], [(5.0, 2.0)])
+        self.assertEqual(session.trails[2], [(5.0, 2.0, 0.0)])
 
     def test_focused_parent_frame_records_relative_trails_while_stepping_backward(self):
         bodies = [
@@ -614,7 +614,7 @@ class PlaybackTests(unittest.TestCase):
         )
 
         self.assertTrue(session.apply_result(result, bodies, [], settings))
-        self.assertEqual(session.trails[1], [(2.0, 1.0)])
+        self.assertEqual(session.trails[1], [(2.0, 1.0, 0.0)])
 
     def test_system_inertial_frame_records_absolute_focused_trails(self):
         bodies = [
@@ -637,8 +637,8 @@ class PlaybackTests(unittest.TestCase):
 
         self.assertIsNone(job.plan.trail_reference_indices)
         self.assertTrue(session.apply_result(result, bodies, [], settings))
-        self.assertEqual(session.trails[0], [(10.0, 0.0)])
-        self.assertEqual(session.trails[1], [(12.0, 1.0)])
+        self.assertEqual(session.trails[0], [(10.0, 0.0, 0.0)])
+        self.assertEqual(session.trails[1], [(12.0, 1.0, 0.0)])
 
     def test_session_applies_system_overview_without_mutating_body_positions(self):
         bodies = [
@@ -664,8 +664,8 @@ class PlaybackTests(unittest.TestCase):
         self.assertEqual(bodies[0].position_m[0], 0.0)
         self.assertEqual(bodies[1].position_m[0], 100.0)
         self.assertEqual(session.state.elapsed_s, 1.0)
-        self.assertEqual(session.overview_trails["ga"], [(5.0, 0.0)])
-        self.assertEqual(session.overview_trails["gb"], [(105.0, 0.0)])
+        self.assertEqual(session.overview_trails["ga"], [(5.0, 0.0, 0.0)])
+        self.assertEqual(session.overview_trails["gb"], [(105.0, 0.0, 0.0)])
 
     def test_session_applies_hybrid_focus_result_with_display_only_context(self):
         bodies = [
@@ -691,14 +691,14 @@ class PlaybackTests(unittest.TestCase):
         self.assertEqual(bodies[1].position_m[0], 20.0)
         self.assertEqual(bodies[2].position_m[0], 100.0)
         self.assertEqual(session.context_state.positions_m[0][0], 110.0)
-        self.assertEqual(session.context_trails["context-other"], [(110.0, 0.0)])
+        self.assertEqual(session.context_trails["context-other"], [(110.0, 0.0, 0.0)])
 
     def test_session_replace_bodies_resets_dynamic_state_and_generation(self):
         bodies = [_body("a")]
         session = playback.SimulationSession.from_bodies(bodies)
         session.state.elapsed_s = 42.0
-        session.trails[0].append((1.0, 1.0))
-        session.overview_trails["x"] = [(2.0, 2.0)]
+        session.trails[0].append((1.0, 1.0, 1.0))
+        session.overview_trails["x"] = [(2.0, 2.0, 2.0)]
 
         session.replace_bodies([_body("b", position=[3.0, 0.0, 0.0])])
 

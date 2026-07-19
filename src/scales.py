@@ -318,18 +318,19 @@ def focused_trail_reference_position(
     bodies: list[Body],
     groups: list[SystemGroup],
     focus_target: str | None,
-) -> tuple[float, float] | None:
+) -> tuple[float, float, float] | None:
     indices = focused_trail_reference_indices(bodies, groups, focus_target)
     if not indices:
         return None
     total_mass = sum(bodies[index].mass_kg for index in indices)
     if total_mass <= 0.0:
         return None
-    return (
-        sum(bodies[index].mass_kg * bodies[index].position_m[0] for index in indices)
-        / total_mass,
-        sum(bodies[index].mass_kg * bodies[index].position_m[1] for index in indices)
-        / total_mass,
+    return tuple(
+        sum(
+            bodies[index].mass_kg * bodies[index].position_m[axis]
+            for index in indices
+        ) / total_mass
+        for axis in range(3)
     )
 
 
