@@ -23,6 +23,7 @@ from .scales import CanvasBounds, OverviewEntity, collapsed_child_counts
 
 Trail = list[tuple[float, float]]
 Positions = Sequence[Sequence[float]]
+PAN_DRAG_THRESHOLD_PX = 4.0
 
 
 @dataclass
@@ -67,17 +68,31 @@ class SolarSystemCanvas(Gtk.DrawingArea):
         super().__init__(**kwargs)
         self._scene = CanvasScene()
         self._zoom_factor = 1.0
+        self._pan_offset_m = (0.0, 0.0)
+        self._drag_start_pan_offset_m = (0.0, 0.0)
+        self._drag_scale = 1.0
+        self._drag_view_mode = "fit_system"
+        self._drag_active = False
+        self._drag_moved = False
         self._focused_fit_key: tuple[int, tuple[int, ...]] | None = None
         self._focused_fit_bounds: CanvasBounds | None = None
         self.set_draw_func(self._draw)
         self.set_has_tooltip(True)
         self.connect("query-tooltip", self._on_query_tooltip)
         click_controller = Gtk.GestureClick.new()
-        click_controller.connect("pressed", self._on_pressed)
+        click_controller.connect("pressed", self._on_click_pressed)
+        click_controller.connect("released", self._on_click_released)
         self.add_controller(click_controller)
         scroll_controller = Gtk.EventControllerScroll.new(Gtk.EventControllerScrollFlags.VERTICAL)
         scroll_controller.connect("scroll", self._on_scroll)
         self.add_controller(scroll_controller)
+        drag_gesture = Gtk.GestureDrag.new()
+        drag_gesture.set_button(Gdk.BUTTON_PRIMARY)
+        drag_gesture.connect("drag-begin", self._on_drag_begin)
+        drag_gesture.connect("drag-update", self._on_drag_update)
+        drag_gesture.connect("drag-end", self._on_drag_end)
+        drag_gesture.connect("cancel", self._on_drag_cancel)
+        self.add_controller(drag_gesture)
 
     def set_scene(self, scene: CanvasScene) -> None:
         self._scene = scene
@@ -106,9 +121,18 @@ class SolarSystemCanvas(Gtk.DrawingArea):
 
     def set_zoom_factor(self, zoom_factor: float) -> None:
         clamped = viewport.clamp_zoom_factor(zoom_factor)
+        pan_changed = False
+        if clamped == 1.0 and self._pan_offset_m != (0.0, 0.0):
+            self._pan_offset_m = (0.0, 0.0)
+            self._drag_active = False
+            pan_changed = True
         if clamped == self._zoom_factor:
+            if pan_changed:
+                self._update_pan_cursor()
+                self.queue_draw()
             return
         self._zoom_factor = clamped
+        self._update_pan_cursor()
         self.emit("zoom-factor-changed", self._zoom_factor)
         self.queue_draw()
 
@@ -123,6 +147,80 @@ class SolarSystemCanvas(Gtk.DrawingArea):
             self.set_zoom_factor(self._zoom_factor / 1.5)
             return True
         return False
+
+    def _on_drag_begin(self, gesture, start_x: float, start_y: float) -> None:
+        width = self.get_width()
+        height = self.get_height()
+        if (
+            self._zoom_factor <= 1.0
+            or width <= 0
+            or height <= 0
+            or self._point_in_overview_inset(start_x, start_y)
+        ):
+            gesture.set_state(Gtk.EventSequenceState.DENIED)
+            return
+
+        scale = self._current_canvas_scale(width, height)
+        if scale is None or scale <= 0.0 or not math.isfinite(scale):
+            gesture.set_state(Gtk.EventSequenceState.DENIED)
+            return
+        self._drag_start_pan_offset_m = self._pan_offset_m
+        self._drag_scale = scale
+        self._drag_view_mode = self._scene.view_mode
+        self._drag_active = True
+        self._drag_moved = False
+        self._update_pan_cursor()
+
+    def _on_drag_update(self, _gesture, offset_x: float, offset_y: float) -> None:
+        if not self._drag_active:
+            return
+        if math.hypot(offset_x, offset_y) < PAN_DRAG_THRESHOLD_PX:
+            return
+        self._drag_moved = True
+        delta_x_m, delta_y_m = viewport.pan_center_delta(
+            offset_x,
+            offset_y,
+            self._drag_scale,
+            self._drag_view_mode,
+        )
+        self._pan_offset_m = (
+            self._drag_start_pan_offset_m[0] + delta_x_m,
+            self._drag_start_pan_offset_m[1] + delta_y_m,
+        )
+        self.queue_draw()
+
+    def _on_drag_end(self, _gesture, _offset_x: float, _offset_y: float) -> None:
+        self._finish_drag()
+
+    def _on_drag_cancel(self, _gesture, _sequence) -> None:
+        self._finish_drag()
+
+    def _finish_drag(self) -> None:
+        if not self._drag_active:
+            return
+        self._drag_active = False
+        self._update_pan_cursor()
+
+    def _update_pan_cursor(self) -> None:
+        if self._drag_active:
+            cursor_name = "grabbing"
+        elif self._zoom_factor > 1.0:
+            cursor_name = "grab"
+        else:
+            cursor_name = None
+        self.set_cursor_from_name(cursor_name)
+
+    def _point_in_overview_inset(self, x: float, y: float) -> bool:
+        if not self._scene.using_hybrid_focus or len(self._scene.inset_entities) < 2:
+            return False
+        return viewport.point_in_rect(
+            x,
+            y,
+            viewport.overview_inset_rect(self.get_width(), self.get_height()),
+        )
+
+    def _on_click_pressed(self, _gesture, _n_press: int, _x: float, _y: float) -> None:
+        self._drag_moved = False
 
     def _on_query_tooltip(self, _widget, x: int, y: int, _keyboard_mode: bool, tooltip) -> bool:
         inset_entity = self._inset_entity_at_point(float(x), float(y))
@@ -139,7 +237,9 @@ class SolarSystemCanvas(Gtk.DrawingArea):
             return True
         return False
 
-    def _on_pressed(self, _gesture, _n_press: int, x: float, y: float) -> None:
+    def _on_click_released(self, _gesture, _n_press: int, x: float, y: float) -> None:
+        if self._drag_moved:
+            return
         inset_entity = self._inset_entity_at_point(x, y)
         if inset_entity is not None:
             target = self._scene.inset_targets.get(inset_entity.id)
@@ -167,8 +267,9 @@ class SolarSystemCanvas(Gtk.DrawingArea):
             self._draw_system_overview(cr, width, height)
             return
 
-        center_x_m, center_y_m = self._view_center()
-        scale = self._canvas_scale(width, height, center_x_m, center_y_m)
+        base_center_x_m, base_center_y_m = self._base_view_center()
+        center_x_m, center_y_m = self._view_center(base_center_x_m, base_center_y_m)
+        scale = self._canvas_scale(width, height, base_center_x_m, base_center_y_m)
         origin_x = width / 2.0
         origin_y = height / 2.0
         active_indices = set(self._scene.active_indices)
@@ -228,13 +329,14 @@ class SolarSystemCanvas(Gtk.DrawingArea):
         positions = self._scene.overview_positions
         if not entities or len(positions) == 0:
             return
-        center_x_m, center_y_m = viewport.overview_view_center(entities, positions)
+        base_center_x_m, base_center_y_m = viewport.overview_view_center(entities, positions)
+        center_x_m, center_y_m = self._view_center(base_center_x_m, base_center_y_m)
         scale = viewport.overview_canvas_scale(
             width,
             height,
             positions,
-            center_x_m,
-            center_y_m,
+            base_center_x_m,
+            base_center_y_m,
             self._zoom_factor,
             self._scene.view_mode,
         )
@@ -402,8 +504,9 @@ class SolarSystemCanvas(Gtk.DrawingArea):
         if width <= 0 or height <= 0:
             return None
 
-        center_x_m, center_y_m = self._view_center()
-        scale = self._canvas_scale(width, height, center_x_m, center_y_m)
+        base_center_x_m, base_center_y_m = self._base_view_center()
+        center_x_m, center_y_m = self._view_center(base_center_x_m, base_center_y_m)
+        scale = self._canvas_scale(width, height, base_center_x_m, base_center_y_m)
         return viewport.body_index_at_point(
             self._scene.bodies,
             self._scene.active_indices,
@@ -435,13 +538,14 @@ class SolarSystemCanvas(Gtk.DrawingArea):
 
         if not entities or len(positions) == 0:
             return None
-        center_x_m, center_y_m = viewport.overview_view_center(entities, positions)
+        base_center_x_m, base_center_y_m = viewport.overview_view_center(entities, positions)
+        center_x_m, center_y_m = self._view_center(base_center_x_m, base_center_y_m)
         scale = viewport.overview_canvas_scale(
             width,
             height,
             positions,
-            center_x_m,
-            center_y_m,
+            base_center_x_m,
+            base_center_y_m,
             self._zoom_factor,
             self._scene.view_mode,
         )
@@ -459,7 +563,7 @@ class SolarSystemCanvas(Gtk.DrawingArea):
             hit_radius,
         )
 
-    def _view_center(self) -> tuple[float, float]:
+    def _base_view_center(self) -> tuple[float, float]:
         return viewport.body_view_center(
             self._scene.bodies,
             self._scene.view_mode,
@@ -467,6 +571,33 @@ class SolarSystemCanvas(Gtk.DrawingArea):
             self._scene.selected_group_center,
             self._focused_fit_bounds if self._scene.using_focused_fit else None,
         )
+
+    def _view_center(self, base_center_x_m: float, base_center_y_m: float) -> tuple[float, float]:
+        return (
+            base_center_x_m + self._pan_offset_m[0],
+            base_center_y_m + self._pan_offset_m[1],
+        )
+
+    def _current_canvas_scale(self, width: int, height: int) -> float | None:
+        if self._scene.using_system_overview:
+            entities = self._scene.overview_entities
+            positions = self._scene.overview_positions
+            if not entities or len(positions) < len(entities):
+                return None
+            center_x_m, center_y_m = viewport.overview_view_center(entities, positions)
+            return viewport.overview_canvas_scale(
+                width,
+                height,
+                positions,
+                center_x_m,
+                center_y_m,
+                self._zoom_factor,
+                self._scene.view_mode,
+            )
+        if not self._scene.bodies or not self._scene.active_indices:
+            return None
+        center_x_m, center_y_m = self._base_view_center()
+        return self._canvas_scale(width, height, center_x_m, center_y_m)
 
     def _canvas_scale(self, width: int, height: int, center_x_m: float, center_y_m: float) -> float:
         return viewport.canvas_scale(

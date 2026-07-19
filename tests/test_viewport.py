@@ -18,6 +18,25 @@ class ViewportTests(unittest.TestCase):
         self.assertEqual(viewport.clamp_zoom_factor(128.0), 64.0)
         self.assertEqual(viewport.clamp_zoom_factor(4.0), 4.0)
 
+    def test_linear_pan_delta_keeps_dragged_view_center_under_pointer(self):
+        delta = viewport.pan_center_delta(20.0, -10.0, 2.0, "fit_system")
+
+        self.assertEqual(delta, (-10.0, -5.0))
+        x, y = viewport.project(0.0, 0.0, 100.0, 100.0, 2.0, *delta, "fit_system")
+        self.assertAlmostEqual(x, 120.0)
+        self.assertAlmostEqual(y, 90.0)
+
+    def test_log_pan_delta_keeps_dragged_view_center_under_pointer(self):
+        scale = 100.0 / AU
+        delta = viewport.pan_center_delta(120.0, -60.0, scale, "log_overview")
+
+        x, y = viewport.project(0.0, 0.0, 200.0, 200.0, scale, *delta, "log_overview")
+        self.assertAlmostEqual(x, 320.0)
+        self.assertAlmostEqual(y, 140.0)
+
+    def test_pan_delta_ignores_invalid_scale(self):
+        self.assertEqual(viewport.pan_center_delta(20.0, 10.0, 0.0, "fit_system"), (0.0, 0.0))
+
     def test_relative_trail_points_are_anchored_to_current_reference(self):
         self.assertEqual(
             viewport.trail_point_in_system_frame(2.0, -3.0, (10.0, 20.0)),

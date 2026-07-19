@@ -126,7 +126,7 @@
                         </child>
                         <child>
                           <object class="GtkButton" id="reset_zoom_button">
-                            <property name="tooltip-text" translatable="yes">Reset zoom</property>
+                            <property name="tooltip-text" translatable="yes">Reset zoom and position</property>
                             <property name="child">
                               <object class="GtkImage">
                                 <property name="resource">/io/github/jackrabbithanna/solarsystembuilder/icons/reset-zoom-symbolic.svg</property>

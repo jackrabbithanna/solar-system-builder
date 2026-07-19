@@ -15,17 +15,17 @@ The canvas shows the active simulation view.
 
 Move the pointer over a body or group marker to see its name. Click a body to select it in the body list and load its editable properties. In System Overview mode, click a group marker to select that group.
 
-Scroll over the canvas to zoom. Scrolling up zooms in and scrolling down zooms out.
+Scroll over the canvas to zoom. Scrolling up zooms in and scrolling down zooms out. While zoomed in, drag the canvas to move the view away from its automatic barycenter or focused-system center.
 
 ## Canvas Zoom Controls
 
 The canvas has overlay zoom buttons in the upper-right corner.
 
 - Zoom Out reduces the current zoom level.
-- Reset Zoom returns the canvas to the fitted default zoom.
+- Reset Zoom returns the canvas to the fitted default zoom and centered position.
 - Zoom In increases the current zoom level.
 
-Zoom is clamped between the default fitted scale and the maximum zoom level. Zoom Out and Reset Zoom are disabled while the canvas is already at the default fitted scale.
+Zoom is clamped between the default fitted scale and the maximum zoom level. Panning is enabled above the default fitted scale. Zoom Out and Reset Zoom are disabled while the canvas is already at the default fitted scale.
 
 ## Playback Controls
 

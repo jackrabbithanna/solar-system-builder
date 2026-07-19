@@ -10,7 +10,6 @@ Potential follow-up work for future sessions.
 
 ## Canvas And Interaction
 
-- Add pan controls.
 - Add fixed zoom or follow-selected-body modes.
 - Add orbit/trail visibility and styling options beyond the existing focused-parent perspective.
 - Add visual indication while playback simulation is running.

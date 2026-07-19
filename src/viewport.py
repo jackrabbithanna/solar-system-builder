@@ -43,6 +43,28 @@ def clamp_zoom_factor(zoom_factor: float, minimum: float = 1.0, maximum: float =
     return max(minimum, min(maximum, zoom_factor))
 
 
+def pan_center_delta(
+    offset_x_px: float,
+    offset_y_px: float,
+    scale: float,
+    view_mode: str,
+) -> tuple[float, float]:
+    """Return the world-space center change needed to follow a pointer drag."""
+    if scale <= 0.0 or not math.isfinite(scale):
+        return (0.0, 0.0)
+
+    compressed_x_m = offset_x_px / scale
+    compressed_y_m = -offset_y_px / scale
+    if view_mode == "log_overview":
+        compressed_distance_m = math.hypot(compressed_x_m, compressed_y_m)
+        if compressed_distance_m > 0.0:
+            distance_m = AU * math.expm1(compressed_distance_m / AU)
+            factor = distance_m / compressed_distance_m
+            compressed_x_m *= factor
+            compressed_y_m *= factor
+    return (-compressed_x_m, -compressed_y_m)
+
+
 def focused_fit_bounds(bodies: list[Body], active_indices: list[int]) -> CanvasBounds | None:
     indices = [index for index in active_indices if 0 <= index < len(bodies)]
     if not indices:
