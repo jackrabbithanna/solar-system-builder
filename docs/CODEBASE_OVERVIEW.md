@@ -43,7 +43,7 @@ Solar System Builder is a Python GNOME 49 / GTK4 / Libadwaita app built with Mes
 
 Schema v11 adds persisted flyby inputs and the `flyby` canonical-state origin. It retains v10 trail-frame migration and v9 body-provenance/reference-frame migration. The bundled Solar System and Dwarf Planets presets migrate to their known JPL solar-system-barycentric frame; other legacy systems migrate to an app-local frame. A body can have only one direct group owner.
 
-`SolarSystem.settings` stores per-system playback and view preferences. The UI exposes the visible time step, time unit, accuracy profile, view mode, physics policy (serialized under the compatibility key `simulation_scope`), trail perspective, and distance editor unit, while the physics layer still receives SI values only. The 2D/3D canvas choice is window-session state: it defaults to 2D at launch, survives system switches during that session, and is not serialized or treated as a dirty system edit.
+`SolarSystem.settings` stores per-system playback and view preferences. The UI exposes the visible time step, time unit, accuracy profile, view mode, physics policy (serialized under the compatibility key `simulation_scope`), trail perspective, and distance editor unit, while the physics layer still receives SI values only. The 2D/3D canvas choice is window-session state: it defaults to 3D at launch, survives system switches during that session, and is not serialized or treated as a dirty system edit.
 
 ## Reset Flow
 

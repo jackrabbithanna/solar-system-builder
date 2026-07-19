@@ -211,7 +211,8 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.horizons_generation = 0
         self.horizons_refresh_cancel: threading.Event | None = None
         self.horizons_refresh_in_progress = False
-        self.render_mode = "2d"
+        self.render_mode = "3d"
+        self.canvas.set_render_mode(self.render_mode)
         self.zoom_factor = 1.0
         self.timer_id = GLib.timeout_add(33, self._tick)
         self.sidebar_resize_id = 0

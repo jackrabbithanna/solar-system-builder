@@ -4,7 +4,7 @@
   <requires lib="Adw" version="1.0"/>
   <template class="SolarSystemBuilderWindow" parent="AdwApplicationWindow">
     <property name="title" translatable="yes">Solar System Builder</property>
-    <property name="default-width">1180</property>
+    <property name="default-width">1400</property>
     <property name="default-height">760</property>
     <property name="content">
       <object class="AdwToolbarView">
@@ -121,7 +121,6 @@
                             <child>
                               <object class="GtkToggleButton" id="view_2d_button">
                                 <property name="label" translatable="yes">2D</property>
-                                <property name="active">True</property>
                                 <property name="tooltip-text" translatable="yes">Show the top-down 2D canvas</property>
                                 <style>
                                   <class name="osd"/>
@@ -131,6 +130,7 @@
                             <child>
                               <object class="GtkToggleButton" id="view_3d_button">
                                 <property name="label" translatable="yes">3D</property>
+                                <property name="active">True</property>
                                 <property name="tooltip-text" translatable="yes">Show the rotatable scientific 3D canvas</property>
                                 <style>
                                   <class name="osd"/>

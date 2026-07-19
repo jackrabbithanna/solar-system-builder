@@ -1,6 +1,6 @@
 # User Interface
 
-Solar System Builder opens to a 2D, top-down simulation canvas with playback controls, simulation settings, and a right-side editor for saved systems and bodies.
+Solar System Builder opens to a rotatable 3D simulation canvas with playback controls, simulation settings, and a right-side editor for saved systems and bodies. Use the canvas toggle to switch to a top-down 2D view.
 
 ## Canvas
 
