@@ -9,10 +9,15 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from src.models import SCHEMA_VERSION, SolarSystem  # noqa: E402
 
 G = 6.67430e-11
 AU = 149_597_870_700.0
@@ -121,8 +126,8 @@ def build_preset() -> dict[str, Any]:
     proxima_c_position, proxima_c_velocity = circular_child_state(position_proxima, velocity_proxima, mass_proxima, 1.49, 240.0)
     alpha_a_candidate_position, alpha_a_candidate_velocity = circular_child_state(position_a, velocity_a, mass_a, 2.0, 80.0)
 
-    return {
-        "schema_version": 8,
+    preset = {
+        "schema_version": SCHEMA_VERSION,
         "id": "builtin-binary-system",
         "name": "Alpha Centauri",
         "epoch": "Approximate Alpha Centauri seed",
@@ -171,6 +176,7 @@ def build_preset() -> dict[str, Any]:
             body("alpha-centauri-a-candidate", "Alpha Centauri A Candidate", "planet", 100.0 * EARTH_MASS, 24_622_000.0, alpha_a_candidate_position, alpha_a_candidate_velocity, "#9b59b6", "alpha-centauri-a"),
         ],
     }
+    return SolarSystem.from_dict(preset).to_dict()
 
 
 def main() -> None:

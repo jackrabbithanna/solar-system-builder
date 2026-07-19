@@ -1,5 +1,5 @@
 {
-  "schema_version": 8,
+  "schema_version": 11,
   "id": "builtin-binary-system",
   "name": "Alpha Centauri",
   "epoch": "Approximate Alpha Centauri seed",
@@ -10,7 +10,8 @@
     "distance_unit": "AU",
     "view_mode": "fit_system",
     "simulation_scope": "auto",
-    "trail_sample_interval_s": 31557600000.0
+    "trail_sample_interval_s": 31557600000.0,
+    "trail_frame": "focused_parent"
   },
   "groups": [
     {
@@ -23,20 +24,20 @@
       "id": "alpha-centauri-ab-system",
       "name": "Alpha Centauri AB",
       "kind": "binary_system",
-      "parent_group_id": "alpha-centauri-system",
       "body_ids": [
         "alpha-centauri-a",
         "alpha-centauri-b"
-      ]
+      ],
+      "parent_group_id": "alpha-centauri-system"
     },
     {
       "id": "proxima-centauri-system",
       "name": "Proxima Centauri System",
       "kind": "planetary_system",
-      "parent_group_id": "alpha-centauri-system",
       "body_ids": [
         "proxima-centauri"
-      ]
+      ],
+      "parent_group_id": "alpha-centauri-system"
     }
   ],
   "bodies": [
@@ -56,7 +57,10 @@
         -2252.6225722170516,
         0.0
       ],
-      "color": "#fff1a8"
+      "color": "#fff1a8",
+      "visible": true,
+      "trail_enabled": true,
+      "state_origin": "cartesian"
     },
     {
       "id": "alpha-centauri-b",
@@ -74,7 +78,10 @@
         2636.5802238207953,
         0.0
       ],
-      "color": "#ffd166"
+      "color": "#ffd166",
+      "visible": true,
+      "trail_enabled": true,
+      "state_origin": "cartesian"
     },
     {
       "id": "proxima-centauri",
@@ -92,7 +99,10 @@
         0.0,
         0.0
       ],
-      "color": "#ff7b54"
+      "color": "#ff7b54",
+      "visible": true,
+      "trail_enabled": true,
+      "state_origin": "cartesian"
     },
     {
       "id": "proxima-centauri-d",
@@ -111,6 +121,9 @@
         0.0
       ],
       "color": "#b8f2e6",
+      "visible": true,
+      "trail_enabled": true,
+      "state_origin": "cartesian",
       "parent_id": "proxima-centauri"
     },
     {
@@ -130,6 +143,9 @@
         0.0
       ],
       "color": "#3a86ff",
+      "visible": true,
+      "trail_enabled": true,
+      "state_origin": "cartesian",
       "parent_id": "proxima-centauri"
     },
     {
@@ -149,6 +165,9 @@
         0.0
       ],
       "color": "#7f8c8d",
+      "visible": true,
+      "trail_enabled": true,
+      "state_origin": "cartesian",
       "parent_id": "proxima-centauri"
     },
     {
@@ -168,7 +187,18 @@
         0.0
       ],
       "color": "#9b59b6",
+      "visible": true,
+      "trail_enabled": true,
+      "state_origin": "cartesian",
       "parent_id": "alpha-centauri-a"
     }
-  ]
+  ],
+  "reference_frame": {
+    "epoch": "Approximate Alpha Centauri seed",
+    "time_scale": "",
+    "center_id": "app-local",
+    "reference_plane": "app-local XY",
+    "reference_system": "app-local",
+    "source": "app_local"
+  }
 }

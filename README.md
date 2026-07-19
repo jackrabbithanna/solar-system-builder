@@ -1,26 +1,41 @@
 # Solar System Builder
 
-Solar System Builder is a Python GNOME  / GTK4 / Libadwaita application for configuring and simulating solar systems. It currently provides a 2D top-down orbital view, a bundled Solar System preset, editable body parameters, local JSON persistence, and a NumPy-backed physics core with a first post-Newtonian approximation.
+Solar System Builder is a GNOME desktop application for creating, exploring, and simulating planetary and multi-star systems. Start from a bundled system, build one from scratch, or import current Solar System bodies from JPL Horizons, then inspect how the system evolves under gravity.
+
+The model stores complete three-dimensional positions and velocities in SI units. The current canvas presents those systems as an interactive top-down 2D view, making the app useful for visual exploration and simulation experiments rather than precision navigation or mission planning.
+
+## Features
+
+- Explore bundled Solar System, dwarf-planet, and Alpha Centauri presets.
+- Create single-star, binary-star, and hierarchical systems, then save editable copies in a local JSON library.
+- Add and organize stars, planets, dwarf planets, moons, comets, asteroids, nested system groups, and persistent unbound flybys.
+- Edit complete Cartesian state vectors or generate them from elliptic and hyperbolic orbital elements.
+- Search JPL Horizons for bodies, import available physical data, and atomically refresh an entire compatible system to one current epoch.
+- Run NumPy-backed N-body playback with bounded internal substeps, a first post-Newtonian correction, and scalable focus or barycenter approximation policies for large systems.
+- Follow selected bodies and systems, focus on planet-and-moon subsystems, use logarithmic overviews, and compare focused motion with coarse outside context.
+- Inspect barycenters, distances, orbital trails, elapsed simulation time, reference-frame provenance, and saved simulation settings.
 
 ## Using the App
 
-Use the canvas to inspect bodies, select objects, view trails, and zoom into the active simulation. The controls below the canvas set the visible time step, accuracy profile, view mode, physics policy, and focused trail perspective. The right sidebar switches systems, saves or duplicates them, and edits the selected body's mass, position, and velocity.
+Use the canvas to select bodies, inspect trails, and zoom through the active system. Playback controls step or continuously advance simulated time. The settings below the canvas control the visible time interval, integration accuracy, view scale, physics policy, and trail perspective.
 
-For a full guide to the canvas controls and simulation settings, see [User Interface Documenation](./docs/USER_INTERFACE.md).
+The sidebar switches between bundled and saved systems, exposes the body and group hierarchy, and provides creation, editing, orbital-generation, and JPL tools. Bundled presets are read-only; duplicate one when you want to edit or save changes.
 
-## TODO
-
-The current simulator comes with 3 preset systems. The Solar System with the official 8 planets, the Solar System largest Dwarf Planets, and the Alpha Centauri System.
-
-In the future I will add the user interface to add your own complex systems. 
+For a complete guide, see the [User Interface documentation](./docs/USER_INTERFACE.md).
 
 ## Screenshots
 
-<img src="./screenshots/dwarf-planets-simulation.png" alt="gnollama" align="left"/>
+### Solar System overview
 
-<img src="./screenshots/alpha-centauri-system.png" alt="gnollama" align="left"/>
+> Screenshot placeholder — capture the main Solar System preset with the hierarchy, playback controls, and several orbital trails visible. Suggested file: `screenshots/solar-system-overview.png`.
 
+### Focus and Fit
 
+> Screenshot placeholder — capture a focused planet-and-moon subsystem with focused-parent trails and the outside-context inset visible. Suggested file: `screenshots/focus-and-fit.png`.
+
+### Building a system
+
+> Screenshot placeholder — capture the system editor, body creation workflow, or JPL Horizons review dialog. Suggested file: `screenshots/system-editor-horizons.png`.
 
 ## Development
 

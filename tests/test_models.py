@@ -22,6 +22,7 @@ from src.presets import load_builtin_solar_system, load_builtin_solar_systems
 ALPHA_CENTAURI_GENERATOR_PATH = (
     Path(__file__).resolve().parent.parent / "scripts" / "generate_alpha_centauri_preset.py"
 )
+PRESET_DIR = Path(__file__).resolve().parent.parent / "src" / "presets"
 
 
 class ModelTests(unittest.TestCase):
@@ -85,6 +86,27 @@ class ModelTests(unittest.TestCase):
         self.assertNotIn("saturn", dwarf_body_ids)
         self.assertNotIn("uranus", dwarf_body_ids)
         self.assertNotIn("ceres", dwarf_body_ids)
+
+    def test_builtin_preset_json_uses_current_canonical_schema(self):
+        for filename in ("solar_system.json", "dwarf_planets.json", "binary_system.json"):
+            with self.subTest(filename=filename):
+                data = json.loads((PRESET_DIR / filename).read_text(encoding="utf-8"))
+                self.assertEqual(data["schema_version"], SCHEMA_VERSION)
+                self.assertIn("settings", data)
+                self.assertIn("trail_frame", data["settings"])
+                self.assertIn("reference_frame", data)
+                self.assertTrue(all("state_origin" in body for body in data["bodies"]))
+
+    def test_horizons_presets_share_epoch_and_common_body_data(self):
+        solar = json.loads((PRESET_DIR / "solar_system.json").read_text(encoding="utf-8"))
+        dwarf = json.loads((PRESET_DIR / "dwarf_planets.json").read_text(encoding="utf-8"))
+        solar_by_id = {body["id"]: body for body in solar["bodies"]}
+        dwarf_by_id = {body["id"]: body for body in dwarf["bodies"]}
+
+        self.assertEqual(solar["epoch"], dwarf["epoch"])
+        self.assertEqual(solar["reference_frame"], dwarf["reference_frame"])
+        for body_id in ("sun", "neptune", "pluto"):
+            self.assertEqual(solar_by_id[body_id], dwarf_by_id[body_id])
 
     def test_invalid_body_mass_fails(self):
         with self.assertRaises(ModelError):

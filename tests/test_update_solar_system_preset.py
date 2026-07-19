@@ -2,7 +2,9 @@ import copy
 import importlib.util
 import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from src.constants import AU, DAY
 from src.models import SCHEMA_VERSION
@@ -171,7 +173,226 @@ class UpdateSolarSystemPresetTests(unittest.TestCase):
         self.assertEqual(earth["data_source"]["source_name"], "JPL Horizons")
         self.assertEqual(earth["data_source"]["catalog_id"], targets["earth"])
         self.assertEqual(earth["data_source"]["retrieved_at"], "2026-06-15")
-        self.assertIn("EPHEM_TYPE=ELEMENTS", earth["data_source"]["source_url"])
+        self.assertIn("EPHEM_TYPE=VECTORS", earth["data_source"]["source_url"])
+        self.assertIn("OBJ_DATA=YES", earth["data_source"]["source_url"])
+
+    def test_apply_vectors_updates_available_physical_data_and_keeps_fallbacks(self):
+        targets = {"sun": "10", "earth": "399"}
+        preset = {
+            "schema_version": 8,
+            "id": "builtin-solar-system",
+            "name": "Solar System",
+            "epoch": "old",
+            "bodies": [
+                {
+                    "id": "sun",
+                    "name": "Sun",
+                    "kind": "star",
+                    "mass_kg": 1.0,
+                    "radius_m": 2.0,
+                    "position_m": [0.0, 0.0, 0.0],
+                    "velocity_mps": [0.0, 0.0, 0.0],
+                    "color": "#fff000",
+                },
+                {
+                    "id": "earth",
+                    "name": "Earth",
+                    "kind": "planet",
+                    "mass_kg": 3.0,
+                    "radius_m": 4.0,
+                    "position_m": [1.0, 0.0, 0.0],
+                    "velocity_mps": [0.0, 1.0, 0.0],
+                    "color": "#0000ff",
+                    "parent_id": "sun",
+                },
+            ],
+        }
+        vectors = {
+            body_id: update_solar_system_preset.StateVector(
+                [10.0, 20.0, 30.0],
+                [40.0, 50.0, 60.0],
+            )
+            for body_id in targets
+        }
+        elements = {
+            "earth": update_solar_system_preset.OrbitalElements(
+                semi_major_axis_m=AU,
+                orbital_period_s=DAY,
+                eccentricity=0.01,
+                inclination_deg=1.0,
+                longitude_of_ascending_node_deg=2.0,
+                argument_of_periapsis_deg=3.0,
+                mean_anomaly_deg=4.0,
+            )
+        }
+        physical = {
+            "sun": update_solar_system_preset.PhysicalProperties(
+                mass_kg=10.0,
+                mass_note="Mass derived from JPL GM",
+            ),
+            "earth": update_solar_system_preset.PhysicalProperties(
+                radius_m=40.0,
+                radius_note="Mean radius supplied by JPL Horizons",
+            ),
+        }
+
+        updated = update_solar_system_preset.apply_vectors(
+            preset,
+            vectors,
+            "2026-07-18 12:36:05.183656",
+            targets,
+            elements=elements,
+            retrieved_at="2026-07-18",
+            physical_properties=physical,
+            vector_urls={"sun": "https://example.test/sun", "earth": "https://example.test/earth"},
+        )
+
+        by_id = {body["id"]: body for body in updated["bodies"]}
+        self.assertEqual(by_id["sun"]["mass_kg"], 10.0)
+        self.assertEqual(by_id["sun"]["radius_m"], 2.0)
+        self.assertEqual(by_id["earth"]["mass_kg"], 3.0)
+        self.assertEqual(by_id["earth"]["radius_m"], 40.0)
+        self.assertIn("Curated preset radius retained", by_id["sun"]["data_source"]["citation"])
+        self.assertIn("Curated preset mass retained", by_id["earth"]["data_source"]["citation"])
+        self.assertEqual(by_id["sun"]["data_source"]["catalog_id"], "10")
+        self.assertEqual(updated["schema_version"], SCHEMA_VERSION)
+        self.assertEqual(updated["settings"]["trail_frame"], "focused_parent")
+        self.assertEqual(updated["reference_frame"]["epoch"], "2026-07-18 12:36:05.183656")
+
+    def test_fetch_preset_data_uses_one_current_instant_and_physical_precedence(self):
+        configs = [
+            {
+                "targets": {"sun": "10", "bennu": "101955;"},
+                "orbit_centers": {},
+                "sbdb_targets": {"bennu": "101955"},
+            },
+            {
+                "targets": {"sun": "10"},
+                "orbit_centers": {},
+                "sbdb_targets": {},
+            },
+        ]
+        calls = []
+
+        def fetch_vector(target_id, epoch, *, time_type, include_delta_t):
+            calls.append((target_id, epoch, time_type, include_delta_t))
+            if target_id == "10":
+                physical = update_solar_system_preset.PhysicalProperties(
+                    mass_kg=1.0,
+                    radius_m=2.0,
+                    mass_note="Mass derived from JPL GM",
+                    radius_note="Mean radius supplied by JPL Horizons",
+                )
+            else:
+                physical = update_solar_system_preset.PhysicalProperties(
+                    radius_m=241.0,
+                    radius_note="Radius supplied by JPL Horizons",
+                )
+            return update_solar_system_preset.FetchedVector(
+                update_solar_system_preset.StateVector([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]),
+                physical,
+                f"https://example.test/{target_id}",
+                69.183656,
+            )
+
+        elements = update_solar_system_preset.OrbitalElements(
+            semi_major_axis_m=AU,
+            orbital_period_s=DAY,
+            eccentricity=0.01,
+            inclination_deg=1.0,
+            longitude_of_ascending_node_deg=2.0,
+            argument_of_periapsis_deg=3.0,
+            mean_anomaly_deg=4.0,
+        )
+        sbdb = update_solar_system_preset.PhysicalProperties(
+            mass_kg=7.0,
+            radius_m=242.22,
+            mass_note="Mass derived from JPL SBDB GM",
+            radius_note="Radius derived from JPL SBDB diameter",
+        )
+        with (
+            patch.object(update_solar_system_preset, "fetch_horizons_vector_data", side_effect=fetch_vector),
+            patch.object(update_solar_system_preset, "fetch_horizons_elements", return_value=elements),
+            patch.object(update_solar_system_preset, "fetch_sbdb_physical", return_value=sbdb) as fetch_sbdb,
+        ):
+            fetched = update_solar_system_preset.fetch_preset_data(
+                configs,
+                utc_now=datetime(2026, 7, 18, 12, 34, 56, 789, tzinfo=timezone.utc),
+            )
+
+        self.assertEqual(fetched.utc_epoch, "2026-07-18T12:34:56Z")
+        self.assertEqual(fetched.tdb_epoch, "2026-07-18 12:36:05.183656")
+        self.assertEqual([call[0] for call in calls], ["10", "101955;"])
+        self.assertTrue(all(call[1:] == ("2026-07-18 12:34:56", "UT", True) for call in calls))
+        self.assertEqual(fetched.physical["101955;"].mass_kg, 7.0)
+        self.assertEqual(fetched.physical["101955;"].radius_m, 241.0)
+        fetch_sbdb.assert_called_once_with("101955")
+
+    def test_fetch_preset_data_rejects_inconsistent_tdb_offsets(self):
+        config = {
+            "targets": {"sun": "10", "earth": "399"},
+            "orbit_centers": {},
+            "sbdb_targets": {},
+        }
+
+        def fetch_vector(target_id, _epoch, *, time_type, include_delta_t):
+            self.assertEqual(time_type, "UT")
+            self.assertTrue(include_delta_t)
+            return update_solar_system_preset.FetchedVector(
+                update_solar_system_preset.StateVector([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]),
+                update_solar_system_preset.PhysicalProperties(),
+                "https://example.test/vector",
+                69.0 if target_id == "10" else 70.0,
+            )
+
+        with patch.object(
+            update_solar_system_preset,
+            "fetch_horizons_vector_data",
+            side_effect=fetch_vector,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "inconsistent TDB-UT"):
+                update_solar_system_preset.fetch_preset_data(
+                    [config],
+                    utc_now=datetime(2026, 7, 18, tzinfo=timezone.utc),
+                )
+
+    def test_fetch_preset_data_keeps_explicit_tdb_epoch_mode(self):
+        config = {
+            "targets": {"sun": "10"},
+            "orbit_centers": {},
+            "sbdb_targets": {},
+        }
+
+        def fetch_vector(target_id, epoch, *, time_type, include_delta_t):
+            self.assertEqual(target_id, "10")
+            self.assertEqual(epoch, "2026-07-18 00:00:00")
+            self.assertEqual(time_type, "TDB")
+            self.assertFalse(include_delta_t)
+            return update_solar_system_preset.FetchedVector(
+                update_solar_system_preset.StateVector([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]),
+                update_solar_system_preset.PhysicalProperties(mass_kg=1.0, radius_m=2.0),
+                "https://example.test/vector",
+            )
+
+        with patch.object(
+            update_solar_system_preset,
+            "fetch_horizons_vector_data",
+            side_effect=fetch_vector,
+        ):
+            fetched = update_solar_system_preset.fetch_preset_data(
+                [config],
+                epoch="2026-07-18 00:00:00",
+            )
+
+        self.assertIsNone(fetched.utc_epoch)
+        self.assertEqual(fetched.tdb_epoch, "2026-07-18 00:00:00")
+
+    def test_parse_args_accepts_all_and_defaults_to_current_instant(self):
+        with patch.object(sys, "argv", ["update_solar_system_preset.py", "--preset-set", "all"]):
+            args = update_solar_system_preset.parse_args()
+
+        self.assertEqual(args.preset_set, "all")
+        self.assertIsNone(args.epoch)
 
     def test_apply_vectors_accepts_dwarf_planet_target_set(self):
         targets = update_solar_system_preset.DWARF_PLANET_TARGETS
