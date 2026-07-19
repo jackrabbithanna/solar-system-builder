@@ -30,7 +30,7 @@ For a complete guide, see the [User Interface documentation](./docs/USER_INTERFA
 
 ### Solar System overview
 
-> Screenshot placeholder — capture the main Solar System preset with the hierarchy, playback controls, and several orbital trails visible. Suggested file: `screenshots/solar-system-overview.png`.
+<img src="./screenshots/solar-system-simulation.png"/>
 
 ### Focus and Fit
 
