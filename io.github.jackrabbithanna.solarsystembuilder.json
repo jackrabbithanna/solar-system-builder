@@ -98,7 +98,8 @@
             "sources" : [
                 {
                     "type" : "git",
-                    "url" : "file:///home/jackrabbithanna/Projects"
+                    "url" : "https://github.com/jackrabbithanna/solar-system-builder.git",
+                    "branch" : "main"
                 }
             ]
         }

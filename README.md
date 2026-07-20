@@ -42,27 +42,54 @@ For a complete guide, see the [User Interface documentation](./docs/USER_INTERFA
 
 ## Development
 
-For host-side tests, create a virtual environment and install the pinned numerical/astronomy dependencies:
+### Prerequisites
+
+GNOME Builder provides the SDK used to build and run the application. For host-side tests on Debian or Ubuntu, install Python virtual-environment support, PyGObject, and Gettext (`msgfmt`):
 
 ```sh
-python3 -m venv --system-site-packages .venv
-.venv/bin/python -m pip install -r requirements.txt
+sudo apt install python3-venv python3-gi gettext
 ```
 
-Configure and test with Meson:
+Equivalent package names can be used on other Linux distributions.
+
+### Host Test Environment
+
+From the repository root, create a virtual environment using the system Python and install the pinned numerical and astronomy dependencies plus the Meson test tools:
+
+```sh
+/usr/bin/python3 -m venv --system-site-packages .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m pip install meson ninja
+```
+
+`--system-site-packages` makes the distribution-provided PyGObject bindings available without installing GTK bindings from PyPI. Activate the environment again with `. .venv/bin/activate` when starting a new terminal session.
+
+Run the Python test suite directly:
+
+```sh
+python -m unittest discover -s tests
+```
+
+Then configure the Meson build directory and run its registered tests:
 
 ```sh
 meson setup builddir
 meson test -C builddir
 ```
 
-Run the Python unit tests directly:
+After the initial setup, use `meson setup --reconfigure builddir` when Meson files or build options change. Run both test commands after changes that affect behavior or packaging.
 
-```sh
-.venv/bin/python -m unittest discover -s tests
-```
+### Build and Run with GNOME Builder
 
-GNOME Builder runs the app inside the Flatpak sandbox described by `io.github.jackrabbithanna.solarsystembuilder.json`. NumPy, Astropy, PyERFA, and the offline IERS data are installed by inline Flatpak modules in that manifest; host Python packages are not visible to the app.
+1. Open the repository directory in GNOME Builder.
+2. Select the Flatpak build configuration from `io.github.jackrabbithanna.solarsystembuilder.json` if Builder asks for a configuration.
+3. Allow Builder to install the matching GNOME 49 SDK and Platform runtimes when prompted.
+4. Use **Build and Run** to build, install, and launch the application in its Flatpak sandbox.
+
+Use a clean rebuild after changing the Flatpak manifest or its dependency modules. NumPy, Astropy, PyERFA, and the offline IERS data are installed inside the sandbox by the manifest; packages installed in the host virtual environment are only for local tests and are not visible to the Flatpak application.
+
+Additional packaging details are in [Flatpak and NumPy](./docs/FLATPAK_AND_NUMPY.md).
 
 ## Documentation
 
