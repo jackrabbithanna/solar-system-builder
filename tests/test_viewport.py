@@ -153,6 +153,16 @@ class ViewportTests(unittest.TestCase):
             viewport.path_style_values("bold", selected=True),
             viewport.path_style_values("bold"),
         )
+        for configured_style in ("subtle", "standard", "bold", "unknown"):
+            with self.subTest(configured_style=configured_style):
+                self.assertEqual(
+                    viewport.trail_style_values(configured_style, selected=True),
+                    viewport.path_style_values("bold"),
+                )
+        self.assertEqual(
+            viewport.trail_style_values("subtle"),
+            viewport.path_style_values("subtle"),
+        )
 
     def test_linear_pan_delta_keeps_dragged_view_center_under_pointer(self):
         delta = viewport.pan_center_delta(20.0, -10.0, 2.0, "fit_system")

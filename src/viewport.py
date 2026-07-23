@@ -90,6 +90,12 @@ def path_style_values(style: str, *, selected: bool = False) -> PathStyle:
     return PATH_STYLE_VALUES.get(style, PATH_STYLE_VALUES["standard"])
 
 
+def trail_style_values(style: str, *, selected: bool = False) -> PathStyle:
+    if selected:
+        return PATH_STYLE_VALUES["bold"]
+    return path_style_values(style)
+
+
 def path_visibility_allows(mode: str, *, selected: bool, active: bool = True) -> bool:
     if not active or mode == "off":
         return False

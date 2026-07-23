@@ -582,7 +582,7 @@ class SolarSystemCanvas(Gtk.DrawingArea):
                 or not self._body_trail_is_visible(index)
             ):
                 continue
-            style = viewport.path_style_values(
+            style = viewport.trail_style_values(
                 self._scene.path_style,
                 selected=self._body_trail_is_selected(index),
             )
@@ -837,7 +837,7 @@ class SolarSystemCanvas(Gtk.DrawingArea):
             trails,
             key=lambda item: item[0],
         ):
-            style = viewport.path_style_values(
+            style = viewport.trail_style_values(
                 self._scene.path_style,
                 selected=selected,
             )
@@ -1107,7 +1107,7 @@ class SolarSystemCanvas(Gtk.DrawingArea):
             trail = self._scene.overview_trails.get(entity.id, [])
             if len(trail) < 2 or not self._entity_trail_is_visible(entity.id):
                 continue
-            style = viewport.path_style_values(
+            style = viewport.trail_style_values(
                 self._scene.path_style,
                 selected=self._entity_trail_is_selected(entity.id),
             )
@@ -1186,7 +1186,7 @@ class SolarSystemCanvas(Gtk.DrawingArea):
                 or not self._entity_trail_is_visible(entity.id, inset=True)
             ):
                 continue
-            style = viewport.path_style_values(
+            style = viewport.trail_style_values(
                 self._scene.path_style,
                 selected=self._entity_trail_is_selected(entity.id, inset=True),
             )
