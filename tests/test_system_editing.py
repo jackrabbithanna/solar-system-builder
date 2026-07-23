@@ -2,7 +2,7 @@ import math
 import unittest
 
 from src.constants import AU, G
-from src.models import FlybyData, ModelError, SolarSystem
+from src.models import DataSource, FlybyData, ModelError, OrbitData, SolarSystem
 from src.system_editing import (
     BodyStateInput,
     add_body,
@@ -227,6 +227,127 @@ class SystemEditingTests(unittest.TestCase):
         self.assertFalse(updated.visible)
         self.assertNotIn(updated.id, system.groups[0].body_ids)
         system.validate()
+
+    def test_reclassifying_horizons_body_preserves_state_and_provenance(self):
+        system = create_system("Root")
+        star = system.bodies[0]
+        body = add_body(system, "asteroid", "Sedna", parent_id=star.id)
+        body.orbit = OrbitData(semi_major_axis_m=7.5e12, eccentricity=0.85)
+        body.data_source = DataSource(
+            source_name="JPL Horizons",
+            source_url="https://ssd.jpl.nasa.gov/api/horizons.api?COMMAND=90377%3B",
+            catalog_id="90377",
+        )
+        body.state_origin = "horizons"
+        original_orbit = body.orbit
+        original_source = body.data_source
+        original_position = body.position_m[:]
+        original_velocity = body.velocity_mps[:]
+
+        updated = update_body_from_state(
+            system,
+            body.id,
+            BodyStateInput(
+                name=body.name,
+                kind="dwarf planet",
+                mass_kg=body.mass_kg,
+                radius_m=body.radius_m,
+                position_m=tuple(body.position_m),
+                velocity_mps=tuple(body.velocity_mps),
+                color=body.color,
+                parent_id=body.parent_id,
+                visible=body.visible,
+                trail_enabled=body.trail_enabled,
+            ),
+        )
+
+        self.assertEqual(updated.kind, "dwarf planet")
+        self.assertEqual(updated.position_m, original_position)
+        self.assertEqual(updated.velocity_mps, original_velocity)
+        self.assertEqual(updated.orbit, original_orbit)
+        self.assertEqual(updated.data_source, original_source)
+        self.assertEqual(updated.state_origin, "horizons")
+        system.validate()
+
+    def test_reclassification_preserves_flyby_metadata(self):
+        system = create_system("Root")
+        star = system.bodies[0]
+        body = add_flyby_from_state(
+            system,
+            BodyStateInput(
+                "Visitor",
+                "asteroid",
+                1.0e16,
+                1.0e4,
+                (0.0, 0.0, 0.0),
+                (0.0, 0.0, 0.0),
+                "#fff",
+            ),
+            FlybyData(star.id, AU, 10_000.0, 10.0 * AU),
+        )
+        original_flyby = body.flyby
+        original_orbit = body.orbit
+
+        updated = update_body_from_state(
+            system,
+            body.id,
+            BodyStateInput(
+                body.name,
+                "comet",
+                body.mass_kg,
+                body.radius_m,
+                tuple(body.position_m),
+                tuple(body.velocity_mps),
+                body.color,
+            ),
+        )
+
+        self.assertEqual(updated.kind, "comet")
+        self.assertEqual(updated.flyby, original_flyby)
+        self.assertEqual(updated.orbit, original_orbit)
+        self.assertEqual(updated.state_origin, "flyby")
+        system.validate()
+
+    def test_reclassification_validates_child_moons_atomically(self):
+        system = create_system("Root")
+        star = system.bodies[0]
+        planet = add_body(system, "planet", "Planet", parent_id=star.id)
+        moon = add_body(system, "moon", "Moon", parent_id=planet.id)
+
+        dwarf_planet = update_body_from_state(
+            system,
+            planet.id,
+            BodyStateInput(
+                planet.name,
+                "dwarf planet",
+                planet.mass_kg,
+                planet.radius_m,
+                tuple(planet.position_m),
+                tuple(planet.velocity_mps),
+                planet.color,
+                parent_id=planet.parent_id,
+            ),
+        )
+
+        self.assertEqual(dwarf_planet.kind, "dwarf planet")
+        self.assertEqual(moon.parent_id, dwarf_planet.id)
+        before = system.to_dict()
+        with self.assertRaisesRegex(ModelError, "moon parent"):
+            update_body_from_state(
+                system,
+                dwarf_planet.id,
+                BodyStateInput(
+                    dwarf_planet.name,
+                    "asteroid",
+                    dwarf_planet.mass_kg,
+                    dwarf_planet.radius_m,
+                    tuple(dwarf_planet.position_m),
+                    tuple(dwarf_planet.velocity_mps),
+                    dwarf_planet.color,
+                    parent_id=dwarf_planet.parent_id,
+                ),
+            )
+        self.assertEqual(system.to_dict(), before)
 
     def test_invalid_body_update_leaves_original_unchanged(self):
         system = create_system("Root")

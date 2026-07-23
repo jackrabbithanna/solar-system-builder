@@ -39,6 +39,7 @@ from src.system_editing import (
     add_body_from_state,
     add_flyby_from_state,
     create_system,
+    update_body_from_state,
 )
 from src.standard_frames import axes_matrix
 
@@ -657,6 +658,22 @@ class HorizonsTests(unittest.TestCase):
         mars = next(body for body in system.bodies if body.id == body_id)
         self.assertEqual(mars.state_origin, "horizons")
         self.assertEqual(mars.position_m, [1.0, 2.0, 3.0])
+        mars = update_body_from_state(
+            system,
+            mars.id,
+            BodyStateInput(
+                mars.name,
+                "dwarf planet",
+                mars.mass_kg,
+                mars.radius_m,
+                tuple(mars.position_m),
+                tuple(mars.velocity_mps),
+                mars.color,
+                parent_id=mars.parent_id,
+            ),
+        )
+        self.assertEqual(mars.state_origin, "horizons")
+        self.assertIn(mars, horizons_refreshable_bodies(system))
         with self.assertRaisesRegex(ModelError, "already present"):
             add_imported_body(
                 system,

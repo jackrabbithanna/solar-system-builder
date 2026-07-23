@@ -202,12 +202,13 @@ The right-side editor shows fields for the selected body.
 
 - Name edits the selected body name. When a star-system group is selected, the same field edits the group name.
 - Distance Unit changes the unit used by the X, Y, and Z position fields.
-- Kind and Parent change the body type and valid orbital/display parent.
+- Kind immediately reclassifies planets, dwarf planets, comets, and asteroids and marks the system ready to save. Stars and moons keep their structural type.
+- Parent lists only valid orbital/display parents for the selected body type.
 - Mass (kg) edits the body mass in kilograms.
 - Radius (m), Color, Visible, and Trail edit physical and display properties.
 - X, Y, and Z edit the body's 3D position in the selected distance unit.
 - VX, VY, and VZ edit the body's velocity in meters per second.
-- Apply Body Changes validates and commits the inspector fields atomically.
+- Apply Body Changes validates and commits the remaining inspector fields atomically.
 
 Position units available in the editor:
 
@@ -216,7 +217,7 @@ Position units available in the editor:
 - kAU
 - ly
 
-Changing kind, parent, mass, radius, position, or velocity rebuilds simulation state, clears trails, and marks the canonical source Cartesian. The physics model stores values internally in SI units: kilograms, meters, meters per second, and seconds.
+Changing only Kind preserves mass, radius, Cartesian state, orbital or flyby metadata, JPL Horizons provenance and refreshability, active playback, and recorded trails. A type change that would invalidate the hierarchy, such as making a body with moons an asteroid, is rejected atomically. Changing parent, mass, radius, position, or velocity rebuilds simulation state, clears trails, and marks the canonical source Cartesian. The physics model stores values internally in SI units: kilograms, meters, meters per second, and seconds.
 
 When a body has a parent, the distance panel shows its distance to that parent. Flybys show current anchor distance and planned periapsis. For other root stars in multi-star systems, it shows distances to the other stars.
 

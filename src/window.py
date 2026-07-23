@@ -47,6 +47,7 @@ from .horizons import (
 )
 from .flybys import radial_velocity_mps, solve_flyby
 from .models import (
+    RECLASSIFIABLE_BODY_KINDS,
     Body,
     DataSource,
     FlybyData,
@@ -447,6 +448,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.system_panel.connect("distance-unit-changed", self._on_distance_unit_changed)
         self.system_panel.connect("system-description-edited", self._on_system_description_edit)
         self.body_inspector.connect("body-edited", self._on_body_edit)
+        self.body_inspector.connect("body-kind-edited", self._on_body_kind_edit)
         self.body_inspector.connect("group-edited", self._on_group_edit)
         self.body_inspector.connect("name-edited", self._on_selected_name_edit)
         self.body_inspector.connect("focus-requested", self._on_focus_clicked)
@@ -1219,9 +1221,27 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         self.body_inspector.set_name_sensitive(editable)
         self.selected_group_id = None
         self.body_inspector.set_selected_name(body.name)
+        if body.kind == "star":
+            allowed_parent_kinds: set[str] = set()
+            allow_no_parent = True
+            parent_editable = False
+        elif body.kind == "moon":
+            allowed_parent_kinds = {"planet", "dwarf planet"}
+            allow_no_parent = False
+            parent_editable = True
+        else:
+            allowed_parent_kinds = {"star"}
+            allow_no_parent = True
+            parent_editable = True
         self.body_inspector.set_parent_options(
-            [candidate for candidate in self.system.bodies if candidate.id != body.id],
+            [
+                candidate
+                for candidate in self.system.bodies
+                if candidate.id != body.id and candidate.kind in allowed_parent_kinds
+            ],
             body.parent_id,
+            allow_no_parent=allow_no_parent,
+            editable=parent_editable,
         )
         focus_button_target = (
             self.focus_state.target
@@ -2294,7 +2314,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
         selected_body_id = self.system.bodies[self.selected_index].id
         body = self.system.bodies[self.selected_index]
         distance_factor = self._distance_factor()
-        values = self.body_inspector.edited_body_values(distance_factor)
+        values = self.body_inspector.edited_body_values(distance_factor, body)
         if values is None:
             self._show_error_dialog("Cannot Apply Body Changes", "Mass and radius must be positive numbers.")
             return
@@ -2313,14 +2333,31 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             vy_mps,
             vz_mps,
         ) = values
-        physics_changed = (
-            kind != body.kind
-            or parent_id != body.parent_id
+        classification_changed = kind != body.kind
+        canonical_state_changed = (
+            parent_id != body.parent_id
             or mass != body.mass_kg
             or radius != body.radius_m
             or [x_m, y_m, z_m] != body.position_m
             or [vx_mps, vy_mps, vz_mps] != body.velocity_mps
         )
+        display_changed = (
+            color != body.color
+            or visible != body.visible
+            or trail_enabled != body.trail_enabled
+        )
+        if not classification_changed and not canonical_state_changed and not display_changed:
+            return
+        if classification_changed and (
+            body.kind not in RECLASSIFIABLE_BODY_KINDS
+            or kind not in RECLASSIFIABLE_BODY_KINDS
+        ):
+            self._show_error_dialog(
+                "Cannot Apply Body Changes",
+                "Only planets, dwarf planets, comets, and asteroids can be reclassified.",
+            )
+            self._load_body_editor(body)
+            return
         group = self._group_for_body_id(body.id)
         try:
             body = update_body_from_state(
@@ -2339,24 +2376,61 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
                     visible=visible,
                     trail_enabled=trail_enabled,
                 ),
-                preserve_metadata=not physics_changed,
+                preserve_metadata=not canonical_state_changed,
             )
         except ModelError as error:
             self._show_error_dialog("Cannot Apply Body Changes", str(error))
             self._load_body_editor(self.system.bodies[self.selected_index])
             return
-        if physics_changed:
-            body.orbit = None
-            body.data_source = None
-            body.state_origin = "cartesian"
-            body.flyby = None
+        if canonical_state_changed:
             self._set_playing(False)
-            self._clear_dynamic_simulation_state()
-        self.simulation.replace_bodies(self.system.bodies)
+            self.simulation.replace_bodies(self.system.bodies)
         self._populate_body_list()
         self._select_body(self._body_index_for_id(selected_body_id))
         self._mark_dirty()
         self._update_title()
+        self._refresh_canvas()
+
+    def _on_body_kind_edit(self, _panel, kind: str) -> None:
+        if not self.system.bodies or not self._current_system_editable():
+            return
+        body = self.system.bodies[self.selected_index]
+        if kind == body.kind:
+            return
+        if (
+            body.kind not in RECLASSIFIABLE_BODY_KINDS
+            or kind not in RECLASSIFIABLE_BODY_KINDS
+        ):
+            self.body_inspector.restore_body_kind(body.kind)
+            self._show_error_dialog(
+                "Cannot Apply Body Changes",
+                "Only planets, dwarf planets, comets, and asteroids can be reclassified.",
+            )
+            return
+        try:
+            update_body_from_state(
+                self.system,
+                body.id,
+                BodyStateInput(
+                    name=body.name,
+                    kind=kind,
+                    mass_kg=body.mass_kg,
+                    radius_m=body.radius_m,
+                    position_m=tuple(body.position_m),
+                    velocity_mps=tuple(body.velocity_mps),
+                    color=body.color,
+                    parent_id=body.parent_id,
+                    visible=body.visible,
+                    trail_enabled=body.trail_enabled,
+                ),
+            )
+        except ModelError as error:
+            self.body_inspector.restore_body_kind(body.kind)
+            self._show_error_dialog("Cannot Apply Body Changes", str(error))
+            return
+        self._refresh_body_relationship_labels()
+        self._sync_structural_controls()
+        self._mark_dirty()
         self._refresh_canvas()
 
     def _on_group_edit(self, *_args) -> None:
@@ -2852,11 +2926,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
     def _show_horizons_review(self, draft: HorizonsImportDraft, parent_id: str) -> None:
         parent = next(body for body in self.system.bodies if body.id == parent_id)
         name_entry = Gtk.Entry(text=draft.name)
-        kinds = (
-            ("moon",)
-            if draft.kind == "moon"
-            else ("planet", "dwarf planet", "comet", "asteroid")
-        )
+        kinds = ("moon",) if draft.kind == "moon" else RECLASSIFIABLE_BODY_KINDS
         kind_dropdown = Gtk.DropDown.new_from_strings([kind.title() for kind in kinds])
         kind_dropdown.set_selected(kinds.index(draft.kind) if draft.kind in kinds else 0)
         mass_entry = Gtk.Entry(

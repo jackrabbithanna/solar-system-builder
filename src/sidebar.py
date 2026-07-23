@@ -18,7 +18,17 @@ from gi.repository import Gdk, GObject, Gtk
 
 from . import hierarchy
 from .constants import AU, DAY
-from .models import BODY_KINDS, Body, DataSource, ModelError, OrbitData, SolarSystem, SystemGroup, SystemSettings
+from .models import (
+    BODY_KINDS,
+    RECLASSIFIABLE_BODY_KINDS,
+    Body,
+    DataSource,
+    ModelError,
+    OrbitData,
+    SolarSystem,
+    SystemGroup,
+    SystemSettings,
+)
 from .scales import (
     ACCURACY_LABELS,
     DISTANCE_UNITS,
@@ -431,6 +441,7 @@ class SystemPropertiesPanel(GObject.GObject):
 class BodyInspectorPanel(GObject.GObject):
     __gsignals__ = {
         "body-edited": (GObject.SignalFlags.RUN_FIRST, None, ()),
+        "body-kind-edited": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
         "group-edited": (GObject.SignalFlags.RUN_FIRST, None, ()),
         "name-edited": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
         "focus-requested": (GObject.SignalFlags.RUN_FIRST, None, ()),
@@ -532,9 +543,13 @@ class BodyInspectorPanel(GObject.GObject):
         self.state_origin_label = state_origin_label
         self.apply_body_button = apply_body_button
         self.orbit_target_options: list[tuple[str, str]] = []
+        self.body_kind_options = BODY_KIND_OPTIONS
         self.parent_options: list[str | None] = []
         self.group_parent_options: list[str | None] = []
         self.orbit_editor_enabled = False
+        self.body_editor_enabled = False
+        self.body_kind_editable = False
+        self.body_parent_editable = False
         self.editing = False
 
         self.focus_button.connect("clicked", lambda *_args: self.emit("focus-requested"))
@@ -542,6 +557,7 @@ class BodyInspectorPanel(GObject.GObject):
         self.generate_group_orbit_button.connect("clicked", lambda *_args: self.emit("generate-group-orbit"))
         self.generate_binary_orbit_button.connect("clicked", lambda *_args: self.emit("generate-binary-orbit"))
         self.body_kind_dropdown.set_model(Gtk.StringList.new([kind.title() for kind in BODY_KIND_OPTIONS]))
+        self.body_kind_dropdown.connect("notify::selected", self._on_body_kind_edit)
         self.orbit_eccentricity_spin.connect("value-changed", self._on_orbit_eccentricity_changed)
         self.selected_name_entry.connect("activate", self._on_name_edit)
         self.selected_name_entry.connect("notify::has-focus", self._on_name_focus_changed)
@@ -601,9 +617,8 @@ class BodyInspectorPanel(GObject.GObject):
         )
 
     def set_body_editor_sensitive(self, sensitive: bool, orbit_sensitive: bool) -> None:
+        self.body_editor_enabled = sensitive
         for widget in (
-            self.body_kind_dropdown,
-            self.body_parent_dropdown,
             self.mass_entry,
             self.radius_entry,
             self.body_color_button,
@@ -618,7 +633,16 @@ class BodyInspectorPanel(GObject.GObject):
             self.apply_body_button,
         ):
             widget.set_sensitive(sensitive)
+        self._sync_body_relationship_sensitivity()
         self.set_orbit_editor_sensitive(orbit_sensitive)
+
+    def _sync_body_relationship_sensitivity(self) -> None:
+        self.body_kind_dropdown.set_sensitive(
+            self.body_editor_enabled and self.body_kind_editable
+        )
+        self.body_parent_dropdown.set_sensitive(
+            self.body_editor_enabled and self.body_parent_editable
+        )
 
     def orbit_editor_widgets(self):
         return (
@@ -744,15 +768,27 @@ class BodyInspectorPanel(GObject.GObject):
             self.selected_distance_list.remove(child)
         self.selected_distance_list.set_visible(False)
 
-    def set_parent_options(self, bodies: list[Body], current_parent_id: str | None) -> None:
-        self.parent_options = [None, *[body.id for body in bodies]]
-        labels = ["No Parent", *[f"{body.name} ({body.kind})" for body in bodies]]
+    def set_parent_options(
+        self,
+        bodies: list[Body],
+        current_parent_id: str | None,
+        *,
+        allow_no_parent: bool = True,
+        editable: bool = True,
+    ) -> None:
+        empty_options = [None] if allow_no_parent else []
+        self.parent_options = [*empty_options, *[body.id for body in bodies]]
+        empty_labels = ["No Parent"] if allow_no_parent else []
+        labels = [*empty_labels, *[f"{body.name} ({body.kind})" for body in bodies]]
         self.body_parent_dropdown.set_model(Gtk.StringList.new(labels))
         selected = next(
             (index for index, body_id in enumerate(self.parent_options) if body_id == current_parent_id),
             0,
         )
-        self.body_parent_dropdown.set_selected(selected)
+        if self.parent_options:
+            self.body_parent_dropdown.set_selected(selected)
+        self.body_parent_editable = editable and len(self.parent_options) > 1
+        self._sync_body_relationship_sensitivity()
 
     def selected_parent_id(self) -> str | None:
         selected = self.body_parent_dropdown.get_selected()
@@ -761,7 +797,17 @@ class BodyInspectorPanel(GObject.GObject):
         return self.parent_options[selected]
 
     def set_body_values(self, body: Body, distance_factor: float) -> None:
-        self.body_kind_dropdown.set_selected(BODY_KIND_OPTIONS.index(body.kind))
+        self.body_kind_options = (
+            RECLASSIFIABLE_BODY_KINDS
+            if body.kind in RECLASSIFIABLE_BODY_KINDS
+            else (body.kind,)
+        )
+        self.body_kind_dropdown.set_model(
+            Gtk.StringList.new([kind.title() for kind in self.body_kind_options])
+        )
+        self.body_kind_dropdown.set_selected(self.body_kind_options.index(body.kind))
+        self.body_kind_editable = len(self.body_kind_options) > 1
+        self._sync_body_relationship_sensitivity()
         self.mass_entry.set_text(f"{body.mass_kg:.12g}")
         self.radius_entry.set_text(f"{body.radius_m:.12g}")
         color = Gdk.RGBA()
@@ -809,16 +855,21 @@ class BodyInspectorPanel(GObject.GObject):
             adjustment.set_page_increment(page)
             spin.set_digits(digits)
 
-    def edited_body_values(self, distance_factor: float):
+    def edited_body_values(self, distance_factor: float, original: Body):
+        mass_text = self.mass_entry.get_text()
+        radius_text = self.radius_entry.get_text()
         try:
-            mass = float(self.mass_entry.get_text())
-            radius = float(self.radius_entry.get_text())
+            mass = float(mass_text)
+            radius = float(radius_text)
         except ValueError:
             return None
         if mass <= 0.0 or radius <= 0.0:
             return None
         selected_kind = self.body_kind_dropdown.get_selected()
-        if selected_kind == Gtk.INVALID_LIST_POSITION or selected_kind >= len(BODY_KIND_OPTIONS):
+        if (
+            selected_kind == Gtk.INVALID_LIST_POSITION
+            or selected_kind >= len(self.body_kind_options)
+        ):
             return None
         rgba = self.body_color_button.get_rgba()
         color = "#{:02x}{:02x}{:02x}".format(
@@ -826,20 +877,47 @@ class BodyInspectorPanel(GObject.GObject):
             round(rgba.green * 255),
             round(rgba.blue * 255),
         )
-        return (
-            BODY_KIND_OPTIONS[selected_kind],
-            self.selected_parent_id(),
-            mass,
-            radius,
-            color,
-            self.body_visible_switch.get_active(),
-            self.body_trail_switch.get_active(),
-            self.x_spin.get_value() * distance_factor,
-            self.y_spin.get_value() * distance_factor,
-            self.z_spin.get_value() * distance_factor,
+        original_rgba = Gdk.RGBA()
+        if not original_rgba.parse(original.color):
+            original_rgba.parse("#ffffff")
+        original_color = "#{:02x}{:02x}{:02x}".format(
+            round(original_rgba.red * 255),
+            round(original_rgba.green * 255),
+            round(original_rgba.blue * 255),
+        )
+        position_values = (
+            self.x_spin.get_value(),
+            self.y_spin.get_value(),
+            self.z_spin.get_value(),
+        )
+        original_position_values = tuple(
+            component / distance_factor for component in original.position_m
+        )
+        velocity_values = (
             self.vx_spin.get_value(),
             self.vy_spin.get_value(),
             self.vz_spin.get_value(),
+        )
+        position_m = (
+            tuple(original.position_m)
+            if position_values == original_position_values
+            else tuple(value * distance_factor for value in position_values)
+        )
+        velocity_mps = (
+            tuple(original.velocity_mps)
+            if velocity_values == tuple(original.velocity_mps)
+            else velocity_values
+        )
+        return (
+            self.body_kind_options[selected_kind],
+            self.selected_parent_id(),
+            original.mass_kg if mass_text == f"{original.mass_kg:.12g}" else mass,
+            original.radius_m if radius_text == f"{original.radius_m:.12g}" else radius,
+            original.color if color == original_color else color,
+            self.body_visible_switch.get_active(),
+            self.body_trail_switch.get_active(),
+            *position_m,
+            *velocity_mps,
         )
 
     def orbit_from_editor(self, epoch: str) -> OrbitData:
@@ -888,6 +966,24 @@ class BodyInspectorPanel(GObject.GObject):
     def _on_body_edit(self, *_args) -> None:
         if not self.editing:
             self.emit("body-edited")
+
+    def _on_body_kind_edit(self, dropdown, _param) -> None:
+        if self.editing:
+            return
+        selected = dropdown.get_selected()
+        if selected == Gtk.INVALID_LIST_POSITION or selected >= len(self.body_kind_options):
+            return
+        self.emit("body-kind-edited", self.body_kind_options[selected])
+
+    def restore_body_kind(self, kind: str) -> None:
+        if kind not in self.body_kind_options:
+            return
+        editing = self.editing
+        self.editing = True
+        try:
+            self.body_kind_dropdown.set_selected(self.body_kind_options.index(kind))
+        finally:
+            self.editing = editing
 
     def _on_group_edit(self, *_args) -> None:
         if not self.editing:
