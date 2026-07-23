@@ -18,7 +18,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
-from gi.repository import Adw, Gio, GLib, Gtk
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
 from . import hierarchy, playback
 from .analysis_frames import (
@@ -2937,7 +2937,13 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             text=f"{draft.radius_m:.12g}" if draft.radius_m is not None else ""
         )
         radius_entry.set_placeholder_text("Required positive number")
-        color_entry = Gtk.Entry(text=BODY_DEFAULTS[draft.kind][2])
+        color_dialog = Gtk.ColorDialog()
+        color_dialog.set_with_alpha(False)
+        color_button = Gtk.ColorDialogButton(dialog=color_dialog)
+        default_color = Gdk.RGBA()
+        if not default_color.parse(BODY_DEFAULTS[draft.kind][2]):
+            default_color.parse("#ffffff")
+        color_button.set_rgba(default_color)
         physical_status = Gtk.Label(xalign=0, wrap=True)
         if draft.vector_center_catalog_id is None:
             vector_text = (
@@ -2978,7 +2984,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
             ("Mass (kg)", mass_entry),
             ("Radius (m)", radius_entry),
             ("Physical Data", physical_status),
-            ("Color", color_entry),
+            ("Color", color_button),
             ("Imported State", vector_label),
             ("Source", Gtk.Label(label=f"JPL Horizons - SPK {draft.catalog_id}", xalign=0)),
         ]
@@ -3025,6 +3031,12 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
                 radius = parse_required_physical_value(radius_entry.get_text(), "Radius")
                 selected_kind = kind_dropdown.get_selected()
                 kind = kinds[selected_kind] if selected_kind < len(kinds) else draft.kind
+                rgba = color_button.get_rgba()
+                color = "#{:02x}{:02x}{:02x}".format(
+                    round(rgba.red * 255),
+                    round(rgba.green * 255),
+                    round(rgba.blue * 255),
+                )
                 reviewed = HorizonsImportDraft(
                     name=name_entry.get_text().strip() or draft.name,
                     kind=draft.kind,
@@ -3046,7 +3058,7 @@ class SolarSystemBuilderWindow(Adw.ApplicationWindow):
                     radius_m=radius,
                     parent_id=parent_id,
                     kind=kind,
-                    color=color_entry.get_text().strip() or BODY_DEFAULTS[kind][2],
+                    color=color,
                 )
             except ModelError as error:
                 self._show_error_dialog("Cannot Add Horizons Body", str(error))
